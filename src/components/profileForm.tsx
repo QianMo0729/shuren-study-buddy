@@ -1,15 +1,16 @@
 import { AnimatePresence, Reorder, motion } from 'motion/react';
-import { useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ImagePlus, Search, X, ZoomIn } from 'lucide-react';
+import { Check, ChevronDown, ImagePlus, Plus, Search, X, ZoomIn } from 'lucide-react';
 import { MAJOR_GROUPS, UNDECIDED } from '../../shared/majors';
-import { MBTIS, STUDY_TYPES } from '../../shared/options';
+import { MBTIS, PERSONALITY_ITEMS, STUDY_TYPES, SUBJECT_LIMIT } from '../../shared/options';
+import type { Personality, PersonalityKey } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { cx } from '../lib/format';
 import { compressImage } from '../lib/image';
 import { ease } from '../lib/motion';
 import { useToast } from '../lib/toast';
-import { Button, Input, Modal, Spinner } from './ui';
+import { Button, Chip, Input, Modal, Spinner } from './ui';
 import { Seal } from './brand';
 
 // ---------------- 专业选择（可搜索、按院系分组） ----------------
@@ -338,6 +339,172 @@ export function OptionCards<T extends { value: string; label: string; hint?: str
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ---------------- 具体科目 / 课程 / 考试（标签输入） ----------------
+
+/** 与服务器一致：全角转半角、合并空白，最多 30 字 */
+const cleanSubject = (raw: string) => [...raw.normalize('NFKC').replace(/\s+/gu, ' ').trim()].slice(0, 30).join('').trim();
+const subjectKey = (raw: string) => raw.normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
+
+export function SubjectsInput({ value, onChange, suggestions = [], max = SUBJECT_LIMIT, id, describedBy }: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  suggestions?: string[];
+  max?: number;
+  id?: string;
+  describedBy?: string;
+}) {
+  const [draft, setDraft] = useState('');
+  const [notice, setNotice] = useState('');
+  const full = value.length >= max;
+  const has = (s: string) => value.some((v) => subjectKey(v) === subjectKey(s));
+  const add = (raw: string) => {
+    const next = [...value];
+    const added: string[] = [];
+    for (const part of raw.split(/[,，、;；\n]+/u).map(cleanSubject).filter(Boolean)) {
+      if (next.length >= max || next.some((v) => subjectKey(v) === subjectKey(part))) continue;
+      next.push(part);
+      added.push(part);
+    }
+    setDraft('');
+    if (added.length) onChange(next);
+    setNotice(added.length ? `已添加：${added.join('、')}` : next.length >= max ? `最多填写 ${max} 项` : '这一项已经添加过了');
+  };
+  const remove = (s: string) => {
+    onChange(value.filter((v) => v !== s));
+    setNotice(`已删除：${s}`);
+  };
+  const kw = subjectKey(draft);
+  const shown = suggestions
+    .filter((s) => !has(s))
+    .sort((a, b) => Number(!!kw && subjectKey(b).includes(kw)) - Number(!!kw && subjectKey(a).includes(kw)))
+    .slice(0, 8);
+  return (
+    <div>
+      {value.length > 0 && (
+        <ul aria-label="已填写的科目" className="mb-2.5 flex flex-wrap gap-2">
+          {value.map((s) => (
+            <li key={s} className="inline-flex h-8 items-center gap-0.5 rounded-md border border-brand/50 bg-brand-softer pr-0.5 pl-2.5 text-[14px] text-ink">
+              {s}
+              <button type="button" onClick={() => remove(s)} aria-label={`删除 ${s}`} className="grid size-7 place-items-center rounded text-ink-3 hover:bg-paper-2 hover:text-ink">
+                <X size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          aria-label="具体科目、课程或考试"
+          value={draft}
+          maxLength={60}
+          disabled={full}
+          aria-describedby={describedBy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            // 输入法正在组字时的回车用于确认候选词，不能当作添加
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter' || e.key === ',' || e.key === '，' || e.key === '、') {
+              e.preventDefault();
+              if (draft.trim()) add(draft);
+            } else if (e.key === 'Backspace' && !draft && value.length) {
+              remove(value[value.length - 1]);
+            }
+          }}
+          placeholder={full ? `已填写 ${max} 项` : '如：线性代数、雅思、CS231n，回车添加'}
+        />
+        <Button type="button" variant="secondary" icon={<Plus size={15} />} onClick={() => add(draft)} disabled={full || !draft.trim()}>
+          添加
+        </Button>
+      </div>
+      {!full && shown.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="text-[12.5px] text-ink-3">常见：</span>
+          {shown.map((s) => (
+            <Chip key={s} size="sm" onClick={() => add(s)} className="gap-0.5">
+              <Plus size={12} aria-hidden />
+              <span className="sr-only">添加</span>
+              {s}
+            </Chip>
+          ))}
+        </div>
+      )}
+      <p className="mt-1.5 text-right text-[12px] text-ink-4 tabular">{value.length}/{max}</p>
+      <p className="sr-only" aria-live="polite">{notice}</p>
+    </div>
+  );
+}
+
+// ---------------- 学习性格（1–5 量表） ----------------
+
+const MODE_HINTS: Record<'similar' | 'need' | 'give', string> = {
+  similar: '和搭子越接近越合拍',
+  need: '由对方「愿意督促对方的程度」来满足：对方越乐意督促，越适合你',
+  give: '用来满足对方「需要被督促」的程度',
+};
+
+export function PersonalityScales({ value, onChange }: { value: Personality; onChange: (v: Personality) => void }) {
+  const answered = PERSONALITY_ITEMS.filter((item) => value[item.key] > 0).length;
+  return (
+    <div>
+      <p className="mb-4 text-[13px] text-ink-3" aria-live="polite">已回答 <span className="tabular">{answered}</span> / {PERSONALITY_ITEMS.length} 题</p>
+      <div className="space-y-6">
+        {PERSONALITY_ITEMS.map((item, index) => (
+          <LikertItem key={item.key} index={index} item={item} value={value[item.key]} onChange={(n) => onChange({ ...value, [item.key]: n })} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LikertItem({ index, item, value, onChange }: {
+  index: number;
+  item: { key: PersonalityKey; label: string; low: string; high: string; mode: 'similar' | 'need' | 'give' };
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  const id = useId();
+  const choiceLabel = (n: number) => `${n} 分${n === 1 ? `，${item.low}` : n === 5 ? `，${item.high}` : n === 3 ? '，居中' : ''}`;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <p id={`${id}-label`} className="text-[14px] font-semibold text-ink">{index + 1}. {item.label}</p>
+        {value > 0 && (
+          <button type="button" onClick={() => onChange(0)} className="shrink-0 text-[12.5px] text-ink-3 underline-offset-2 hover:text-ink hover:underline" aria-label={`清除「${item.label}」的回答`}>
+            清除
+          </button>
+        )}
+      </div>
+      <p id={`${id}-hint`} className="mt-0.5 text-[12.5px] text-ink-3">{MODE_HINTS[item.mode]}</p>
+      <div role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} className="mt-2.5 grid grid-cols-5 gap-1.5">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <label key={n} className="relative block">
+            <input
+              type="radio"
+              name={`${id}-scale`}
+              value={n}
+              checked={value === n}
+              onChange={() => onChange(n)}
+              aria-label={choiceLabel(n)}
+              className="peer absolute inset-0 size-full cursor-pointer opacity-0"
+            />
+            <span
+              aria-hidden
+              className="pointer-events-none flex h-10 items-center justify-center rounded-md border border-line-strong bg-surface text-[14px] text-ink-2 transition-colors peer-hover:border-ink-4 peer-checked:border-brand peer-checked:bg-brand peer-checked:font-semibold peer-checked:text-white peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand"
+            >
+              {n}
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="mt-1.5 flex justify-between gap-3 text-[12.5px] leading-snug text-ink-3" aria-hidden>
+        <span>← {item.low}</span>
+        <span className="text-right">{item.high} →</span>
+      </div>
     </div>
   );
 }

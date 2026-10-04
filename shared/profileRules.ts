@@ -1,7 +1,8 @@
 import { PLAN_PRESETS, SPORTS, TRAITS, optionLabel, overlapSlots } from './options.ts';
-import type { Contacts, PrivacyConsent, ProfileInput } from './types.ts';
+import type { Contacts, Personality, PrivacyConsent, ProfileInput } from './types.ts';
 
 export const emptyContacts = (): Contacts => ({ showEmail: false, wechat: '', qq: '', phone: '', other: '' });
+export const emptyPersonality = (): Personality => ({ talk: 0, noise: 0, punctual: 0, plan: 0, needSupervision: 0, giveSupervision: 0, social: 0 });
 export const emptyConsent = (): PrivacyConsent => ({ policy: false, contactExchange: false, silentExclusion: false, withdrawal: false });
 export const hasPrivacyConsent = (p: Pick<ProfileInput, 'privacyConsent'>) =>
   ['policy', 'contactExchange', 'silentExclusion', 'withdrawal'].every((k) => p.privacyConsent?.[k as keyof PrivacyConsent] === true);
@@ -17,6 +18,7 @@ export function emptyProfile(): ProfileInput {
     expectedPlaces: [], expectedPlacesOther: '', expectedSchedule: [], studyMethods: [], studyMethodsOther: '',
     frequency: '', duration: '', expectations: '', dislikeTags: [], interests: [], interestsOther: '',
     photoVisibility: 'private', privacyConsent: emptyConsent(),
+    subjects: [], goalDeadline: '', studyFormat: '', personality: emptyPersonality(),
   };
 }
 
@@ -47,6 +49,8 @@ export function pickProfileInput(src: Partial<ProfileInput>): ProfileInput {
   const p = out as unknown as ProfileInput;
   p.contacts = { ...emptyContacts(), ...src.contacts };
   p.privacyConsent = { ...emptyConsent(), ...src.privacyConsent };
+  p.personality = { ...emptyPersonality(), ...(src.personality && typeof src.personality === 'object' ? src.personality : {}) };
+  p.subjects = Array.isArray(src.subjects) ? src.subjects : [];
   if (src.schemaVersion !== 2) {
     p.schemaVersion = 2;
     p.schedule = migrateSchedule(Array.isArray(src.schedule) ? src.schedule : []);

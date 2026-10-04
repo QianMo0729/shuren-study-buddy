@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import '../connections.ts';
+import { unreadMessageCount } from '../matches.ts';
+import { runAccountCleanup } from '../social.ts';
 import type { SessionUser } from '../../shared/types.ts';
 import { missingFields, pickProfileInput } from '../../shared/profileRules.ts';
 import { config } from '../config.ts';
@@ -64,6 +66,7 @@ export function sessionUser(userId: number): SessionUser | null {
     hasProfile: !!p,
     questionnaireComplete,
     unread,
+    unreadMessages: unreadMessageCount(userId),
   };
 }
 
@@ -207,6 +210,7 @@ authRouter.delete('/account', requireUser, async (req, res) => {
     q.run('DELETE FROM post_interests WHERE user_id = ? OR post_id IN (SELECT id FROM posts WHERE user_id = ?)', uid, uid);
     q.run('DELETE FROM notifications WHERE user_id = ?', uid);
     q.run('DELETE FROM reports WHERE reporter_id = ?', uid);
+    runAccountCleanup(uid);
     q.run('DELETE FROM uploads WHERE user_id = ?', uid);
     q.run('DELETE FROM profiles WHERE user_id = ?', uid);
     q.run(`UPDATE posts SET title = '已撤回', description = '', time_text = '', location = '', tags = '[]',

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, type ReactNode } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router';
 import { Shell } from './components/Shell';
 import { useAuth } from './lib/auth';
 import { page } from './lib/motion';
@@ -9,21 +9,25 @@ import { Credits } from './pages/Credits';
 import { EditProfile } from './pages/EditProfile';
 import { EventDetail } from './pages/EventDetail';
 import { EventForm } from './pages/EventForm';
-import { Events } from './pages/Events';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Me } from './pages/Me';
 import { NotFound } from './pages/NotFound';
 import { ProfilePage } from './pages/ProfilePage';
 import { Privacy } from './pages/Privacy';
-import { Square } from './pages/Square';
+import { Match } from './pages/Match';
+import { Community } from './pages/Community';
+import { ForumPostDetail } from './pages/ForumPostDetail';
+import { CheckinCamera } from './pages/CheckinCamera';
+import { CheckinDetail } from './pages/CheckinDetail';
+import { Messages } from './pages/Messages';
 
 function RequireAuth({ children, admin, questionnaire }: { children: ReactNode; admin?: boolean; questionnaire?: boolean }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
   if (loading) return <BootScreen />;
   if (!user) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
-  if (admin && user.role !== 'admin') return <Navigate to="/square" replace />;
+  if (admin && user.role !== 'admin') return <Navigate to="/match" replace />;
   if (questionnaire && !user.questionnaireComplete) return <Navigate to="/me/edit?onboarding=1" replace />;
   return <>{children}</>;
 }
@@ -50,7 +54,14 @@ function BootScreen() {
   );
 }
 
-/** 页面级转场：按一级路径切换，广场内打开主页浮层不触发整页转场 */
+/** 旧版“搭子广场”链接：/square → 匹配推荐，/square/u/:id → 独立主页 */
+function LegacySquare() {
+  const { '*': rest } = useParams();
+  const id = /^u\/(\d+)/.exec(rest ?? '')?.[1];
+  return <Navigate to={id ? `/u/${id}` : '/match'} replace />;
+}
+
+/** 页面级转场：按一级路径切换，同一分区内（如匹配页打开主页浮层、私聊切换会话）不触发整页转场 */
 function Page({ children }: { children: ReactNode }) {
   return (
     <motion.div variants={page} initial="initial" animate="enter" exit="exit">
@@ -64,23 +75,30 @@ export function App() {
   const section = location.pathname.split('/')[1] || 'home';
 
   useEffect(() => {
-    if (section !== 'square') window.scrollTo({ top: 0 });
+    if (section !== 'match' && section !== 'messages') window.scrollTo({ top: 0 });
   }, [location.pathname, section]);
 
   const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy';
 
   const routes = (
     <AnimatePresence mode="wait" initial={false}>
-      <Routes location={location} key={section === 'square' ? 'square' : location.pathname}>
+      <Routes location={location} key={section === 'match' || section === 'messages' ? section : location.pathname}>
         <Route path="/" element={<Page><Landing /></Page>} />
         <Route path="/login" element={<Page><Login /></Page>} />
         <Route path="/privacy" element={<Page><Privacy /></Page>} />
         <Route path="/credits" element={<Page><Credits /></Page>} />
-        <Route path="/square/*" element={<RequireAuth questionnaire><Page><Square /></Page></RequireAuth>} />
+        <Route path="/square/*" element={<LegacySquare />} />
+        <Route path="/match/*" element={<RequireAuth questionnaire><Page><Match /></Page></RequireAuth>} />
+        <Route path="/community" element={<RequireAuth><Page><Community /></Page></RequireAuth>} />
+        <Route path="/community/posts/:id" element={<RequireAuth><Page><ForumPostDetail /></Page></RequireAuth>} />
+        <Route path="/community/checkin/new" element={<RequireAuth><Page><CheckinCamera /></Page></RequireAuth>} />
+        <Route path="/community/checkins/:id" element={<RequireAuth><Page><CheckinDetail /></Page></RequireAuth>} />
+        <Route path="/messages" element={<RequireAuth><Page><Messages /></Page></RequireAuth>} />
+        <Route path="/messages/:matchId" element={<RequireAuth><Page><Messages /></Page></RequireAuth>} />
         <Route path="/u/:id" element={<RequireAuth><Page><ProfilePage /></Page></RequireAuth>} />
         <Route path="/me" element={<RequireAuth><Page><Me /></Page></RequireAuth>} />
         <Route path="/me/edit" element={<RequireAuth><Page><EditProfile /></Page></RequireAuth>} />
-        <Route path="/events" element={<RequireAuth><Page><Events /></Page></RequireAuth>} />
+        <Route path="/events" element={<Navigate to="/community?tab=events" replace />} />
         <Route path="/events/new" element={<RequireAuth><Page><EventForm /></Page></RequireAuth>} />
         <Route path="/events/:id/edit" element={<RequireAuth><Page><EventForm /></Page></RequireAuth>} />
         <Route path="/events/:id" element={<RequireAuth><Page><EventDetail /></Page></RequireAuth>} />

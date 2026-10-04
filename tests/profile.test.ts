@@ -119,3 +119,55 @@ test('schema v2 does not repeat schedule migration or overwrite explicit photo a
   assert.deepEqual(roundtrip.privacyConsent, consent);
   assert.equal(hasPrivacyConsent(roundtrip), true);
 });
+
+test('v2 questionnaire fields are optional, default safely and never join the required set', () => {
+  const p = publishable();
+  assert.deepEqual(p.subjects, []);
+  assert.equal(p.goalDeadline, '');
+  assert.equal(p.studyFormat, '');
+  assert.equal(p.buddyGender, 'any');
+  assert.deepEqual(Object.values(p.personality), [0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(missingFields(p), []);
+  const stored = pickProfileInput({ ...publishable(), subjects: undefined, personality: undefined, studyFormat: undefined } as unknown as Partial<ProfileInput>);
+  assert.deepEqual(stored.subjects, []);
+  assert.equal(stored.studyFormat, '');
+  assert.deepEqual(stored.personality, { talk: 0, noise: 0, punctual: 0, plan: 0, needSupervision: 0, giveSupervision: 0, social: 0 });
+  const partial = pickProfileInput({ ...publishable(), personality: { talk: 4 } as ProfileInput['personality'] });
+  assert.equal(partial.personality.talk, 4);
+  assert.equal(partial.personality.giveSupervision, 0);
+});
+
+test('server sanitization bounds subjects, deadlines, study format, buddy gender and personality answers', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'study-buddy-profile-'));
+  process.env.DATA_DIR = dir;
+  try {
+    const { sanitizeProfile } = await import('../server/profiles.ts');
+    const long = '超'.repeat(40);
+    const clean = sanitizeProfile({
+      ...publishable(),
+      subjects: [' 线性代数 ', '线性代数', 'ＩＥＬＴＳ', 'ielts', 42, '', '   ', 'Linear  Algebra', 'linear algebra', long, '雅思​', 'a', 'b', 'c', 'd', 'e'],
+      goalDeadline: '2026-12-20', studyFormat: 'online', buddyGender: 'female',
+      personality: { talk: 3, noise: '4', punctual: 6, plan: 2.5, social: 0, needSupervision: 5, giveSupervision: true, extra: 3 },
+    });
+    assert.deepEqual(clean.subjects, ['线性代数', 'IELTS', 'Linear Algebra', '超'.repeat(30), '雅思', 'a', 'b', 'c']);
+    assert.equal(clean.goalDeadline, '2026-12-20');
+    assert.equal(clean.studyFormat, 'online');
+    assert.equal(clean.buddyGender, 'female');
+    assert.deepEqual(clean.personality, { talk: 3, noise: 0, punctual: 0, plan: 0, social: 0, needSupervision: 5, giveSupervision: 0 });
+    for (const goalDeadline of ['2026-02-30', '2026-13-01', '1999-12-31', '2101-01-01', 20261220, '2026-12-20T00:00', ' 2026-12-20']) {
+      assert.equal(sanitizeProfile({ ...publishable(), goalDeadline }).goalDeadline, '', String(goalDeadline));
+    }
+    assert.equal(sanitizeProfile({ ...publishable(), goalDeadline: '2028-02-29' }).goalDeadline, '2028-02-29');
+    const odd = sanitizeProfile({ ...publishable(), subjects: 'not-a-list', studyFormat: 'hybrid', buddyGender: 'robot', personality: null });
+    assert.deepEqual(odd.subjects, []);
+    assert.equal(odd.studyFormat, '');
+    assert.equal(odd.buddyGender, 'any');
+    assert.deepEqual(Object.values(odd.personality), [0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(missingFields(clean), []);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

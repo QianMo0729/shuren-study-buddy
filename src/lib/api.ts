@@ -1,5 +1,7 @@
 import type {
-  AdvancedQuery, ContactRequest, ContactReveal, MyProfile, NotificationItem, Post, ProfileCard, ProfileInput, PublicProfile, RecommendationResponse, SessionUser,
+  AdvancedQuery, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal,
+  DeckCard, DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, ForumComment, ForumPost, ForumTargetType, ModerationTargetType,
+  MyProfile, NotificationItem, Post, PostSearchQuery, ProfileCard, ProfileInput, PublicProfile, RecommendationResponse, ReportTargetType, SessionUser,
 } from '../../shared/types';
 
 export class ApiError extends Error {
@@ -32,10 +34,17 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return data as T;
 }
 
-const get = <T>(url: string) => request<T>('GET', url);
-const post = <T>(url: string, body: unknown = {}) => request<T>('POST', url, body);
-const put = <T>(url: string, body: unknown) => request<T>('PUT', url, body);
-const del = <T>(url: string, body?: unknown) => request<T>('DELETE', url, body);
+// 各功能模块需要额外接口时，可直接复用这些请求函数
+export const get = <T>(url: string) => request<T>('GET', url);
+export const post = <T>(url: string, body: unknown = {}) => request<T>('POST', url, body);
+export const put = <T>(url: string, body: unknown) => request<T>('PUT', url, body);
+export const del = <T>(url: string, body?: unknown) => request<T>('DELETE', url, body);
+const qs = (params: Record<string, string | number | boolean | undefined | null>) => {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '' && v !== false) u.set(k, String(v));
+  const out = u.toString();
+  return out ? `?${out}` : '';
+};
 
 export const fileUrl = (name: string | null | undefined) => (name ? `/api/files/${name}` : '');
 
@@ -83,7 +92,54 @@ export const api = {
   contact: (id: number) => post<{ contacts: ContactReveal }>(`/profiles/${id}/contact`),
   favorite: (id: number) => post<{ isFavorite: boolean }>(`/profiles/${id}/favorite`),
 
-  upload: (dataUrl: string, kind: 'photo' | 'timetable') => post<{ name: string }>('/uploads', { dataUrl, kind }),
+  upload: (dataUrl: string, kind: 'photo' | 'timetable' | 'forum') => post<{ name: string }>('/uploads', { dataUrl, kind }),
+
+  // ---------- 匹配推荐（滑卡） ----------
+  match: {
+    deck: (limit = 20) => get<DeckResponse>(`/match/deck${qs({ limit })}`),
+    /** 按双向契合度排序的列表（不含个性化调整） */
+    ranked: (limit = 50) => get<Omit<DeckResponse, 'items'> & { items: DeckCard[] }>(`/match/ranked${qs({ limit })}`),
+    feedback: (targetId: number, action: FeedbackAction) => post<FeedbackResult>('/match/feedback', { targetId, action }),
+    undoFeedback: (targetId: number) => del<{ ok: true }>(`/match/feedback/${targetId}`),
+    feedbackList: (action: FeedbackAction) => get<{ items: FeedbackItem[] }>(`/match/feedback${qs({ action })}`),
+  },
+
+  // ---------- 私聊 ----------
+  chat: {
+    list: () => get<{ items: ChatSummary[] }>('/chat'),
+    /** after：只取比该 id 新的消息（轮询）；before：取更早的消息（向上翻页） */
+    messages: (matchId: number, p: { after?: number; before?: number } = {}) =>
+      get<{ summary: ChatSummary; messages: ChatMessage[]; hasMore: boolean }>(`/chat/${matchId}${qs(p)}`),
+    send: (matchId: number, body: string) => post<{ message: ChatMessage }>(`/chat/${matchId}/messages`, { body }),
+    read: (matchId: number, lastId: number) => post<{ ok: true }>(`/chat/${matchId}/read`, { lastId }),
+    close: (matchId: number) => post<{ ok: true }>(`/chat/${matchId}/close`),
+  },
+
+  // ---------- 社区：聊天区 ----------
+  forum: {
+    posts: (p: { q?: string; mine?: boolean; before?: number } = {}) => get<{ items: ForumPost[]; hasMore: boolean }>(`/forum/posts${qs(p)}`),
+    post: (id: number) => get<{ post: ForumPost }>(`/forum/posts/${id}`),
+    create: (b: { title: string; body: string; images: string[] }) => post<{ post: ForumPost }>('/forum/posts', b),
+    update: (id: number, b: { title: string; body: string; images: string[] }) => put<{ post: ForumPost }>(`/forum/posts/${id}`, b),
+    remove: (id: number) => del<{ ok: true }>(`/forum/posts/${id}`),
+    search: (query: PostSearchQuery) => post<{ items: ForumPost[]; total: number }>('/forum/search', query),
+    like: (type: ForumTargetType, id: number) => post<{ liked: boolean; likeCount: number }>(`/forum/${type}/${id}/like`),
+    comments: (type: ForumTargetType, id: number) => get<{ items: ForumComment[] }>(`/forum/${type}/${id}/comments`),
+    comment: (type: ForumTargetType, id: number, body: string) => post<{ comment: ForumComment }>(`/forum/${type}/${id}/comments`, { body }),
+    deleteComment: (id: number) => del<{ ok: true }>(`/forum/comments/${id}`),
+  },
+
+  // ---------- 社区：学习打卡 ----------
+  checkins: {
+    /** 打开摄像头后领取的一次性拍照凭证 */
+    session: () => post<CheckinSession>('/checkins/session'),
+    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } | null }) =>
+      post<{ checkin: Checkin; stats: CheckinStats }>('/checkins', b),
+    list: (p: { scope?: 'all' | 'buddies' | 'mine'; before?: number } = {}) => get<{ items: Checkin[]; hasMore: boolean }>(`/checkins${qs(p)}`),
+    get: (id: number) => get<{ checkin: Checkin }>(`/checkins/${id}`),
+    stats: () => get<CheckinStats>('/checkins/stats'),
+    remove: (id: number) => del<{ ok: true }>(`/checkins/${id}`),
+  },
 
   posts: (p: { q?: string; category?: string; scope?: string } = {}) =>
     get<{ items: Post[] }>(
@@ -98,18 +154,23 @@ export const api = {
 
   notifications: () => get<{ items: NotificationItem[] }>('/notifications'),
   readAll: () => post<{ ok: true }>('/notifications/read-all'),
-  report: (b: { targetType: 'profile' | 'post'; targetId: number; reason: string; detail?: string }) => post<{ ok: true }>('/reports', b),
+  report: (b: { targetType: ReportTargetType; targetId: number; reason: string; detail?: string }) => post<{ ok: true }>('/reports', b),
 
   admin: {
     overview: () => get<AdminOverview>('/admin/overview'),
     profiles: (filter: string, q = '') => get<{ items: AdminProfile[] }>(`/admin/profiles?filter=${filter}&q=${encodeURIComponent(q)}`),
     posts: (filter: string, q = '') => get<{ items: AdminPost[] }>(`/admin/posts?filter=${filter}&q=${encodeURIComponent(q)}`),
-    takedown: (type: 'profile' | 'post', id: number, reason: string) =>
+    /** 社区内容（聊天区帖子、评论、打卡）的审核列表 */
+    content: (type: AdminContentType, filter: string, q = '') =>
+      get<{ items: AdminContent[] }>(`/admin/content${qs({ type, filter, q })}`),
+    takedown: (type: ModerationTargetType, id: number, reason: string) =>
       post<{ ok: true; emailStatus: string; time: string }>('/admin/takedown', { type, id, reason }),
-    restore: (type: 'profile' | 'post', id: number) => post<{ ok: true }>('/admin/restore', { type, id }),
-    approve: (type: 'profile' | 'post', ids: number[]) => post<{ ok: true }>('/admin/approve', { type, ids }),
+    restore: (type: ModerationTargetType, id: number) => post<{ ok: true }>('/admin/restore', { type, id }),
+    approve: (type: ModerationTargetType, ids: number[]) => post<{ ok: true; count: number }>('/admin/approve', { type, ids }),
     reports: (status = 'open') => get<{ items: AdminReport[] }>(`/admin/reports?status=${status}`),
     dismissReport: (id: number) => post<{ ok: true }>(`/admin/reports/${id}/resolve`),
+    /** 线下处理后标记举报为已处理（例如私聊消息，无法撤下） */
+    resolveReport: (id: number) => post<{ ok: true }>(`/admin/reports/${id}/resolve`, { status: 'resolved' }),
     logs: () => get<{ items: AdminLog[] }>('/admin/logs'),
     users: (q = '') => get<{ items: AdminUser[] }>(`/admin/users?q=${encodeURIComponent(q)}`),
     settings: (cycleDays: number) => put<{ review: ReviewState }>('/admin/settings', { cycleDays }),
@@ -133,10 +194,14 @@ export interface ReviewState {
   nextReviewAt: string | null;
   overdue: boolean;
 }
+export type AdminContentType = 'forum_post' | 'comment' | 'checkin';
 export interface AdminOverview {
   stats: {
-    users: number; published: number; posts: number; pendingProfiles: number; pendingPosts: number; openReports: number; takedowns30d: number;
+    users: number; published: number; posts: number; forumPosts: number; checkinsToday: number;
+    pendingProfiles: number; pendingPosts: number; pendingCommunity: number; openReports: number; takedowns30d: number;
   };
+  /** 各类社区内容的待审核数 */
+  pendingContent: Record<AdminContentType, number>;
   review: ReviewState;
 }
 export interface AdminProfile {
@@ -149,9 +214,26 @@ export interface AdminPost {
   nickname: string; email: string; status: string; createdAt: string; reviewedAt: string | null; takenDown: boolean;
   takenDownAt: string | null; takedownReason: string | null; reports: number;
 }
+export interface AdminContent {
+  type: AdminContentType; id: number; authorId: number; nickname: string; email: string;
+  /** 帖子标题；评论为「评论 · 所属内容」；打卡为「地点 · 盖章时间」 */
+  title: string; body: string; image: string | null; images: string[]; link: string | null; createdAt: string; reviewedAt: string | null;
+  takenDown: boolean; takenDownAt: string | null; takedownReason: string | null; reports: number;
+}
 export interface AdminReport {
-  id: number; targetType: 'profile' | 'post'; targetId: number; targetLabel: string; reason: string; detail: string; status: string;
-  reporter: string; createdAt: string;
+  id: number; targetType: ReportTargetType; targetId: number; targetLabel: string; reason: string;
+  /** 举报详情原文（含举报时留存的内容快照） */
+  detail: string;
+  /** 举报人填写的补充说明 */
+  note: string;
+  /** 举报时留存的内容原文（帖子、评论、私聊消息等） */
+  snapshot: string | null;
+  /** 站内查看链接；私聊消息为 null */
+  link: string | null;
+  /** 被举报内容的发布者 */
+  owner: { id: number; nickname: string; email: string } | null;
+  targetState: 'visible' | 'down' | 'deleted';
+  status: string; reporter: string; createdAt: string;
 }
 export interface AdminLog {
   id: number; action: string; targetType: string; targetId: number; targetLabel: string; reason: string; emailStatus: string;

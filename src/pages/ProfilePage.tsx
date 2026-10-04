@@ -21,15 +21,15 @@ export function ProfilePage() {
 
   return (
     <div className="pt-5 sm:pt-8">
-      <button onClick={() => (history.length > 1 ? nav(-1) : nav('/square'))} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button onClick={() => (history.length > 1 ? nav(-1) : nav('/match'))} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 返回
       </button>
       {error ? (
         <div className="flex flex-col items-center py-24 text-center">
           <Illustration name="mascot-empty" className="mb-4 size-32" />
           <p className="text-[16px] font-semibold text-ink">{error}</p>
-          <Button className="mt-5" onClick={() => nav('/square')}>
-            去搭子广场看看
+          <Button className="mt-5" onClick={() => nav('/match')}>
+            去匹配推荐看看
           </Button>
         </div>
       ) : profile ? (

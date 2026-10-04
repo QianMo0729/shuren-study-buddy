@@ -78,6 +78,13 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
       crypto.createHash('sha256').update(token).digest('hex'), id, new Date(Date.now() + 3_600_000).toISOString());
     return { id, email, cookie: `dz_sid=${token}`, data };
   }
+  /** 直接写库：双方互相感兴趣并建立配对（交换联系方式必须先有进行中的配对） */
+  function matchUsers(x: { id: number }, y: { id: number }): number {
+    for (const [from, to] of [[x, y], [y, x]]) {
+      db.prepare("INSERT OR REPLACE INTO match_feedback (user_id, target_id, action) VALUES (?, ?, 'like')").run(from.id, to.id);
+    }
+    return Number(db.prepare('INSERT INTO matches (user_a, user_b) VALUES (?, ?)').run(Math.min(x.id, y.id), Math.max(x.id, y.id)).lastInsertRowid);
+  }
   const a = createUser('12618801');
   const b = createUser('12618802');
   const outsider = createUser('12618803');
@@ -143,9 +150,15 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
     assert.equal((await api(`/connections/${b.id}`, a.cookie, 'POST', {})).status, 403);
     db.prepare('UPDATE profiles SET data = ? WHERE user_id = ?').run(JSON.stringify(a.data), a.id);
     assert.equal((await api(`/connections/${a.id}`, a.cookie, 'POST', {})).status, 400);
+    // 资料齐全但还没有互相感兴趣：只能先在匹配推荐里配对，再到私聊中申请
+    const unmatched = await api(`/connections/${b.id}`, a.cookie, 'POST', {});
+    assert.equal(unmatched.status, 403);
+    assert.match(unmatched.body.error, /互相感兴趣/);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM contact_requests').get()?.n, 0);
   });
 
   await t.test('pending request reveals no contacts and only the recipient can accept it', async () => {
+    const matchId = matchUsers(a, b);
     const sent = await api(`/connections/${b.id}`, a.cookie, 'POST', { message: '一起复习数学' });
     assert.equal(sent.status, 200);
     assert.equal(sent.body.request.status, 'pending');
@@ -166,17 +179,32 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
     assert.equal((await api(`/connections/${requestId}/respond`, b.cookie, 'POST', { action: 'accept' })).status, 200);
     assert.equal((await api(`/connections/${b.id}`, a.cookie)).body.contacts.wechat, b.data.contacts.wechat);
     assert.equal((await api(`/connections/${a.id}`, b.cookie)).body.contacts.email, a.email);
+    // 申请与同意都会以系统消息写进两人的私聊
+    const notes = (db.prepare("SELECT body FROM messages WHERE match_id = ? AND kind = 'system' ORDER BY id").all(matchId) as { body: string }[]).map((row) => row.body);
+    assert.equal(notes.length, 2);
+    assert.match(notes[0], /申请交换联系方式/);
+    assert.match(notes[1], /同意了交换联系方式/);
+    // 私聊列表与消息里只出现昵称，不出现任何联系方式或身份信息
+    const chatPayload = JSON.stringify([(await api('/chat', a.cookie)).body, (await api(`/chat/${matchId}`, a.cookie)).body]);
+    for (const secret of [b.data.contacts.wechat, b.email, b.data.realName, a.data.contacts.wechat, a.email]) {
+      assert.equal(chatPayload.includes(secret), false, `chat must not leak ${secret}`);
+    }
     db.prepare('UPDATE profiles SET published = 0 WHERE user_id = ?').run(b.id);
     assert.equal((await api(`/connections/${b.id}`, a.cookie)).status, 404);
     db.prepare('UPDATE profiles SET published = 1 WHERE user_id = ?').run(b.id);
   });
 
   await t.test('rejection never grants contact access', async () => {
+    matchUsers(a, outsider);
     const pending = await api(`/connections/${outsider.id}`, a.cookie, 'POST', {});
     const rejected = await api(`/connections/${pending.body.request.id}/respond`, outsider.cookie, 'POST', { action: 'reject' });
     assert.equal(rejected.body.request.status, 'rejected');
     assert.equal((await api(`/connections/${outsider.id}`, a.cookie)).body.contacts, null);
-    assert.equal((await api(`/connections/${outsider.id}`, a.cookie, 'POST', {})).body.request.status, 'rejected');
+    assert.equal((await api(`/connections/${a.id}`, outsider.cookie)).body.contacts, null);
+    // 被拒绝后 7 天内不能再次申请，申请状态保持“未通过”
+    assert.equal((await api(`/connections/${outsider.id}`, a.cookie, 'POST', {})).status, 409);
+    assert.equal((await api(`/connections/${outsider.id}`, a.cookie)).body.request.status, 'rejected');
+    assert.equal((await api(`/profiles/${outsider.id}/contact`, a.cookie, 'POST', {})).status, 403);
   });
 
   await t.test('photos are private by default; public media links revoke immediately on withdrawal or moderation', async () => {
@@ -221,6 +249,10 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
     assert.equal((await api('/profiles', a.cookie)).body.items.some((item: any) => item.id === b.id), false);
     assert.equal((await api('/connections', a.cookie)).body.exclusions[0].id, b.id);
     assert.equal((await api('/connections', b.cookie)).body.items.some((item: any) => item.id === requestId), false);
+    // 排除同时解除配对：双方的私聊列表里都不再出现对方
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM matches WHERE status = 'active' AND user_a = ? AND user_b = ?").get(Math.min(a.id, b.id), Math.max(a.id, b.id))!.n, 0);
+    assert.equal((await api('/chat', a.cookie)).body.items.some((item: any) => item.other.id === b.id), false);
+    assert.equal((await api('/chat', b.cookie)).body.items.some((item: any) => item.other.id === a.id), false);
     assert.equal((await api(`/connections/${b.id}/exclude`, a.cookie, 'DELETE')).status, 200);
     assert.equal((await api(`/connections/${b.id}`, a.cookie)).body.contacts, null);
     assert.equal((await api(`/connections/${b.id}`, a.cookie)).body.request, null);

@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
-import { ChevronLeft, ChevronRight, Clock3, Flag, Heart, Link2, Pencil, ShieldX, X } from 'lucide-react';
+import { CalendarClock, ChevronLeft, ChevronRight, Clock3, Flag, Link2, Pencil, ShieldX, Star, UserRoundX, X } from 'lucide-react';
 import { collegeOf } from '../../shared/majors';
 import {
-  DISLIKE_OPTIONS, DURATIONS, FREQUENCIES, GENDERS, GRADES, INTERESTS, PLACES, STATUSES, STUDY_METHODS, STUDY_TYPES, optionLabel, overlapSlots, slotsHours,
+  DISLIKE_OPTIONS, DURATIONS, FREQUENCIES, GENDERS, GRADES, INTERESTS, PLACES, STATUSES, STUDY_FORMATS, STUDY_METHODS, STUDY_TYPES, optionLabel, overlapSlots, slotsHours,
 } from '../../shared/options';
 import type { AdvancedQuery, MatchInfo, PublicProfile, RecommendationInfo } from '../../shared/types';
 import { expand, tokenize } from '../../shared/searchText';
@@ -13,15 +13,17 @@ import { useAuth } from '../lib/auth';
 import { cx, timeAgo } from '../lib/format';
 import { ease, spring } from '../lib/motion';
 import { useToast } from '../lib/toast';
-import { Button, IconButton } from './ui';
+import { Button, ConfirmDialog, IconButton } from './ui';
 import { Plate, Stamp, typeTone } from './brand';
 import { usePlateCredit } from './credits';
 import { speciesOfNickname } from '../../shared/species';
 import { Nickname, StatusDot } from './ProfileCard';
 import { TimeGrid } from './TimeGrid';
-import { ContactExchange } from './ContactRequests';
 import { RecommendationDetails } from './RecommendationDetails';
 import { ReportDialog, TakedownDialog } from './moderation';
+import { MatchBar, MatchButtons, MatchCelebrationFor, useMatchActions } from './match/MatchActions';
+import { MoreMenu } from './match/MoreMenu';
+import { PersonalityScale } from './match/PersonalityScale';
 
 export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, searchQuery, keyword, recommendation }: { profile: PublicProfile; onClose?: () => void; onChanged?: () => void; inOverlay?: boolean; match?: MatchInfo; searchQuery?: AdvancedQuery; keyword?: string; recommendation?: RecommendationInfo }) {
   const { user } = useAuth();
@@ -31,6 +33,10 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
   const [favBusy, setFavBusy] = useState(false);
   const [report, setReport] = useState(false);
   const [takedown, setTakedown] = useState(false);
+  const [excluding, setExcluding] = useState(false);
+  const [excludeBusy, setExcludeBusy] = useState(false);
+  const actions = useMatchActions(profile, onChanged);
+  const leave = () => { onChanged?.(); onClose ? onClose() : nav('/match'); };
   const publicPhotos = profile.isMe || profile.photoVisibility === 'public' ? profile.photos : [];
   const matchedFields = new Set((match?.matched ?? []).filter((key) => /^\d+:/.test(key)).map((key) => key.slice(key.indexOf(':') + 1)));
   const matched = (...fields: string[]) => fields.some((field) => matchedFields.has(field));
@@ -53,6 +59,8 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
     { k: '性别', v: optionLabel(GENDERS, profile.gender) },
     { k: 'MBTI', v: profile.mbti },
   ].filter((f) => f.v);
+  const format = optionLabel(STUDY_FORMATS, profile.studyFormat);
+  const deadline = deadlineText(profile.goalDeadline);
 
   return (
     <div className="grid md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] md:gap-8">
@@ -115,10 +123,13 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
             </Button>
           ) : (
             <>
+              <div className="mr-1 hidden md:block">
+                <MatchButtons actions={actions} />
+              </div>
               <Button
                 variant={fav ? 'soft' : 'secondary'}
                 loading={favBusy}
-                icon={<Heart size={15} className={fav ? 'fill-current' : ''} />}
+                icon={<Star size={15} className={fav ? 'fill-current' : ''} />}
                 onClick={async () => {
                   if (favBusy) return;
                   setFavBusy(true);
@@ -151,6 +162,7 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               <IconButton label="举报" onClick={() => setReport(true)} className="text-ink-3 hover:text-danger">
                 <Flag size={16} />
               </IconButton>
+              <MoreMenu items={[{ label: '排除这位同学', icon: <UserRoundX size={15} aria-hidden />, tone: 'danger', onSelect: () => setExcluding(true) }]} />
             </>
           )}
           {user?.role === 'admin' && !profile.isMe && (
@@ -169,7 +181,6 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
 
         {recommendation && <RecommendationDetails recommendation={recommendation} />}
         {match && match.total > 0 && <p className="mt-5 rounded-md bg-brand-soft px-3 py-2 text-[13px] text-brand-text">匹配 {match.score} / {match.total} 项检索条件；下方已标记匹配的信息。</p>}
-        {!profile.isMe && <ContactExchange key={profile.id} userId={profile.id} nickname={profile.nickname} onExcluded={() => { onChanged?.(); onClose ? onClose() : nav('/square'); }} />}
 
         <div className="mt-8 space-y-8">
           {type && (
@@ -183,12 +194,20 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
                   <p className="text-[14px] text-ink-2">{type.desc}</p>
                 </div>
               </div>
+              {format && <p className="mt-3 text-[14px] text-ink-2">学习形式：<span className="text-ink">{format}</span></p>}
             </Block>
           )}
+          {!type && format && <Block label="学习形式"><Chips items={[format]} /></Block>}
 
           {profile.bio && (
             <Block label="关于 TA" matched={bioMatched}>
               <p className="font-hand text-[17px] leading-[1.85] whitespace-pre-wrap text-ink"><Highlight text={profile.bio} words={words} /></p>
+            </Block>
+          )}
+
+          {Object.values(profile.personality ?? {}).some((value) => value >= 1) && (
+            <Block label="学习性格">
+              <PersonalityScale personality={profile.personality} />
             </Block>
           )}
 
@@ -220,6 +239,13 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
           </Block>
           {!!profile.expectedSchedule?.length && <Block label="期望搭子的空闲时间"><TimeGrid value={profile.expectedSchedule} readOnly compare={profile.schedule} /></Block>}
 
+          {(profile.subjects?.length > 0 || deadline) && (
+            <Block label="在学的科目" matched={matched('subjects')}>
+              {profile.subjects?.length > 0 ? <Chips items={profile.subjects} tone="brand" /> : null}
+              {deadline && <p className={cx('flex items-center gap-1.5 text-[14px] text-ink-2', profile.subjects?.length > 0 && 'mt-3')}><CalendarClock size={15} className="shrink-0 text-ink-3" aria-hidden />目标日期：{deadline}</p>}
+            </Block>
+          )}
+
           {(profile.studyPlan || profile.planTags.length > 0) && (
             <Block label="近期学习目标" matched={matched('planTags')}>
               {profile.planTags.length > 0 && <Chips items={profile.planTags} tone="brand" />}
@@ -234,19 +260,40 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
             </Block>
           )}
         </div>
+        {!profile.isMe && <MatchBar actions={actions} inOverlay={!!onClose} />}
       </div>
 
       <ReportDialog open={report} onClose={() => setReport(false)} targetType="profile" targetId={profile.id} />
+      {!profile.isMe && <MatchCelebrationFor actions={actions} />}
+      <ConfirmDialog
+        open={excluding}
+        title="排除这位同学？"
+        desc="排除后，双方将不再出现在彼此的匹配结果中，私聊与联系方式交换也会停止。对方不会收到提示；你可以在「我的」中取消排除。"
+        confirmText="确认排除"
+        tone="danger"
+        loading={excludeBusy}
+        onCancel={() => { if (!excludeBusy) setExcluding(false); }}
+        onConfirm={async () => {
+          setExcludeBusy(true);
+          try {
+            await api.excludeConnection(profile.id);
+            setExcluding(false);
+            toast.success('已排除这位同学', '对方不会收到提示，可在「我的」中取消排除。');
+            leave();
+          } catch (e) {
+            toast.error('操作失败', e instanceof ApiError ? e.message : undefined);
+          } finally {
+            setExcludeBusy(false);
+          }
+        }}
+      />
       <TakedownDialog
         open={takedown}
         onClose={() => setTakedown(false)}
         type="profile"
         id={profile.id}
         label={profile.nickname}
-        onDone={() => {
-          onChanged?.();
-          onClose ? onClose() : nav('/square');
-        }}
+        onDone={leave}
       />
     </div>
   );
@@ -329,4 +376,15 @@ function Highlight({ text, words }: { text: string; words: string[] }) {
   const expression = new RegExp(`(${escaped.join('|')})`, 'gi');
   const pieces = text.split(expression);
   return <>{pieces.map((piece, index) => terms.some((term) => term.toLowerCase() === piece.toLowerCase()) ? <mark key={index} className="rounded-sm bg-brand-soft px-0.5 text-brand-text">{piece}</mark> : piece)}</>;
+}
+
+/** 目标日期：显示日期，并说明还有几天（已过去的只显示日期） */
+function deadlineText(date: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '';
+  const [y, m, d] = date.split('-').map(Number);
+  const target = Date.UTC(y, m - 1, d);
+  const today = new Date();
+  const days = Math.round((target - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86_400_000);
+  const label = `${y} 年 ${m} 月 ${d} 日`;
+  return days > 0 ? `${label}（还有 ${days} 天）` : days === 0 ? `${label}（就是今天）` : label;
 }

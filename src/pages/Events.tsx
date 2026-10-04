@@ -14,7 +14,8 @@ import { PostCard } from '../components/PostCard';
 import { TakedownDialog } from '../components/moderation';
 import { Illustration } from '../components/brand';
 
-export function Events() {
+/** embedded：嵌入「校园社区 · 招募」时不显示页面标题 */
+export function Events({ embedded = false }: { embedded?: boolean } = {}) {
   const { user } = useAuth();
   const toast = useToast();
   const nav = useNavigate();
@@ -49,15 +50,24 @@ export function Events() {
 
   return (
     <div>
-      <PageHeader
-        title="活动大厅"
-        desc="同学们发起的学习招募。看到合适的就点「我感兴趣」，发起人会收到通知。"
-        actions={
+      {embedded ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[14px] text-ink-2">同学们发起的学习招募。看到合适的就点「我感兴趣」，发起人会收到通知。</p>
           <Button variant="primary" icon={<Megaphone size={16} />} onClick={() => nav('/events/new')}>
             发起招募
           </Button>
-        }
-      />
+        </div>
+      ) : (
+        <PageHeader
+          title="活动大厅"
+          desc="同学们发起的学习招募。看到合适的就点「我感兴趣」，发起人会收到通知。"
+          actions={
+            <Button variant="primary" icon={<Megaphone size={16} />} onClick={() => nav('/events/new')}>
+              发起招募
+            </Button>
+          }
+        />
+      )}
 
       <label className="flex h-11 items-center gap-2.5 rounded-lg border border-line-strong bg-surface px-3.5 transition-[border-color,box-shadow] focus-within:border-brand focus-within:shadow-[0_0_0_3px_var(--brand-soft)]">
         <Search size={17} className="shrink-0 text-ink-3" />

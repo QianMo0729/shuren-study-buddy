@@ -10,7 +10,8 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import bcrypt from 'bcryptjs';
 import { emptyProfile } from '../shared/profileRules.ts';
-import type { ProfileInput, RecommendationResponse } from '../shared/types.ts';
+import type { DeckCard, ProfileInput, RecommendationResponse } from '../shared/types.ts';
+import { compareRecommendationCards } from '../server/recommendations.ts';
 
 async function startServer() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'study-buddy-recommendations-'));
@@ -260,10 +261,16 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     assert.deepEqual(first, second);
     for (const item of first.items) {
       const info = item.recommendation!;
-      assert.equal(info.version, 'rules-v1');
+      assert.equal(info.version, 'rules-v2');
       assert.ok(Number.isFinite(info.score) && info.score >= 0 && info.score <= 100);
       assert.ok(Number.isFinite(info.coverage) && info.coverage >= 0 && info.coverage <= 100);
+      assert.ok(['great', 'good', 'fair'].includes(info.tier));
       assert.equal(info.dimensions.length, 7);
+      // The compatibility list is the plain questionnaire order: no personal blend, no exploration.
+      const card = item as DeckCard;
+      assert.equal(card.rankScore, info.score);
+      assert.equal(card.explore, false);
+      assert.ok(Array.isArray(card.subjects));
     }
     const changed = await api('/profiles/me', candidates[0].cookie, 'PUT', { profile: {
       ...candidates[0].data, planTags: ['考研'], studyType: 'discuss', places: ['dorm'],
@@ -281,5 +288,30 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     const recomputed = await recommend(viewer);
     assert.equal(recomputed.items[0].id, candidates[0].id);
     assert.equal((await api('/auth/me', viewer.cookie)).body.user.questionnaireComplete, true);
+  });
+
+  await t.test('the compatibility list matches /match/ranked and drops people I already gave feedback to', async () => {
+    reset();
+    const viewer = createUser();
+    const candidates = [
+      createUser(),
+      createUser({ studyType: 'discuss' }),
+      createUser({ schedule: [0] }),
+      createUser({ planTags: ['考研'] }),
+    ];
+    const result = await recommend(viewer);
+    const ranked = await api('/match/ranked?limit=20', viewer.cookie);
+    assert.equal(ranked.status, 200);
+    assert.deepEqual(result.items.map((item) => item.id), ranked.body.items.map((item: DeckCard) => item.id));
+    assert.deepEqual(result.items.map((item) => item.id), [...result.items].sort(compareRecommendationCards).map((item) => item.id));
+    assert.equal(result.items.length, 4);
+    for (const [index, action] of (['like', 'dislike', 'skip'] as const).entries()) {
+      const response = await api('/match/feedback', viewer.cookie, 'POST', { targetId: candidates[index].id, action });
+      assert.equal(response.status, 200);
+    }
+    const after = await recommend(viewer);
+    assert.deepEqual(after.items.map((item) => item.id), [candidates[3].id]);
+    assert.equal(after.total, 1);
+    assert.equal(after.eligibleCount, 1);
   });
 });

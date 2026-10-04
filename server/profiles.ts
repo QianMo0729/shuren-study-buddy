@@ -2,13 +2,15 @@ import crypto from 'node:crypto';
 import {
   BUDDY_GENDERS, FUTURE_PLANS, GENDERS, GRADES, MBTIS, MODES, PLACES, SLOT_COUNT, SPORTS, STATUSES, STUDY_TYPES, TRAITS,
   overlapSlots, slotsHours, STUDY_METHODS, FREQUENCIES, DURATIONS, INTERESTS, DISLIKE_OPTIONS, PLAN_PRESETS,
+  PERSONALITY_ITEMS, STUDY_FORMATS,
 } from '../shared/options.ts';
 import { SPECIES } from '../shared/species.ts';
 import { emptyProfile, missingFields, pickProfileInput, hasPrivacyConsent } from '../shared/profileRules.ts';
 export { emptyProfile, missingFields };
-import type { MyProfile, ProfileCard, ProfileInput, PublicProfile } from '../shared/types.ts';
+import type { MyProfile, Personality, ProfileCard, ProfileInput, PublicProfile, StudyFormat } from '../shared/types.ts';
 import { iso, q } from './db.ts';
 import { HttpError } from './auth.ts';
+import { matchStateFor } from './matches.ts';
 
 // ---------- 系统随机昵称 ----------
 
@@ -38,6 +40,14 @@ export function sanitizeProfile(raw: any): ProfileInput {
   const c = r.contacts ?? {};
   const consent = r.privacyConsent ?? {};
   const slots = (v: unknown) => Array.isArray(v) ? [...new Set(v.filter((n) => Number.isInteger(n) && n >= 0 && n < SLOT_COUNT))].sort((a, b) => a - b) : [];
+  // 'YYYY-MM-DD' 且是真实存在的日期（2000–2100 年），否则 ''
+  const calendarDate = (v: unknown) => {
+    const m = typeof v === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(v) : null;
+    if (!m) return '';
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const date = new Date(Date.UTC(y, mo - 1, d));
+    return y >= 2000 && y <= 2100 && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d ? m[0] : '';
+  };
   return {
     schemaVersion: 2,
     realName: str(r.realName, 30),
@@ -86,6 +96,22 @@ export function sanitizeProfile(raw: any): ProfileInput {
     photoVisibility: r.photoVisibility === 'public' ? 'public' : 'private',
     privacyConsent: { policy: consent.policy === true, contactExchange: consent.contactExchange === true,
       silentExclusion: consent.silentExclusion === true, withdrawal: consent.withdrawal === true },
+    // 具体科目：全角转半角、合并空白、去掉控制字符；忽略大小写与空白后重复的只保留第一个
+    subjects: (Array.isArray(r.subjects) ? r.subjects : [])
+      .filter((t: unknown) => typeof t === 'string')
+      .map((t: string) => t.normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/gu, ' ').trim()).map((t: string) => [...t].slice(0, 30).join('').trim())
+      .filter((t: string, i: number, all: string[]) => {
+        const key = (x: string) => x.toLowerCase().replace(/\s+/gu, '');
+        return !!key(t) && all.findIndex((x) => key(x) === key(t)) === i;
+      })
+      .slice(0, 8),
+    goalDeadline: calendarDate(r.goalDeadline),
+    studyFormat: (pick(r.studyFormat, STUDY_FORMATS) || '') as StudyFormat,
+    // 每题 1–5 的整数，其余一律视为未回答（0）
+    personality: Object.fromEntries(PERSONALITY_ITEMS.map((item) => {
+      const n = r.personality?.[item.key];
+      return [item.key, typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 5 ? n : 0];
+    })) as unknown as Personality,
   };
 }
 
@@ -162,6 +188,7 @@ export function toCard(row: ProfileRow, d: ProfileInput, me: { id: number; sched
     mbti: '',
     studyPlan: d.studyPlan,
     planTags: d.planTags,
+    subjects: d.subjects,
     isMe: row.user_id === me.id,
     overlapHours: row.user_id === me.id ? 0 : overlapHoursOf(d.schedule, me.schedule),
     publishedAt: iso(row.published_at),
@@ -173,6 +200,7 @@ export const overlapHoursOf = (a: number[], b: number[]) => slotsHours(overlapSl
 export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, mySchedule: number[]): PublicProfile {
   const c = d.contacts;
   const isFavorite = !!q.get('SELECT 1 FROM favorites WHERE user_id = ? AND target_id = ?', viewerId, row.user_id);
+  const relation = matchStateFor(viewerId, row.user_id);
   return {
     id: row.user_id,
     nickname: row.nickname,
@@ -205,6 +233,10 @@ export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, myS
     studyMethods: d.studyMethods, studyMethodsOther: d.studyMethodsOther, frequency: d.frequency, duration: d.duration,
     expectations: d.expectations, dislikeTags: d.dislikeTags, interests: d.interests, interestsOther: d.interestsOther,
     photoVisibility: d.photoVisibility,
+    subjects: d.subjects,
+    goalDeadline: d.goalDeadline,
+    studyFormat: d.studyFormat,
+    personality: d.personality,
     publishedAt: iso(row.published_at),
     isMe: row.user_id === viewerId,
     isFavorite,
@@ -212,6 +244,8 @@ export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, myS
     overlap: row.user_id === viewerId ? [] : overlapSlots(d.schedule, mySchedule),
     mySchedule,
     takenDown: !!row.taken_down,
+    matchState: relation.state,
+    matchId: relation.matchId,
   };
 }
 
@@ -225,10 +259,11 @@ export function mySchedule(userId: number): number[] {
   return row ? parseData(row).schedule : [];
 }
 
-export function assertOwnFile(userId: number, name: string | null) {
+/** 资料图片必须是本人上传、且用途匹配（主页照片 / 课表），社区图片和打卡照片不能挪作主页照片 */
+export function assertOwnFile(userId: number, name: string | null, kind: 'photo' | 'timetable' = 'photo') {
   if (!name) return;
-  const owner = q.get<{ user_id: number }>('SELECT user_id FROM uploads WHERE name = ?', name);
-  if (!owner || owner.user_id !== userId) throw new HttpError(400, '图片无效，请重新上传');
+  const owner = q.get<{ user_id: number; kind: string }>('SELECT user_id, kind FROM uploads WHERE name = ?', name);
+  if (!owner || owner.user_id !== userId || owner.kind !== kind) throw new HttpError(400, '图片无效，请重新上传');
 }
 
 // Old profiles never consented to the revised visibility rules. Retain their data and

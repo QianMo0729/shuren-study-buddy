@@ -65,7 +65,7 @@ export function Login() {
   const titles = { login: '欢迎回到树仁搭子', activate: step === 'password' ? '设置你的登录密码' : '激活你的搭子账号', reset: '重新设置登录密码' };
 
   useEffect(() => {
-    if (!loading && user && mode !== 'reset') nav(mode === 'activate' || !user.questionnaireComplete ? '/me/edit?onboarding=1' : next || '/square', { replace: true });
+    if (!loading && user && mode !== 'reset') nav(mode === 'activate' || !user.questionnaireComplete ? '/me/edit?onboarding=1' : next || '/match', { replace: true });
   }, [user, loading, mode, nav, next]);
 
   useEffect(() => {

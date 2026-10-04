@@ -35,7 +35,7 @@ export function EventDetail() {
     return (
       <div className="py-24 text-center">
         <p className="text-[16px] text-ink-2">{error}</p>
-        <Button className="mt-5" onClick={() => nav('/events')}>
+        <Button className="mt-5" onClick={() => nav('/community?tab=events')}>
           返回活动大厅
         </Button>
       </div>
@@ -53,7 +53,7 @@ export function EventDetail() {
 
   return (
     <div className="mx-auto max-w-4xl pt-5 sm:pt-8">
-      <button onClick={() => nav('/events')} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button onClick={() => nav('/community?tab=events')} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 活动大厅
       </button>
 
@@ -191,7 +191,7 @@ export function EventDetail() {
           try {
             await api.deletePost(post.id);
             toast.success('已删除');
-            nav('/events');
+            nav('/community?tab=events');
           } catch (e) {
             toast.error('删除失败', e instanceof ApiError ? e.message : undefined);
           } finally {
@@ -200,7 +200,7 @@ export function EventDetail() {
         }}
       />
       <ReportDialog open={report} onClose={() => setReport(false)} targetType="post" targetId={post.id} />
-      <TakedownDialog open={takedown} onClose={() => setTakedown(false)} type="post" id={post.id} label={post.title} onDone={() => nav('/events')} />
+      <TakedownDialog open={takedown} onClose={() => setTakedown(false)} type="post" id={post.id} label={post.title} onDone={() => nav('/community?tab=events')} />
     </div>
   );
 }

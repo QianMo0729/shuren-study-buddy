@@ -10,6 +10,8 @@ import { getProfileRow, parseData } from '../profiles.ts';
 import { hasPrivacyConsent } from '../../shared/profileRules.ts';
 import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
+import { fileAccessFor, reportTargetFor } from '../social.ts';
+import type { ReportTargetType } from '../../shared/types.ts';
 
 export const miscRouter = Router();
 
@@ -23,10 +25,12 @@ function sniff(buf: Buffer): 'jpg' | 'png' | 'webp' | null {
   return null;
 }
 
-// 图片以 dataURL 上传（前端已压缩），落盘后仅登录用户可访问
+// 图片以 dataURL 上传（前端已压缩），落盘后仅登录用户可访问。
+// 打卡照片（kind = checkin）不能走这里，只能通过实时拍照的打卡接口由服务器盖章后保存。
 miscRouter.post('/uploads', requireUser, (req, res) => {
   rateLimit(`upload:${req.user!.id}`, 60, 60 * 60_000);
-  const kind = req.body?.kind === 'timetable' ? 'timetable' : 'photo';
+  if (req.body?.kind === 'checkin') throw new HttpError(400, '打卡照片只能在打卡页面用相机实时拍摄');
+  const kind = req.body?.kind === 'timetable' ? 'timetable' : req.body?.kind === 'forum' ? 'forum' : 'photo';
   const m = /^data:image\/[a-z+]+;base64,(.+)$/.exec(String(req.body?.dataUrl ?? ''));
   if (!m) throw new HttpError(400, '图片格式不正确');
   const buf = Buffer.from(m[1], 'base64');
@@ -45,7 +49,11 @@ miscRouter.get('/files/:name', requireUser, (req, res) => {
   const owner = q.get<{ user_id: number; kind: string }>('SELECT user_id, kind FROM uploads WHERE name = ?', name);
   if (!owner) throw new HttpError(404, '文件不存在');
   const uid = req.user!.id;
-  if (uid !== owner.user_id && req.user!.role !== 'admin') {
+  if (uid !== owner.user_id && req.user!.role !== 'admin' && owner.kind !== 'photo' && owner.kind !== 'timetable') {
+    // 社区图片、打卡照片等由各自模块判断可见性
+    const allowed = fileAccessFor(owner.kind)?.({ id: uid, role: req.user!.role }, owner.user_id, name) ?? false;
+    if (!allowed) throw new HttpError(404, '文件不存在');
+  } else if (uid !== owner.user_id && req.user!.role !== 'admin') {
     const row = getProfileRow(owner.user_id);
     const data = row ? parseData(row) : null;
     if (!row?.published || row.taken_down || !data || !hasPrivacyConsent(data)
@@ -75,17 +83,26 @@ miscRouter.post('/notifications/read-all', requireUser, (req, res) => {
 
 // ---------- 举报 ----------
 
+const REPORT_TYPES: ReportTargetType[] = ['profile', 'post', 'forum_post', 'comment', 'checkin', 'message'];
+
 miscRouter.post('/reports', requireUser, (req, res) => {
   rateLimit(`report:${req.user!.id}`, 20, 24 * 3600_000);
-  const targetType = req.body?.targetType === 'post' ? 'post' : 'profile';
+  const targetType: ReportTargetType = REPORT_TYPES.includes(req.body?.targetType) ? req.body.targetType : 'profile';
   const targetId = Number(req.body?.targetId);
   const reason = String(req.body?.reason ?? '');
   if (!Number.isInteger(targetId) || !REPORT_REASONS.includes(reason)) throw new HttpError(400, '请选择举报原因');
+  const registered = reportTargetFor(targetType);
   const exists =
     targetType === 'post'
       ? q.get('SELECT 1 FROM posts WHERE id = ? AND deleted = 0', targetId)
-      : q.get('SELECT 1 FROM profiles WHERE user_id = ?', targetId);
+      : targetType === 'profile'
+        ? q.get('SELECT 1 FROM profiles WHERE user_id = ?', targetId)
+        : registered?.canReport(req.user!.id, targetId);
   if (!exists) throw new HttpError(404, '举报对象不存在');
+  // 举报人填写的说明不能伪造“被举报内容”快照段
+  const userDetail = String(req.body?.detail ?? '').replaceAll('【被举报内容】', '').slice(0, 200);
+  const snapshot = registered?.snapshot?.(targetId);
+  const detail = snapshot ? `${userDetail}${userDetail ? '\n' : ''}【被举报内容】${snapshot.slice(0, 1000)}` : userDetail;
   const dup = q.get(
     "SELECT 1 FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? AND status = 'open'",
     req.user!.id, targetType, targetId,
@@ -93,7 +110,7 @@ miscRouter.post('/reports', requireUser, (req, res) => {
   if (!dup) {
     q.run(
       'INSERT INTO reports (reporter_id, target_type, target_id, reason, detail) VALUES (?, ?, ?, ?, ?)',
-      req.user!.id, targetType, targetId, reason, String(req.body?.detail ?? '').slice(0, 200),
+      req.user!.id, targetType, targetId, reason, detail,
     );
   }
   res.json({ ok: true });

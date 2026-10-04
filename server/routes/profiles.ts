@@ -3,8 +3,8 @@ import type { ContactReveal, ProfileCard, RecommendationResponse } from '../../s
 import { HttpError, requireUser } from '../auth.ts';
 import { q } from '../db.ts';
 import { canExchangeContacts, isExcluded } from '../connections.ts';
-import { effectiveSchedule, emptyProfile, hasPrivacyConsent } from '../../shared/profileRules.ts';
-import { compareRecommendationCards, recommendationFor } from '../recommendations.ts';
+import { effectiveSchedule, hasPrivacyConsent } from '../../shared/profileRules.ts';
+import { buildRanked } from '../matching.ts';
 import {
   assertOwnFile, ensureProfile, getProfileRow, missingFields, parseData, publishedRows, sanitizeProfile,
   toCard, toMyProfile, toPublic,
@@ -26,7 +26,8 @@ profileRouter.put('/me', (req, res) => {
   const row = ensureProfile(uid);
   const data = sanitizeProfile(req.body?.profile);
   data.studentId = req.user!.email.split('@')[0];
-  for (const f of [...data.photos, data.timetable]) assertOwnFile(uid, f);
+  for (const f of data.photos) assertOwnFile(uid, f, 'photo');
+  assertOwnFile(uid, data.timetable, 'timetable');
   q.run(
     "UPDATE profiles SET data = ?, saved_at = datetime('now'), reviewed_at = CASE WHEN published = 1 THEN NULL ELSE reviewed_at END WHERE user_id = ?",
     JSON.stringify(data),
@@ -61,41 +62,16 @@ profileRouter.post('/me/unpublish', (req, res) => {
 
 // ---------- 搭子广场 ----------
 
+// 兼容旧接口：与匹配页“列表”相同的排序（只按双向契合度），取前 20 位
 profileRouter.get('/recommendations', (req, res) => {
-  const uid = req.user!.id;
-  const ownRow = getProfileRow(uid);
-  const mine = ownRow ? parseData(ownRow) : emptyProfile();
-  const missing = missingFields(mine);
-  const result: RecommendationResponse = { items: [], total: 0, eligibleCount: 0, state: 'empty', missing };
-  if (missing.length || !ownRow?.saved_at) return res.json({ ...result, state: 'incomplete' } satisfies RecommendationResponse);
-  if (ownRow?.taken_down || !['seeking', 'open'].includes(mine.status)) {
-    return res.json({ ...result, state: 'unavailable' } satisfies RecommendationResponse);
-  }
-  if (!ownRow?.published) return res.json({ ...result, state: 'unpublished' } satisfies RecommendationResponse);
-  const rejected = new Set(q.all<{ other_id: number }>(
-    `SELECT CASE WHEN requester_id = ? THEN recipient_id ELSE requester_id END AS other_id
-     FROM contact_requests WHERE status = 'rejected' AND (requester_id = ? OR recipient_id = ?)`, uid, uid, uid,
-  ).map((row) => row.other_id));
-  const rows = q.all<NonNullable<ReturnType<typeof getProfileRow>>>(
-    `SELECT p.* FROM profiles p JOIN users u ON u.id = p.user_id
-     WHERE p.published = 1 AND p.taken_down = 0 AND p.saved_at IS NOT NULL AND p.saved_at <> '' AND p.user_id <> ?
-       AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> ''`, uid,
-  );
-  const me = { id: uid, schedule: effectiveSchedule(mine) };
-  for (const row of rows) {
-    if (rejected.has(row.user_id) || isExcluded(uid, row.user_id)) continue;
-    const candidate = parseData(row);
-    if (missingFields(candidate).length || !['seeking', 'open'].includes(candidate.status)) continue;
-    result.eligibleCount++;
-    const recommendation = recommendationFor(mine, candidate);
-    if (!recommendation) continue;
-    result.items.push({ ...toCard(row, candidate, me), overlapHours: recommendation.overlapHours, recommendation });
-  }
-  result.items.sort(compareRecommendationCards);
-  result.total = result.items.length;
-  result.items = result.items.slice(0, 20);
-  result.state = result.total ? 'ready' : result.eligibleCount ? 'no_overlap' : 'empty';
-  res.json(result);
+  const ranked = buildRanked(req.user!.id, 20);
+  res.json({
+    items: ranked.items,
+    total: ranked.total,
+    eligibleCount: ranked.eligibleCount,
+    state: ranked.state,
+    missing: ranked.missing,
+  } satisfies RecommendationResponse);
 });
 
 function viewer(userId: number) {

@@ -18,13 +18,14 @@ function edition(d = new Date()) {
 }
 
 const NOTES = [
-  '输入学号验证校园邮箱并设置密码，接着填写搭子问卷。提交后即可查看为你推荐的同学，以后用邮箱和密码登录。',
+  '输入学号验证校园邮箱并设置密码，接着填写搭子问卷：学习目标与具体科目、空闲时间、地点、学习方式，以及一组「学习性格」小题。以后用邮箱和密码登录。',
   '每位同学的昵称，由系统从校园里常见的二十四种动植物中随机选取，后附编号，例如「白鹭 KLM23」。姓名与学号不公开，只有管理员可见。',
-  '主页记录希望的学习时间、学习方式、相处方式和常去的地点。打开别人的主页时，你们共同的空闲时段会用朱色标出。',
-  '推荐综合双方的共同时间、目标、学习方式、地点、节奏和兴趣，并说明契合与分歧。也可以按自我介绍关键词或高级检索主动寻找同学。',
-  '联系同学前需要发起申请，双方确认后才能交换联系方式。照片默认不公开，可以在资料中主动选择展示。',
-  '活动大厅用于发起招募，比如「雅思口语练习，每周两次」。感兴趣的同学可以从招募找到发起人的主页。',
-  '学发定期查看新发布和修改过的内容。违规的主页或招募会被撤下，当事人会收到写明时间与原因的邮件。',
+  '「匹配推荐」一次弹出一张卡片。契合度同时看两边：TA 是否符合你的期待，你是否也符合 TA 的期待；时间、学习内容和学习性格占比最高。',
+  '你可以选「感兴趣」「不感兴趣」或「稍后再看」。系统会根据你的选择调整排序，多推荐你感兴趣的类型；不感兴趣的同学不会再出现，也不会收到任何提示。',
+  '只有双方都选了「感兴趣」，才会出现在「私聊」里。先聊聊学习安排，觉得合适再在聊天中申请交换联系方式，双方确认后才会显示。',
+  '「校园社区」里有聊天区、打卡区和招募。聊天区可以发帖分享生活；搜索帖子时可以切换到高级检索，按条件找帖子或找同学。',
+  '打卡只能用网页实时拍照，不能上传相册图片。服务器收到照片后，在右下角逐像素盖上位置与北京时间，水印颜色随背景深浅自动取黑或白。',
+  '学发定期查看新发布和修改过的内容。违规的主页、帖子或打卡会被撤下，当事人会收到写明时间与原因的邮件。',
   '图版取自公有领域的博物学著作，照片取自维基共享资源，出处列在文末。',
 ];
 
@@ -38,7 +39,7 @@ export function Landing() {
     api.meta().then(setMeta).catch(() => {});
   }, []);
 
-  const go = () => nav(user ? '/square' : '/login');
+  const go = () => nav(user ? '/match' : '/login');
   const counts = meta?.breakdown?.species ?? {};
   const published = meta?.stats.profiles ?? 0;
   const kinds = Object.keys(counts).length;
@@ -52,16 +53,16 @@ export function Landing() {
         <nav className="flex items-center gap-6 text-[14px]">
           {user && (
             <>
-              <Link to="/square" className="hidden text-ink-2 hover:text-ink sm:inline">
-                搭子广场
+              <Link to="/match" className="hidden text-ink-2 hover:text-ink sm:inline">
+                匹配推荐
               </Link>
-              <Link to="/events" className="hidden text-ink-2 hover:text-ink sm:inline">
-                活动大厅
+              <Link to="/community" className="hidden text-ink-2 hover:text-ink sm:inline">
+                校园社区
               </Link>
             </>
           )}
           <Button size="sm" variant={user ? 'primary' : 'secondary'} onClick={go}>
-            {user ? '进入广场' : '登录'}
+            {user ? '开始匹配' : '登录'}
           </Button>
         </nav>
       </header>
@@ -102,11 +103,11 @@ export function Landing() {
           </p>
           <div>
             <p className="text-[16px] leading-[1.85] text-ink-2">
-              这是树仁书院同学的学习搭子广场。激活账号后填写学习问卷，我们会根据双方的时间、目标和学习偏好推荐合拍的同学。你也可以主动检索，或在活动大厅发起一场招募。
+              这是树仁书院同学的学习搭子平台。填写学习问卷后，系统会根据双方的时间、学习内容和学习性格推荐合拍的同学；互相感兴趣就能私聊。你也可以在校园社区分享生活、拍照打卡，或发起一场招募。
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <Button variant="primary" size="lg" onClick={go}>
-                {user ? '进入搭子广场' : '邮箱与密码登录'}
+                {user ? '查看为我推荐的搭子' : '邮箱与密码登录'}
               </Button>
               <a href="#notes" className="text-[15px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
                 先读凡例
@@ -179,8 +180,8 @@ export function Landing() {
         </figure>
         <div className="flex flex-wrap items-center justify-between gap-5 py-12 sm:py-16">
           <p className="font-display text-[26px] tracking-[-0.03em] text-ink sm:text-[32px]">轮到你写自己的那一页了。</p>
-          <Button variant="primary" size="lg" onClick={go}>
-            {user ? '编辑我的主页' : '登录并填写'}
+          <Button variant="primary" size="lg" onClick={() => nav(user ? '/me/edit' : '/login')}>
+            {user ? '编辑我的问卷' : '登录并填写'}
           </Button>
         </div>
       </section>

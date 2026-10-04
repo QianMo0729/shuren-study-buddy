@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import type { ModerationTargetType } from '../shared/types.ts';
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { config } from './config.ts';
@@ -90,20 +91,38 @@ export function sendCodeMail(to: string, code: string, purpose: string) {
   return sendMail(to, `【${BRAND}】${what}验证码`, html, `你正在进行「${what}」操作，验证码：${code}（10 分钟内有效）。请勿向他人透露验证码。如非本人操作，请忽略此邮件。`);
 }
 
-export function sendContactRequestMail(to: string, nickname: string) {
+export function sendContactRequestMail(to: string, nickname: string, matchId: number) {
+  const link = `${config.appUrl}/messages/${matchId}`;
   return sendMail(
     to,
-    `【${BRAND}】你收到一条联系申请`,
-    layout('你收到一条联系申请',
-      `<p style="line-height:1.8">${escapeHtml(nickname)} 希望与你交换联系方式。请登录网站查看对方资料，并选择接受或拒绝。</p>
+    `【${BRAND}】你收到一条交换联系方式的申请`,
+    layout('你收到一条交换联系方式的申请',
+      `<p style="line-height:1.8">${escapeHtml(nickname)} 在私聊中申请与你交换联系方式。请登录网站查看，并选择同意或拒绝。</p>
        <p style="line-height:1.8">只有双方确认后，系统才会互相展示联系方式。</p>
-       <a href="${escapeHtml(config.appUrl)}/me?tab=connections" style="display:inline-block;padding:12px 22px;background:#005C65;color:#fff;text-decoration:none;border-radius:12px">查看联系申请</a>`),
-    `${nickname} 希望与你交换联系方式。请登录 ${config.appUrl}/me?tab=connections 查看对方资料，并选择接受或拒绝。只有双方确认后才会互相展示联系方式。`,
+       <a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 22px;background:#005C65;color:#fff;text-decoration:none;border-radius:12px">去私聊查看</a>`),
+    `${nickname} 在私聊中申请与你交换联系方式。请登录 ${link} 查看并选择同意或拒绝。只有双方确认后才会互相展示联系方式。`,
   );
 }
 
-export function sendTakedownMail(to: string, kind: 'profile' | 'post', label: string, reason: string, time: string) {
-  const what = kind === 'profile' ? '个人主页' : '帖子';
+export function sendMatchMail(to: string, nickname: string, matchId: number) {
+  const link = `${config.appUrl}/messages/${matchId}`;
+  return sendMail(
+    to,
+    `【${BRAND}】你们互相感兴趣了`,
+    layout('你们互相感兴趣了',
+      `<p style="line-height:1.8">你和 ${escapeHtml(nickname)} 都对彼此感兴趣，现在可以在站内私聊了。</p>
+       <p style="line-height:1.8">先聊聊学习目标和时间安排，确认合适后再决定是否交换联系方式。</p>
+       <a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 22px;background:#005C65;color:#fff;text-decoration:none;border-radius:12px">去私聊</a>`),
+    `你和 ${nickname} 互相感兴趣，现在可以在站内私聊了：${link}`,
+  );
+}
+
+const TAKEDOWN_KIND_TEXT: Record<ModerationTargetType, string> = {
+  profile: '个人主页', post: '招募帖子', forum_post: '社区帖子', comment: '评论', checkin: '打卡',
+};
+
+export function sendTakedownMail(to: string, kind: ModerationTargetType, label: string, reason: string, time: string) {
+  const what = TAKEDOWN_KIND_TEXT[kind];
   const html = layout(
     `您的${what}已被管理员撤下`,
     `<p style="margin:0 0 14px;line-height:1.8;color:#4A5650">您的${what}「<b style="color:#18211C">${escapeHtml(label)}</b>」因违规被管理员撤下。</p>

@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { ChevronLeft } from 'lucide-react';
 import { Plate, Wordmark } from '../components/brand';
 import { useCredits } from '../components/credits';
+import { GLYPH_SOURCE } from '../../server/watermarkFont';
 
 /** 图版与照片出处：CC BY / CC BY-SA 要求署名，这里集中列出 */
 export function Credits() {
@@ -61,6 +62,22 @@ export function Credits() {
           </li>
         ))}
       </ul>
+
+      <h2 className="mt-14 font-display text-[26px] text-ink">打卡水印字体</h2>
+      <div className="mt-5 border-y border-line py-4 text-[14px] leading-relaxed">
+        <p className="font-display text-[17px] text-ink">{GLYPH_SOURCE}</p>
+        <p className="mt-1 max-w-[46em] text-ink-2">
+          学习打卡照片右下角的地点与时间水印，是服务器用 GNU Unifont 的 16 像素点阵字形逐像素盖上的。
+          Unifont 由 Roman Czyborra、Paul Hardy、Qianqian Fang 等贡献者制作，以 SIL Open Font License 1.1 与 GNU GPL 2.0+（附字体嵌入例外）双许可发布，本站按
+          <a href="https://openfontlicense.org/open-font-license-official-text/" target="_blank" rel="noreferrer" className="mx-0.5 underline decoration-line-strong underline-offset-2">
+            SIL Open Font License 1.1
+          </a>
+          使用。
+        </p>
+        <a href="https://unifoundry.com/unifont/" target="_blank" rel="noreferrer" className="mt-1 inline-block break-all text-ink-3 underline decoration-line underline-offset-2 hover:text-ink">
+          unifoundry.com/unifont
+        </a>
+      </div>
     </div>
   );
 }

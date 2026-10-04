@@ -2,10 +2,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, CalendarClock, Check, CheckCheck, ExternalLink, FileText, Flag, Minus, Plus, RotateCcw, Search, ShieldX, UserRound,
+  AlertTriangle, CalendarClock, Check, CheckCheck, ExternalLink, FileText, Flag, MessagesSquare, Minus, Plus, RotateCcw, Search, ShieldX, UserRound,
 } from 'lucide-react';
+import type { ModerationTargetType, ReportTargetType } from '../../shared/types';
 import {
-  api, ApiError, type AdminLog, type AdminOverview, type AdminPost, type AdminProfile, type AdminReport, type AdminUser,
+  api, ApiError, fileUrl, type AdminContent, type AdminContentType, type AdminLog, type AdminOverview, type AdminPost, type AdminProfile,
+  type AdminReport, type AdminUser,
 } from '../lib/api';
 import { cx, dateTime, fullDateTime, timeAgo } from '../lib/format';
 import { ease, spring } from '../lib/motion';
@@ -18,7 +20,8 @@ import { TakedownDialog } from '../components/moderation';
 const TABS = [
   { id: 'overview', label: '概览' },
   { id: 'profiles', label: '主页审核' },
-  { id: 'posts', label: '帖子审核' },
+  { id: 'posts', label: '招募审核' },
+  { id: 'community', label: '社区内容' },
   { id: 'reports', label: '举报处理' },
   { id: 'logs', label: '撤下记录' },
   { id: 'users', label: '用户' },
@@ -31,7 +34,16 @@ const FILTERS = [
   { value: 'all', label: '全部' },
 ];
 
-type Target = { type: 'profile' | 'post'; id: number; label: string };
+/** 各类对象在后台中的称呼 */
+const TYPE_TEXT: Record<ReportTargetType, string> = {
+  profile: '主页', post: '招募', forum_post: '社区帖子', comment: '评论', checkin: '打卡', message: '私聊消息',
+};
+
+const isModeration = (t: ReportTargetType): t is ModerationTargetType => t !== 'message';
+
+type Target = { type: ModerationTargetType; id: number; label: string };
+
+const errorText = (e: unknown) => (e instanceof ApiError ? e.message : '请稍后重试');
 
 export function Admin() {
   const [tab, setTab] = useState('overview');
@@ -43,12 +55,17 @@ export function Admin() {
 
   return (
     <div className="pt-2">
-      <PageHeader title="管理后台" desc="树仁学发内部使用。定期查看新发布的主页和招募；撤下违规内容后，系统会自动给当事人发邮件。" />
+      <PageHeader title="管理后台" desc="树仁学发内部使用。定期查看新发布的主页、招募和社区内容；撤下违规内容后，系统会自动给当事人发站内通知和邮件。" />
 
       <div className="-mx-4 flex gap-6 overflow-x-auto border-b border-line px-4 no-scrollbar sm:mx-0 sm:px-0" role="tablist">
         {TABS.map((t) => {
           const on = t.id === tab;
-          const badge = t.id === 'profiles' ? overview?.stats.pendingProfiles : t.id === 'posts' ? overview?.stats.pendingPosts : t.id === 'reports' ? overview?.stats.openReports : 0;
+          const badge =
+            t.id === 'profiles' ? overview?.stats.pendingProfiles
+            : t.id === 'posts' ? overview?.stats.pendingPosts
+            : t.id === 'community' ? overview?.stats.pendingCommunity
+            : t.id === 'reports' ? overview?.stats.openReports
+            : 0;
           return (
             <button key={t.id} role="tab" aria-selected={on} onClick={() => setTab(t.id)} className={cx('relative flex shrink-0 items-center gap-1.5 py-2.5 text-[14.5px] transition-colors', on ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink')}>
               {t.label}
@@ -65,6 +82,7 @@ export function Admin() {
             {tab === 'overview' && <Overview data={overview} reload={loadOverview} go={setTab} />}
             {tab === 'profiles' && <ProfilesReview onChange={loadOverview} />}
             {tab === 'posts' && <PostsReview onChange={loadOverview} />}
+            {tab === 'community' && <CommunityReview pending={overview?.pendingContent} onChange={loadOverview} />}
             {tab === 'reports' && <Reports onChange={loadOverview} />}
             {tab === 'logs' && <Logs />}
             {tab === 'users' && <UsersTab />}
@@ -86,18 +104,21 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
   const cycle = days ?? r.cycleDays;
   const tiles = [
     { label: '已激活用户', value: s.users },
-    { label: '广场展示中的主页', value: s.published },
-    { label: '招募中的帖子', value: s.posts },
+    { label: '已发布的主页', value: s.published },
+    { label: '招募中', value: s.posts },
+    { label: '社区帖子', value: s.forumPosts },
+    { label: '今日打卡', value: s.checkinsToday },
     { label: '近 30 天撤下', value: s.takedowns30d },
   ];
   const todo = [
     { label: '待审核主页', value: s.pendingProfiles, tab: 'profiles', icon: UserRound },
-    { label: '待审核帖子', value: s.pendingPosts, tab: 'posts', icon: FileText },
+    { label: '待审核招募', value: s.pendingPosts, tab: 'posts', icon: FileText },
+    { label: '待审核社区内容', value: s.pendingCommunity, tab: 'community', icon: MessagesSquare },
     { label: '待处理举报', value: s.openReports, tab: 'reports', icon: Flag },
   ];
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {tiles.map((t) => (
           <div key={t.label} className="rounded-xl bg-surface p-5">
             <p className="text-[13px] text-ink-3">{t.label}</p>
@@ -182,7 +203,7 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
             onClick={async () => {
               await api.admin.reviewRound();
               reload();
-              toast.success('已记录本轮巡查', '请前往「主页审核」「帖子审核」处理待审核内容');
+              toast.success('已记录本轮巡查', '请前往「主页审核」「招募审核」「社区内容」处理待审核内容');
               go('profiles');
             }}
           >
@@ -196,13 +217,13 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
 
 // ---------------- 通用 ----------------
 
-function Toolbar({ filter, setFilter, q, setQ, extra }: { filter: string; setFilter: (v: string) => void; q: string; setQ: (v: string) => void; extra?: React.ReactNode }) {
+function Toolbar({ filter, setFilter, q, setQ, extra, placeholder }: { filter: string; setFilter: (v: string) => void; q: string; setQ: (v: string) => void; extra?: React.ReactNode; placeholder?: string }) {
   return (
     <div className="mb-4 flex flex-wrap items-center gap-3">
       <Segmented options={FILTERS} value={filter} onChange={setFilter} />
       <div className="flex h-10 min-w-56 flex-1 items-center rounded-lg border border-line-strong bg-surface px-3 sm:max-w-xs">
         <Search size={15} className="text-ink-3" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="昵称 / 姓名 / 学号 / 邮箱 / 内容" className="h-full flex-1 bg-transparent px-2 text-[13.5px] outline-none" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder ?? '昵称 / 姓名 / 学号 / 邮箱 / 内容'} aria-label="搜索" maxLength={100} className="h-full flex-1 bg-transparent px-2 text-[13.5px] outline-none" />
       </div>
       {extra}
     </div>
@@ -235,10 +256,15 @@ function StatusPill({ takenDown, reviewedAt, reports }: { takenDown: boolean; re
 }
 
 function useList<T>(fetcher: (filter: string, q: string) => Promise<{ items: T[] }>) {
+  const toast = useToast();
   const [filter, setFilter] = useState('pending');
   const [q, setQ] = useState('');
   const [items, setItems] = useState<T[] | null>(null);
-  const load = useCallback(() => fetcher(filter, q).then((r) => setItems(r.items)), [fetcher, filter, q]);
+  const load = useCallback(
+    () => fetcher(filter, q).then((r) => setItems(r.items)).catch((e) => toast.error('加载失败', errorText(e))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fetcher, filter, q],
+  );
   useEffect(() => {
     const t = setTimeout(load, q ? 250 : 0);
     return () => clearTimeout(t);
@@ -399,7 +425,7 @@ function PostsReview({ onChange }: { onChange: () => void }) {
               icon={<CheckCheck size={14} />}
               onClick={async () => {
                 await api.admin.approve('post', pending.map((p) => p.id));
-                toast.success(`已通过 ${pending.length} 个帖子`);
+                toast.success(`已通过 ${pending.length} 个招募`);
                 refresh();
               }}
             >
@@ -411,7 +437,7 @@ function PostsReview({ onChange }: { onChange: () => void }) {
       {!items ? (
         <Skeleton className="h-64 rounded-xl" />
       ) : !items.length ? (
-        <Empty text={filter === 'pending' ? '没有待审核的帖子' : '没有记录'} />
+        <Empty text={filter === 'pending' ? '没有待审核的招募' : '没有记录'} />
       ) : (
         <div className="space-y-3">
           <AnimatePresence initial={false}>
@@ -460,18 +486,233 @@ function PostsReview({ onChange }: { onChange: () => void }) {
   );
 }
 
+// ---------------- 社区内容 ----------------
+
+const CONTENT_TYPES: { value: AdminContentType; label: string }[] = [
+  { value: 'forum_post', label: '帖子' },
+  { value: 'comment', label: '评论' },
+  { value: 'checkin', label: '打卡' },
+];
+
+function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentType, number>; onChange: () => void }) {
+  const toast = useToast();
+  const [type, setType] = useState<AdminContentType>('forum_post');
+  const [filter, setFilter] = useState('pending');
+  const [q, setQ] = useState('');
+  const [items, setItems] = useState<AdminContent[] | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [target, setTarget] = useState<Target | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(
+    () =>
+      api.admin
+        .content(type, filter, q)
+        .then((r) => {
+          setItems(r.items);
+          // 列表刷新后只保留仍待审核的勾选项
+          setSelected((s) => new Set(r.items.filter((i) => s.has(i.id) && !i.takenDown && !i.reviewedAt).map((i) => i.id)));
+        })
+        .catch((e) => toast.error('加载失败', errorText(e))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [type, filter, q],
+  );
+  useEffect(() => {
+    const t = setTimeout(load, q ? 250 : 0);
+    return () => clearTimeout(t);
+  }, [load, q]);
+
+  const switchType = (v: string) => {
+    setType(v as AdminContentType);
+    setItems(null);
+    setSelected(new Set());
+  };
+  const refresh = () => (load(), onChange());
+  const pendingItems = items?.filter((i) => !i.takenDown && !i.reviewedAt) ?? [];
+  const typeLabel = CONTENT_TYPES.find((t) => t.value === type)!.label;
+
+  const approve = async (ids: number[]) => {
+    if (!ids.length) return;
+    setBusy(true);
+    try {
+      await api.admin.approve(type, ids);
+      toast.success(ids.length > 1 ? `已通过 ${ids.length} 条${typeLabel}` : '已通过');
+      setSelected(new Set());
+      refresh();
+    } catch (e) {
+      toast.error('操作失败', errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const restore = async (item: AdminContent) => {
+    try {
+      await api.admin.restore(item.type, item.id);
+      toast.success('已恢复展示');
+      refresh();
+    } catch (e) {
+      toast.error('操作失败', errorText(e));
+    }
+  };
+  const toggle = (id: number) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div>
+      <div className="mb-3 overflow-x-auto no-scrollbar">
+        <Segmented
+          options={CONTENT_TYPES.map((t) => ({ value: t.value, label: pending?.[t.value] ? `${t.label} · ${pending[t.value]}` : t.label }))}
+          value={type}
+          onChange={switchType}
+        />
+      </div>
+      <Toolbar
+        filter={filter}
+        setFilter={(v) => (setFilter(v), setItems(null), setSelected(new Set()))}
+        q={q}
+        setQ={setQ}
+        placeholder="昵称 / 邮箱 / 正文"
+        extra={
+          selected.size > 0 ? (
+            <div className="flex items-center gap-1.5">
+              <Button size="sm" variant="soft" icon={<CheckCheck size={14} />} loading={busy} onClick={() => approve([...selected])}>
+                通过所选（{selected.size}）
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                取消选择
+              </Button>
+            </div>
+          ) : (
+            pendingItems.length > 1 && (
+              <Button size="sm" variant="soft" icon={<CheckCheck size={14} />} loading={busy} onClick={() => approve(pendingItems.map((i) => i.id))}>
+                全部通过（{pendingItems.length}）
+              </Button>
+            )
+          )
+        }
+      />
+      {!items ? (
+        <Skeleton className="h-64 rounded-xl" />
+      ) : !items.length ? (
+        <Empty text={filter === 'pending' ? `没有待审核的${typeLabel}` : '没有记录'} />
+      ) : (
+        <div className="space-y-3">
+          <AnimatePresence initial={false}>
+            {items.map((c) => {
+              const isPending = !c.takenDown && !c.reviewedAt;
+              const label = c.title || c.body.slice(0, 30) || typeLabel;
+              return (
+                <motion.div key={`${c.type}-${c.id}`} layout exit={{ opacity: 0 }} className="flex gap-3 rounded-xl bg-surface p-4 sm:p-5">
+                  {isPending ? (
+                    <input
+                      type="checkbox"
+                      className="mt-1 size-4 shrink-0 accent-brand"
+                      checked={selected.has(c.id)}
+                      onChange={() => toggle(c.id)}
+                      aria-label={`选择「${label}」`}
+                    />
+                  ) : (
+                    <span className="w-4 shrink-0" aria-hidden />
+                  )}
+                  <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-start">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusPill takenDown={c.takenDown} reviewedAt={c.reviewedAt} reports={c.reports} />
+                        {c.title && <span className={cx('min-w-0 truncate', c.type === 'forum_post' ? 'text-[15px] font-semibold text-ink' : 'text-[12.5px] text-ink-3')}>{c.title}</span>}
+                      </div>
+                      {c.body ? (
+                        <p className="mt-2 line-clamp-4 text-[13.5px] leading-relaxed whitespace-pre-line text-ink-2">{c.body}</p>
+                      ) : (
+                        <p className="mt-2 text-[13px] text-ink-4">（没有文字说明）</p>
+                      )}
+                      {c.images.length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap gap-1.5">
+                          {c.images.map((img, i) => (
+                            <a
+                              key={img}
+                              href={fileUrl(img)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={cx('overflow-hidden rounded-md border border-line bg-paper-2', c.type === 'checkin' ? 'size-24' : 'size-14')}
+                              aria-label={`查看第 ${i + 1} 张图片原图`}
+                            >
+                              <img src={fileUrl(img)} alt="" loading="lazy" className="h-full w-full object-cover" />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      <p className="mt-2 text-[11.5px] text-ink-4">
+                        {c.nickname || '—'} · {c.email} · {timeAgo(c.createdAt)}发布
+                        {c.takenDown && ` · 撤下于 ${dateTime(c.takenDownAt)}（${c.takedownReason}）`}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-1.5 sm:flex-col sm:items-stretch">
+                      {c.link && (
+                        <Link to={c.link} target="_blank" className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-line-strong px-3 text-[13px] text-ink-2 hover:border-ink-4">
+                          <ExternalLink size={13} /> {c.type === 'comment' ? '查看原帖' : '查看'}
+                        </Link>
+                      )}
+                      {c.takenDown ? (
+                        <Button size="sm" icon={<RotateCcw size={13} />} onClick={() => restore(c)}>
+                          恢复
+                        </Button>
+                      ) : (
+                        <>
+                          {isPending && (
+                            <Button size="sm" variant="soft" icon={<Check size={13} />} disabled={busy} onClick={() => approve([c.id])}>
+                              通过
+                            </Button>
+                          )}
+                          <Button size="sm" variant="danger" icon={<ShieldX size={13} />} onClick={() => setTarget({ type: c.type, id: c.id, label })}>
+                            撤下
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+      )}
+      {target && <TakedownDialog open onClose={() => setTarget(null)} type={target.type} id={target.id} label={target.label} onDone={refresh} />}
+    </div>
+  );
+}
+
 // ---------------- 举报 ----------------
+
+const STATE_TEXT = { down: '对象已撤下', deleted: '对象已删除' } as const;
 
 function Reports({ onChange }: { onChange: () => void }) {
   const toast = useToast();
   const [status, setStatus] = useState('open');
   const [items, setItems] = useState<AdminReport[] | null>(null);
   const [target, setTarget] = useState<Target | null>(null);
-  const load = useCallback(() => api.admin.reports(status).then((r) => setItems(r.items)), [status]);
+  const load = useCallback(
+    () => api.admin.reports(status).then((r) => setItems(r.items)).catch((e) => toast.error('加载失败', errorText(e))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [status],
+  );
   useEffect(() => {
     load();
   }, [load]);
   const refresh = () => (load(), onChange());
+  const close = async (r: AdminReport, how: 'dismiss' | 'resolve') => {
+    try {
+      await (how === 'dismiss' ? api.admin.dismissReport(r.id) : api.admin.resolveReport(r.id));
+      toast.success(how === 'dismiss' ? '已驳回' : '已标记为已处理');
+      refresh();
+    } catch (e) {
+      toast.error('操作失败', errorText(e));
+    }
+  };
   return (
     <div>
       <div className="mb-4">
@@ -483,34 +724,60 @@ function Reports({ onChange }: { onChange: () => void }) {
         <Empty text="没有待处理的举报" />
       ) : (
         <div className="space-y-3">
-          {items.map((r) => (
-            <div key={r.id} className="flex flex-col gap-3 rounded-xl bg-surface p-5 sm:flex-row sm:items-center">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-danger-soft px-2 py-0.5 text-[11.5px] font-medium text-danger">{r.reason}</span>
-                  <span className="text-[12px] text-ink-3">{r.targetType === 'profile' ? '主页' : '帖子'}</span>
-                  <Link to={r.targetType === 'profile' ? `/u/${r.targetId}` : `/events/${r.targetId}`} target="_blank" className="text-[14px] font-semibold text-ink hover:underline">
-                    {r.targetLabel}
-                  </Link>
-                  {r.status !== 'open' && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">{r.status === 'resolved' ? '已撤下' : '已驳回'}</span>}
+          {items.map((r) => {
+            const canTakedown = isModeration(r.targetType) && r.targetState === 'visible';
+            return (
+              <div key={r.id} className="flex flex-col gap-3 rounded-xl bg-surface p-5 sm:flex-row sm:items-start">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-danger-soft px-2 py-0.5 text-[11.5px] font-medium text-danger">{r.reason}</span>
+                    <span className="text-[12px] text-ink-3">{TYPE_TEXT[r.targetType] ?? r.targetType}</span>
+                    {r.link ? (
+                      <Link to={r.link} target="_blank" className="min-w-0 truncate text-[14px] font-semibold text-ink hover:underline">
+                        {r.targetLabel}
+                      </Link>
+                    ) : (
+                      <span className="min-w-0 truncate text-[14px] font-semibold text-ink">{r.targetLabel}</span>
+                    )}
+                    {r.targetState !== 'visible' && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">{STATE_TEXT[r.targetState]}</span>}
+                    {r.status !== 'open' && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">{r.status === 'resolved' ? '已处理' : '已驳回'}</span>}
+                  </div>
+                  {r.snapshot !== null && (
+                    <figure className="mt-2.5 rounded-lg border border-line bg-paper-2/60 px-3.5 py-2.5">
+                      <figcaption className="text-[11.5px] text-ink-3">举报时留存的内容原文</figcaption>
+                      <blockquote className="mt-1 max-h-40 overflow-y-auto text-[13.5px] leading-relaxed break-words whitespace-pre-wrap text-ink">{r.snapshot || '（空）'}</blockquote>
+                    </figure>
+                  )}
+                  {r.note && <p className="mt-1.5 text-[13px] break-words whitespace-pre-wrap text-ink-2">举报人补充：“{r.note}”</p>}
+                  <p className="mt-1.5 text-[11.5px] text-ink-4">
+                    {r.owner && (
+                      <>
+                        被举报人 {r.owner.nickname}
+                        {r.owner.email && ` · ${r.owner.email}`} ·{' '}
+                      </>
+                    )}
+                    举报人 {r.reporter} · {fullDateTime(r.createdAt)}
+                  </p>
                 </div>
-                {r.detail && <p className="mt-1.5 text-[13px] text-ink-2">“{r.detail}”</p>}
-                <p className="mt-1.5 text-[11.5px] text-ink-4">
-                  举报人 {r.reporter} · {fullDateTime(r.createdAt)}
-                </p>
+                {r.status === 'open' && (
+                  <div className="flex shrink-0 flex-wrap gap-1.5">
+                    <Button size="sm" variant="ghost" onClick={() => close(r, 'dismiss')}>
+                      驳回
+                    </Button>
+                    {canTakedown ? (
+                      <Button size="sm" variant="danger" icon={<ShieldX size={13} />} onClick={() => isModeration(r.targetType) && setTarget({ type: r.targetType, id: r.targetId, label: r.targetLabel })}>
+                        撤下对象
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="soft" icon={<Check size={13} />} onClick={() => close(r, 'resolve')}>
+                        标记已处理
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
-              {r.status === 'open' && (
-                <div className="flex gap-1.5">
-                  <Button size="sm" variant="ghost" onClick={async () => { await api.admin.dismissReport(r.id); toast.success('已驳回'); refresh(); }}>
-                    驳回
-                  </Button>
-                  <Button size="sm" variant="danger" icon={<ShieldX size={13} />} onClick={() => setTarget({ type: r.targetType, id: r.targetId, label: r.targetLabel })}>
-                    撤下对象
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       {target && <TakedownDialog open onClose={() => setTarget(null)} type={target.type} id={target.id} label={target.label} onDone={refresh} />}
@@ -527,7 +794,7 @@ function Logs() {
   }, []);
   if (!items) return <Skeleton className="h-64 rounded-xl" />;
   if (!items.length) return <Empty text="还没有撤下 / 恢复记录" />;
-  const mail = { sent: '已发送', logged: '已记录（未配置 SMTP）', failed: '发送失败', '': '—' } as Record<string, string>;
+  const mail = { sent: '已发送', logged: '已记录（未配置邮件服务）', failed: '发送失败', skipped: '未发送（账号已注销）', '': '—' } as Record<string, string>;
   return (
     <div className="overflow-x-auto rounded-xl bg-surface">
       <table className="w-full min-w-[760px] text-left text-[13px]">
@@ -548,7 +815,7 @@ function Logs() {
                 <span className={cx('rounded-full px-2 py-0.5 text-[11.5px] font-medium', l.action === 'takedown' ? 'bg-danger-soft text-danger' : 'bg-brand-soft text-brand-text')}>{l.action === 'takedown' ? '撤下' : '恢复'}</span>
               </td>
               <td className="px-4 py-3 text-ink">
-                <span className="text-ink-3">{l.targetType === 'profile' ? '主页 ' : '帖子 '}</span>
+                <span className="text-ink-3">{TYPE_TEXT[l.targetType as ReportTargetType] ?? l.targetType} </span>
                 {l.targetLabel}
               </td>
               <td className="max-w-56 px-4 py-3 text-ink-2">{l.reason || '—'}</td>
@@ -604,7 +871,7 @@ function UsersTab() {
                   <td className="px-4 py-3 text-ink-2">{u.realName || '—'}</td>
                   <td className="tabular px-4 py-3 text-ink-2">{u.studentId || '—'}</td>
                   <td className="px-4 py-3 text-ink-2">{u.major || '—'}</td>
-                  <td className="px-4 py-3">{u.published ? <span className="text-brand-text">广场展示中</span> : <span className="text-ink-3">未上传</span>}</td>
+                  <td className="px-4 py-3">{u.published ? <span className="text-brand-text">主页已发布</span> : <span className="text-ink-3">未发布</span>}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-ink-3">{timeAgo(u.lastLoginAt) || '—'}</td>
                 </tr>
               ))}

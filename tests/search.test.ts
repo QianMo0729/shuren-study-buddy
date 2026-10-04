@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { emptyProfile } from '../shared/profileRules.ts';
 import type { Criterion, ProfileInput } from '../shared/types.ts';
-import { advancedMatch, keywordMatch, normalizeQuery, tokenize } from '../server/search.ts';
+import { POST_SEARCH_FIELDS, advancedMatch, criterionHit, evaluateCriteria, keywordMatch, normalizeQuery, subjectsHit, tokenize } from '../server/search.ts';
 
 const profile: ProfileInput = {
   ...emptyProfile(), major: '计算机科学与技术', gender: 'female', grade: 'y2', studyType: 'quiet',
@@ -87,4 +87,46 @@ test('gender preference is an optional mutual filter and empty criteria list rem
   const femalePreference = { ...profile, buddyGender: 'female' };
   assert.equal(advancedMatch({ criteria: [], mutualGender: true }, '', femalePreference, me), null);
   assert.ok(advancedMatch({ criteria: [], mutualGender: false }, '', femalePreference, me));
+});
+
+test('subjects criterion normalizes width, case, spacing, synonyms and containment', () => {
+  const learner = { ...profile, subjects: ['线性代数II', 'C 语言程序设计', 'IELTS'] };
+  for (const value of ['线代', '线性代数', 'c语言', 'Ｃ 语言程序设计', '雅思', '数分、线代']) {
+    assert.ok(criterionHit(should('subjects', [value]), learner, '', []), value);
+  }
+  assert.equal(criterionHit(should('subjects', ['高数']), learner, '', []), false);
+  assert.equal(subjectsHit(['线代'], []), false);
+  assert.ok(advancedMatch({ criteria: [{ field: 'subjects', mode: 'must', values: ['ielts'] }] }, '', learner, me));
+  assert.equal(advancedMatch({ criteria: [{ field: 'subjects', mode: 'not', values: ['雅思'] }] }, '', learner, me), null);
+});
+
+test('text conditions accept several words and hit when any of them appears', () => {
+  assert.ok(criterionHit(should('text', ['雅思 线代']), profile, '', []));
+  assert.ok(criterionHit(should('expectations', ['准时、监督']), profile, '', []));
+  assert.equal(criterionHit(should('text', ['雅思 托福']), profile, '', []), false);
+  // postText 不属于主页资料
+  assert.equal(criterionHit(should('postText', ['线代']), profile, '', []), false);
+});
+
+test('people search keeps subjects but drops post-only fields; post search keeps postText and author fields only', () => {
+  const raw = { criteria: [
+    { field: 'subjects', values: ['线代'] }, { field: 'postText', values: ['晚霞'] }, { field: 'overlap', values: ['2'] },
+    { field: 'gender', values: ['female'] },
+  ] };
+  assert.deepEqual(normalizeQuery(raw).criteria.map((c) => c.field), ['subjects', 'overlap', 'gender']);
+  assert.deepEqual(normalizeQuery(raw, POST_SEARCH_FIELDS).criteria.map((c) => c.field), ['subjects', 'postText', 'gender']);
+});
+
+test('shared criteria evaluation: precise majority, fuzzy, must and not', () => {
+  const hits: Record<string, boolean> = { gender: true, grade: false, status: false };
+  const query = (matchMode: 'precise' | 'fuzzy', extra: Criterion[] = []) => ({
+    matchMode, criteria: [should('gender', ['x']), should('grade', ['x']), should('status', ['x']), ...extra],
+  });
+  const hit = (c: Criterion) => hits[c.field] ?? false;
+  assert.equal(evaluateCriteria(query('precise'), hit), null);
+  assert.deepEqual(evaluateCriteria(query('fuzzy'), hit), { score: 1, total: 3, matched: ['0:gender'], missed: ['1:grade', '2:status'] });
+  // 不可见作者：所有作者条件都“未命中”，因此「排除」不排除，「必须」不通过
+  const never = () => false;
+  assert.ok(evaluateCriteria({ criteria: [{ field: 'major', mode: 'not', values: ['x'] }] }, never));
+  assert.equal(evaluateCriteria({ criteria: [{ field: 'major', mode: 'must', values: ['x'] }] }, never), null);
 });

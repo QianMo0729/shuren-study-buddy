@@ -4,16 +4,21 @@ import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
 import { useToast } from '../lib/toast';
 import { Button, Modal, Textarea } from './ui';
+import type { ModerationTargetType, ReportTargetType } from '../../shared/types';
 
-export function ReportDialog({ open, onClose, targetType, targetId }: { open: boolean; onClose: () => void; targetType: 'profile' | 'post'; targetId: number }) {
+const TARGET_TEXT: Record<ReportTargetType, string> = {
+  profile: '主页', post: '招募', forum_post: '帖子', comment: '评论', checkin: '打卡', message: '消息',
+};
+
+export function ReportDialog({ open, onClose, targetType, targetId }: { open: boolean; onClose: () => void; targetType: ReportTargetType; targetId: number }) {
   const toast = useToast();
   const [reason, setReason] = useState('');
   const [detail, setDetail] = useState('');
   const [busy, setBusy] = useState(false);
   return (
-    <Modal open={open} onClose={onClose} title={targetType === 'profile' ? '举报该主页' : '举报该帖子'} size="sm">
+    <Modal open={open} onClose={onClose} title={`举报该${TARGET_TEXT[targetType]}`} size="sm">
       <div className="px-6 pt-2 pb-6">
-        <p className="text-[14px] text-ink-2">举报只有管理员能看到，学发会尽快核实。</p>
+        <p className="text-[14px] text-ink-2">{targetType === 'message' ? '举报后，这条消息的内容会提交给管理员核实；其他聊天记录不会被查看。' : '举报只有管理员能看到，学发会尽快核实。'}</p>
         <div className="mt-4 space-y-1.5">
           {REPORT_REASONS.map((r) => (
             <button
@@ -63,7 +68,7 @@ export function TakedownDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  type: 'profile' | 'post';
+  type: ModerationTargetType;
   id: number;
   label: string;
   onDone?: () => void;
@@ -74,10 +79,10 @@ export function TakedownDialog({
   const [busy, setBusy] = useState(false);
   const final = custom.trim() || reason;
   return (
-    <Modal open={open} onClose={onClose} title={type === 'profile' ? '撤下该主页' : '撤下该帖子'} size="sm">
+    <Modal open={open} onClose={onClose} title={`撤下该${TARGET_TEXT[type]}`} size="sm">
       <div className="px-6 pt-2 pb-6">
         <p className="text-[14px] leading-relaxed text-ink-2">
-          将撤下「<b className="font-semibold text-ink">{label}</b>」。系统会记录撤下时间，并向对方的注册邮箱发送通知：「您的{type === 'profile' ? '个人主页' : '帖子'}因违规被管理员撤下，时间：……」
+          将撤下「<b className="font-semibold text-ink">{label}</b>」。系统会记录撤下时间，并向对方的注册邮箱发送通知：「您的{TARGET_TEXT[type]}因违规被管理员撤下，时间：……」
         </p>
         <div className="mt-4 flex flex-wrap gap-1.5">
           {TAKEDOWN_REASONS.map((r) => (

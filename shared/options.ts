@@ -128,7 +128,46 @@ export const MBTIS = [
   'ISTP', 'ISFP', 'ESTP', 'ESFP',
 ];
 
+/** 线上 / 线下：线下与线上互不兼容，「都可以」兼容两者；未填写按「都可以」处理 */
+export const STUDY_FORMATS: Option[] = [
+  { value: 'offline', label: '线下一起学' },
+  { value: 'online', label: '线上连麦 / 共享进度' },
+  { value: 'both', label: '都可以' },
+];
+
+/**
+ * 学习性格：每题 1–5 分（0 = 未回答）。
+ * mode = 'similar' 表示双方越接近越合拍；'need' / 'give' 是互补的一对：我需要被监督的程度应由对方愿意监督的程度满足。
+ */
+export const PERSONALITY_ITEMS: { key: import('./types.ts').PersonalityKey; label: string; low: string; high: string; mode: 'similar' | 'need' | 'give' }[] = [
+  { key: 'talk', label: '学习时的交流', low: '几乎不说话', high: '边学边聊', mode: 'similar' },
+  { key: 'noise', label: '能接受的环境声音', low: '需要很安静', high: '嘈杂也没关系', mode: 'similar' },
+  { key: 'punctual', label: '对守时的要求', low: '时间随意', high: '必须准时', mode: 'similar' },
+  { key: 'plan', label: '学习的计划性', low: '随性而为', high: '严格按计划', mode: 'similar' },
+  { key: 'social', label: '学习之外一起玩的意愿', low: '只学习', high: '也想一起吃饭运动', mode: 'similar' },
+  { key: 'needSupervision', label: '需要被督促的程度', low: '完全自觉', high: '需要有人催', mode: 'need' },
+  { key: 'giveSupervision', label: '愿意督促对方的程度', low: '不想管别人', high: '乐意当监督员', mode: 'give' },
+];
+
 export const PLAN_PRESETS = ['期末复习备考', '日常课程同步学习', '语言考试', '科研/竞赛项目', '技能自学', '考研', '其他'];
+
+/** 具体科目 / 课程 / 考试的输入建议：按已选的近期目标给出常见写法（自由填写也可以） */
+export const SUBJECT_SUGGESTIONS: Record<string, string[]> = {
+  期末复习备考: ['高等数学', '线性代数', '概率论与数理统计', '大学物理', '数学分析', '数据结构', '有机化学'],
+  日常课程同步学习: ['高等数学', '线性代数', '大学物理', 'C 语言程序设计', '模拟电路', '离散数学'],
+  语言考试: ['雅思', '托福', 'GRE', '四六级', '日语 N2'],
+  '科研/竞赛项目': ['数学建模', '电子设计竞赛', 'ACM-ICPC', '文献阅读'],
+  技能自学: ['Python', '机器学习', 'LeetCode', 'CPA', 'SQL'],
+  考研: ['考研数学一', '考研英语一', '考研政治', '408 计算机'],
+};
+export const SUBJECT_LIMIT = 8;
+
+/** 推荐契合度档位（rules-v2：score ≥ 80 很合拍，≥ 65 较合拍，其余可以聊聊） */
+export const RECOMMENDATION_TIERS: Record<'great' | 'good' | 'fair', { label: string; min: number }> = {
+  great: { label: '很合拍', min: 80 },
+  good: { label: '较合拍', min: 65 },
+  fair: { label: '可以聊聊', min: 0 },
+};
 
 export const BIO_PROMPTS = ['我最近在忙…', '我学习时的小习惯是…', '理想的搭子是…', '和我一起学习你会收获…'];
 
@@ -192,6 +231,12 @@ export const SYNONYMS: string[][] = [
   ['乒乓球', '乒乓'],
   ['求职', '实习', '找工作', '就业'],
   ['竞赛', '比赛', '数模', '建模'],
+  ['大物', '大学物理'],
+  ['模电', '模拟电路', '模拟电子技术'],
+  ['数电', '数字电路', '数字电子技术'],
+  ['计组', '计算机组成原理'],
+  ['离散', '离散数学'],
+  ['数据结构', '数据结构与算法'],
 ];
 
 export const optionLabel = (list: Option[], value: string | null | undefined) =>

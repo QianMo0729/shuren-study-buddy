@@ -5,6 +5,7 @@ import type { ProfileCard as Card } from '../../shared/types';
 import { cx } from '../lib/format';
 import { spring } from '../lib/motion';
 import { Plate, Stamp } from './brand';
+import { TIER_LABEL } from './match/labels';
 
 /** 系统昵称 = 物种 + 编号（如「白鹭KLM23」），拆开排版 */
 export function splitNickname(nick: string) {
@@ -74,7 +75,13 @@ export function ProfileCard({ card, onOpen, isAdmin, onTakedown, matchLabels, in
           <Plate nickname={card.nickname} photo={card.cover} className={card.recommendation ? 'aspect-[4/3]' : 'aspect-[4/5]'} reveal delay={Math.min(index, 8) * 0.06} />
           {card.isMe && <Stamp text="我的" size={36} rotate={-6} className="absolute top-3 left-3" />}
           {card.match && card.match.total > 0 && <MatchMeter score={card.match.score} total={card.match.total} className="absolute top-2.5 right-2.5" />}
-          {card.recommendation && <span className="absolute top-2.5 right-2.5 rounded-md border border-brand/15 bg-surface/95 px-2.5 py-1.5 text-brand-text shadow-sm" title="根据问卷信息计算的契合程度，不是成功概率"><span className="block text-[10px] leading-tight">契合度</span><span className="font-display text-[23px] leading-tight tabular">{card.recommendation.score}<span className="ml-0.5 text-[11px]">分</span></span></span>}
+          {card.recommendation && (
+            <span className="absolute top-2.5 right-2.5 rounded-md border border-brand/15 bg-surface/95 px-2.5 py-1.5 text-brand-text shadow-sm" title="根据问卷信息计算的契合程度，不是成功概率">
+              <span className="block text-[11px] leading-tight">{TIER_LABEL[card.recommendation.tier] ?? '契合度'}</span>
+              <span className="font-display text-[23px] leading-tight tabular">{card.recommendation.score}</span>
+              <span className="sr-only">，契合度 {card.recommendation.score}</span>
+            </span>
+          )}
         </motion.div>
 
         <div className="px-3.5 pt-3 pb-3.5 sm:px-4 sm:pt-3.5 sm:pb-4">
@@ -92,6 +99,12 @@ export function ProfileCard({ card, onOpen, isAdmin, onTakedown, matchLabels, in
           </p>
           <p className="mt-0.5 truncate text-[13px] text-ink-2">{type?.label || '—'}</p>
 
+          {!!card.subjects?.length && (
+            <ul className="mt-2 flex flex-wrap gap-1" aria-label="在学的科目">
+              {card.subjects.slice(0, 3).map((subject) => <li key={subject} className="max-w-full truncate rounded-[4px] bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-text">{subject}</li>)}
+              {card.subjects.length > 3 && <li className="px-0.5 py-0.5 text-[12px] text-ink-3">+{card.subjects.length - 3}</li>}
+            </ul>
+          )}
           {card.studyPlan && <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-ink-2">{card.studyPlan}</p>}
           {!!card.planTags?.length && <p className="mt-1.5 line-clamp-1 text-xs text-brand-text">{card.planTags.join(' · ')}</p>}
           {card.recommendation && <ul className="mt-3 space-y-1.5 border-l-2 border-brand/25 pl-2 text-[12px] leading-relaxed text-ink-2" aria-label="推荐理由">{card.recommendation.reasons.slice(0, 2).map((reason) => <li key={reason} className="line-clamp-2">{reason}</li>)}</ul>}

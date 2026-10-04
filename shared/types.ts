@@ -11,7 +11,24 @@ export interface SessionUser {
   hasProfile: boolean;
   questionnaireComplete: boolean;
   unread: number;
+  /** 私聊中尚未读的消息数（不含自己发出的与系统消息） */
+  unreadMessages: number;
 }
+
+/** 学习性格：每项 1–5，0 表示未回答。见 shared/options.ts 的 PERSONALITY_ITEMS */
+export interface Personality {
+  talk: number;
+  noise: number;
+  punctual: number;
+  plan: number;
+  needSupervision: number;
+  giveSupervision: number;
+  social: number;
+}
+export type PersonalityKey = keyof Personality;
+
+/** ''：未填写（按“都可以”处理） */
+export type StudyFormat = '' | 'offline' | 'online' | 'both';
 
 export interface Contacts {
   showEmail: boolean;
@@ -67,6 +84,12 @@ export interface ProfileInput {
   interestsOther: string;
   photoVisibility: 'private' | 'public';
   privacyConsent: PrivacyConsent;
+  /** 具体科目 / 课程 / 考试，如「线性代数」「雅思」「CS231n」，最多 8 项 */
+  subjects: string[];
+  /** 目标截止日期（考试日等），'' 或 YYYY-MM-DD */
+  goalDeadline: string;
+  studyFormat: StudyFormat;
+  personality: Personality;
 }
 
 export interface PrivacyConsent {
@@ -108,20 +131,33 @@ export interface ProfileCard {
   recommendation?: RecommendationInfo;
   studyPlan?: string;
   planTags?: string[];
+  subjects?: string[];
 }
 
+export type DimensionKey = 'time' | 'content' | 'personality' | 'style' | 'places' | 'rhythm' | 'interests';
+
 export interface RecommendationDimension {
-  key: 'time' | 'goals' | 'style' | 'places' | 'methods' | 'rhythm' | 'interests';
+  key: DimensionKey;
   label: string;
   weight: number;
+  /** 双向平均的契合程度 0–1；任一方缺少可比信息时为 null（评分时按中性 0.5 计入） */
   similarity: number | null;
+  /** 对方满足“我”的程度 0–1（null 同上） */
+  forMe: number | null;
+  /** “我”满足对方的程度 0–1（null 同上） */
+  forThem: number | null;
   detail: string;
 }
 
 /** Questionnaire compatibility score, not a probability of a successful match. */
 export interface RecommendationInfo {
-  version: 'rules-v1';
+  version: 'rules-v2';
+  /** 双向契合度：forMe 与 forThem 的调和平均，0–100 */
   score: number;
+  forMe: number;
+  forThem: number;
+  tier: 'great' | 'good' | 'fair';
+  /** 双方都有可比信息的维度权重之和（0–100） */
   coverage: number;
   overlapHours: number;
   commonSlots: number[];
@@ -129,6 +165,142 @@ export interface RecommendationInfo {
   cautions: string[];
   dimensions: RecommendationDimension[];
 }
+
+// ---------- 滑卡推荐与反馈 ----------
+
+export type FeedbackAction = 'like' | 'dislike' | 'skip';
+export type MatchState = 'none' | 'liked' | 'disliked' | 'skipped' | 'matched';
+
+export interface DeckCard extends ProfileCard {
+  recommendation: RecommendationInfo;
+  /** 结合个人偏好后的排序分 0–100（契合度仍以 recommendation.score 为准） */
+  rankScore: number;
+  /** 为避免推荐越来越窄而加入的探索位 */
+  explore: boolean;
+  subjects: string[];
+}
+
+export interface DeckResponse {
+  items: DeckCard[];
+  state: RecommendationResponse['state'];
+  missing: { key: string; label: string }[];
+  eligibleCount: number;
+  /** 去掉已反馈对象后仍可推荐的人数 */
+  total: number;
+  personalization: { samples: number; active: boolean; emphasis: string[] };
+}
+
+export interface FeedbackResult {
+  action: FeedbackAction;
+  matched: boolean;
+  matchId: number | null;
+}
+
+export interface FeedbackItem {
+  targetId: number;
+  nickname: string;
+  action: FeedbackAction;
+  createdAt: string;
+}
+
+// ---------- 私聊 ----------
+
+export type ContactState = 'none' | 'pending_outgoing' | 'pending_incoming' | 'accepted' | 'rejected';
+
+export interface ChatSummary {
+  matchId: number;
+  other: { id: number; nickname: string; cover: string | null };
+  status: 'active' | 'closed';
+  lastMessage: { body: string; senderId: number | null; createdAt: string; kind: 'text' | 'system' } | null;
+  unread: number;
+  createdAt: string;
+  contactState: ContactState;
+}
+
+export interface ChatMessage {
+  id: number;
+  matchId: number;
+  senderId: number | null;
+  kind: 'text' | 'system';
+  body: string;
+  createdAt: string;
+  mine: boolean;
+}
+
+// ---------- 社区：聊天区帖子、打卡 ----------
+
+export type ForumTargetType = 'post' | 'checkin';
+
+export interface ForumAuthor {
+  id: number;
+  nickname: string;
+  cover: string | null;
+  /** 作者主页是否对当前用户可见（决定能否点进主页） */
+  profileVisible: boolean;
+}
+
+export interface ForumPost {
+  id: number;
+  title: string;
+  body: string;
+  images: string[];
+  createdAt: string;
+  updatedAt: string;
+  author: ForumAuthor;
+  likeCount: number;
+  liked: boolean;
+  commentCount: number;
+  isMine: boolean;
+  takenDown?: boolean;
+  takedownReason?: string | null;
+  match?: MatchInfo;
+}
+
+export interface ForumComment {
+  id: number;
+  targetType: ForumTargetType;
+  targetId: number;
+  body: string;
+  createdAt: string;
+  author: ForumAuthor;
+  isMine: boolean;
+}
+
+export type CheckinVisibility = 'all' | 'buddies';
+
+export interface Checkin {
+  id: number;
+  image: string;
+  caption: string;
+  placeLabel: string;
+  /** 服务器盖章时间（ISO） */
+  stampedAt: string;
+  /** 水印上的北京时间文字 */
+  stampText: string;
+  visibility: CheckinVisibility;
+  author: ForumAuthor;
+  likeCount: number;
+  liked: boolean;
+  commentCount: number;
+  isMine: boolean;
+  takenDown?: boolean;
+  takedownReason?: string | null;
+}
+
+export interface CheckinSession {
+  token: string;
+  expiresAt: string;
+  serverTime: string;
+}
+
+export interface CheckinStats {
+  streak: number;
+  total: number;
+  checkedInToday: boolean;
+}
+
+export type ReportTargetType = 'profile' | 'post' | 'forum_post' | 'comment' | 'checkin' | 'message';
+export type ModerationTargetType = 'profile' | 'post' | 'forum_post' | 'comment' | 'checkin';
 
 export interface RecommendationResponse {
   items: ProfileCard[];
@@ -189,6 +361,10 @@ export interface PublicProfile {
   interests: string[];
   interestsOther: string;
   photoVisibility: 'private' | 'public';
+  subjects: string[];
+  goalDeadline: string;
+  studyFormat: StudyFormat;
+  personality: Personality;
   publishedAt: string | null;
   isMe: boolean;
   isFavorite: boolean;
@@ -196,6 +372,9 @@ export interface PublicProfile {
   overlap: number[];
   mySchedule: number[];
   takenDown?: boolean;
+  /** 当前用户对这位同学的反馈状态；matched 表示互相感兴趣、可以私聊 */
+  matchState: MatchState;
+  matchId: number | null;
 }
 
 export interface ContactReveal {
@@ -270,7 +449,9 @@ export type CriterionField =
   | 'expectations'
   | 'expectedPlaces'
   | 'schedule'
-  | 'text';
+  | 'text'
+  | 'subjects'
+  | 'postText';
 
 /** 仿知网高级检索：加分（计入过半规则）/ 必须 / 排除 */
 export type CriterionMode = 'should' | 'must' | 'not';
@@ -286,4 +467,9 @@ export interface AdvancedQuery {
   matchMode?: 'precise' | 'fuzzy';
   minMatch?: number;
   mutualGender?: boolean;
+}
+
+/** 社区帖子的高级检索：postText 检索标题与正文，其余字段检索作者已公开的主页资料 */
+export interface PostSearchQuery extends AdvancedQuery {
+  keyword?: string;
 }
