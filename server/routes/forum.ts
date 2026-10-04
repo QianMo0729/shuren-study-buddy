@@ -127,10 +127,11 @@ forumRouter.get('/posts', (req, res) => {
     .sort(byScore);
   let rest = ranked;
   if (before) {
-    const cursor = getPostRow(before);
-    if (!cursor) return res.json({ items: [], hasMore: false });
-    const key = { row: cursor, score: keywordScore(cursor, tokens).score };
-    rest = ranked.filter((x) => byScore(x, key) > 0);
+    // 游标必须是本次结果中、当前用户看得到的帖子：绝不读取被删除、被撤下或被排除的帖子内容来分页，
+    // 否则可以用游标试探隐藏帖子里是否含有某个词
+    const at = ranked.findIndex((x) => x.row.id === before);
+    if (at < 0) return res.json({ items: [], hasMore: false });
+    rest = ranked.slice(at + 1);
   }
   const page = rest.slice(0, size);
   res.json({

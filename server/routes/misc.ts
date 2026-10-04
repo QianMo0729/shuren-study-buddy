@@ -99,18 +99,17 @@ miscRouter.post('/reports', requireUser, (req, res) => {
         ? q.get('SELECT 1 FROM profiles WHERE user_id = ?', targetId)
         : registered?.canReport(req.user!.id, targetId);
   if (!exists) throw new HttpError(404, '举报对象不存在');
-  // 举报人填写的说明不能伪造“被举报内容”快照段
-  const userDetail = String(req.body?.detail ?? '').replaceAll('【被举报内容】', '').slice(0, 200);
-  const snapshot = registered?.snapshot?.(targetId);
-  const detail = snapshot ? `${userDetail}${userDetail ? '\n' : ''}【被举报内容】${snapshot.slice(0, 1000)}` : userDetail;
+  const detail = String(req.body?.detail ?? '').slice(0, 200);
+  // 被举报内容的原文快照存在独立的 snapshot 列，举报人填写的说明无法伪造它
+  const snapshot = (registered?.snapshot?.(targetId) ?? '').slice(0, 1000);
   const dup = q.get(
     "SELECT 1 FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? AND status = 'open'",
     req.user!.id, targetType, targetId,
   );
   if (!dup) {
     q.run(
-      'INSERT INTO reports (reporter_id, target_type, target_id, reason, detail) VALUES (?, ?, ?, ?, ?)',
-      req.user!.id, targetType, targetId, reason, detail,
+      'INSERT INTO reports (reporter_id, target_type, target_id, reason, detail, snapshot) VALUES (?, ?, ?, ?, ?, ?)',
+      req.user!.id, targetType, targetId, reason, detail, snapshot,
     );
   }
   res.json({ ok: true });

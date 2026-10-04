@@ -15,13 +15,14 @@ import { ProfileOverlay } from '../ProfileOverlay';
 import { Illustration } from '../brand';
 import { ForumPostCard, PostSkeleton } from './ForumPostCard';
 import { PostComposer } from './PostComposer';
+import { onAccountChanged } from '../../lib/auth';
 
 type Target = 'posts' | 'people';
 type Mode =
   | { kind: 'feed' }
   | { kind: 'keyword'; q: string }
   | { kind: 'posts'; query: PostSearchQuery }
-  | { kind: 'people'; query: AdvancedQuery & { keyword?: string } };
+  | { kind: 'people'; query: AdvancedQuery & { keyword?: string }; box?: string };
 
 const CARD_GRID = 'grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4';
 const TARGETS = [{ value: 'posts', label: '帖子' }, { value: 'people', label: '同学' }];
@@ -29,6 +30,8 @@ const fieldsOf = (target: Target): FieldDef[] => (target === 'posts' ? POST_FIEL
 
 // 返回社区时先显示上次的帖子流，再在后台刷新
 let feedCache: { items: ForumPost[]; hasMore: boolean } | null = null;
+// 换号或退出后丢弃上一位同学的帖子流缓存
+onAccountChanged(() => { feedCache = null; });
 
 /** 聊天区：发帖、帖子流、关键词检索与高级检索（帖子 / 同学） */
 export function TalkArea() {
@@ -98,16 +101,17 @@ export function TalkArea() {
     setMode(next);
   }, []);
 
-  // 关键词输入：防抖 300ms；高级检索中修改关键词则带着关键词重新检索
+  // 关键词输入：防抖 300ms；帖子高级检索中修改关键词则带着关键词重新检索。
+  // 搜索框只检索帖子：「找同学」模式记下进入时搜索框里的文字（box），之后改动搜索框才切回帖子关键词检索
   useEffect(() => {
     const keyword = input.trim();
-    const applied = mode.kind === 'keyword' ? mode.q : mode.kind === 'posts' || mode.kind === 'people' ? mode.query.keyword ?? '' : '';
+    const applied = mode.kind === 'keyword' ? mode.q : mode.kind === 'posts' ? mode.query.keyword ?? '' : mode.kind === 'people' ? mode.box ?? '' : '';
     if (keyword === applied) return;
     const timer = setTimeout(() => {
-      if (mode.kind === 'posts' || mode.kind === 'people') {
+      if (mode.kind === 'posts') {
         if (!keyword && !mode.query.criteria.length) changeMode({ kind: 'feed' });
-        else changeMode({ ...mode, query: { ...mode.query, keyword } } as Mode);
-      } else changeMode(keyword ? { kind: 'keyword', q: keyword } : { kind: 'feed' });
+        else changeMode({ ...mode, query: { ...mode.query, keyword } });
+      } else changeMode(keyword ? { kind: 'keyword', q: keyword } : mode.kind === 'people' ? { ...mode, box: '' } : { kind: 'feed' });
     }, 300);
     return () => clearTimeout(timer);
   }, [input, mode, changeMode]);
@@ -136,14 +140,14 @@ export function TalkArea() {
 
   const runAdvanced = (t: Target = target, q: AdvancedQuery = queryOf(t)) => {
     const criteria = q.criteria.filter((c) => c.values.length);
-    const keyword = input.trim();
+    // 搜索框是帖子关键词，只用于检索帖子；找同学时的自我介绍关键词在面板里的「自我介绍关键词」条件中单独填写
+    const postKeyword = input.trim();
     setAdvOpen(false);
     if (!criteria.length) {
-      if (t === 'people' && keyword) changeMode({ kind: 'people', query: { ...q, criteria, keyword } });
-      else changeMode(keyword ? { kind: 'keyword', q: keyword } : { kind: 'feed' });
+      changeMode(postKeyword ? { kind: 'keyword', q: postKeyword } : { kind: 'feed' });
       return;
     }
-    changeMode(t === 'posts' ? { kind: 'posts', query: { ...q, criteria, keyword } } : { kind: 'people', query: { ...q, criteria, keyword } });
+    changeMode(t === 'posts' ? { kind: 'posts', query: { ...q, criteria, keyword: postKeyword } } : { kind: 'people', query: { ...q, criteria, keyword: '' }, box: postKeyword });
   };
 
   const reset = () => {

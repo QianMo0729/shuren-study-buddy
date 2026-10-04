@@ -14,7 +14,9 @@ import { Plate } from '../brand';
 export const TITLE_MAX = 60;
 export const BODY_MAX = 2000;
 export const IMAGE_MAX = 4;
-const DRAFT_KEY = 'dz:forum-draft';
+// 草稿按账号分开保存，换号后不会看到别人的草稿
+const draftKey = (uid: number | undefined) => `dz:forum-draft:${uid ?? 'anon'}`;
+try { localStorage.removeItem('dz:forum-draft'); } catch { /* 旧版不分账号的草稿键 */ }
 
 interface Draft {
   title: string;
@@ -22,9 +24,9 @@ interface Draft {
   images: string[];
 }
 
-function readDraft(): Draft | null {
+function readDraft(uid: number | undefined): Draft | null {
   try {
-    const raw = localStorage.getItem(DRAFT_KEY);
+    const raw = localStorage.getItem(draftKey(uid));
     const d = raw ? JSON.parse(raw) : null;
     if (!d || typeof d.body !== 'string') return null;
     return { title: String(d.title ?? '').slice(0, TITLE_MAX), body: d.body.slice(0, BODY_MAX), images: Array.isArray(d.images) ? d.images.filter((x: unknown) => typeof x === 'string').slice(0, IMAGE_MAX) : [] };
@@ -33,10 +35,10 @@ function readDraft(): Draft | null {
   }
 }
 
-function writeDraft(d: Draft | null) {
+function writeDraft(uid: number | undefined, d: Draft | null) {
   try {
-    if (!d || (!d.title && !d.body && !d.images.length)) localStorage.removeItem(DRAFT_KEY);
-    else localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+    if (!d || (!d.title && !d.body && !d.images.length)) localStorage.removeItem(draftKey(uid));
+    else localStorage.setItem(draftKey(uid), JSON.stringify(d));
   } catch { /* 浏览器禁用存储时忽略草稿 */ }
 }
 
@@ -55,7 +57,7 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
   const toast = useToast();
   const ids = useId();
   const editing = !!post;
-  const [draft, setDraft] = useState<Draft>(() => (post ? { title: post.title, body: post.body, images: post.images } : readDraft() ?? { title: '', body: '', images: [] }));
+  const [draft, setDraft] = useState<Draft>(() => (post ? { title: post.title, body: post.body, images: post.images } : readDraft(user?.id) ?? { title: '', body: '', images: [] }));
   const [expanded, setExpanded] = useState(!collapsible || !!(draft.title || draft.body || draft.images.length));
   const [uploading, setUploading] = useState(0);
   const [sending, setSending] = useState(false);
@@ -63,7 +65,7 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (!editing) writeDraft(draft);
+    if (!editing) writeDraft(user?.id, draft);
   }, [draft, editing]);
 
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
@@ -101,7 +103,7 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
       const r = post ? await api.forum.update(post.id, payload) : await api.forum.create(payload);
       if (!editing) {
         setDraft({ title: '', body: '', images: [] });
-        writeDraft(null);
+        writeDraft(user?.id, null);
         if (collapsible) setExpanded(false);
       }
       toast.success(editing ? '已保存修改' : '已发布');

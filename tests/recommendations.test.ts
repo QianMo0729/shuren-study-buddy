@@ -552,3 +552,44 @@ test('a clear weakness in time, content or personality is not averaged away and 
   const noInterests = score(me, complete({ interests: ['games'], interestsOther: '' }));
   assert.ok(best.score - noInterests.score <= 4, `${best.score} → ${noInterests.score}`);
 });
+
+// ---------- 评审回归 ----------
+
+test('subjects match only true equivalents: search-recall synonyms never make unrelated courses identical', () => {
+  const content = (a: string[], b: string[], goalsA = ['期末复习备考'], goalsB = ['期末复习备考']) =>
+    dimension(score(profile({ subjects: a, planTags: goalsA }), profile({ subjects: b, planTags: goalsB })), 'content');
+  // 检索同义词表里「刷题 / leetcode」「建模 / 数模」「考研 / 研究生」是相关词而不是同一门课
+  assert.ok(content(['LeetCode'], ['考研数学刷题'], ['技能自学'], ['考研']).similarity! < 0.5);
+  assert.ok(content(['数模'], ['3D建模']).similarity! <= 0.5);
+  assert.ok(content(['考研'], ['研究生英语']).similarity! <= 0.5);
+  assert.ok(content(['四级'], ['六级']).similarity! <= 0.5, 'CET-4 and CET-6 are different exams');
+  // 真正的等价叫法与包含关系仍算同一科目
+  assert.equal(content(['线代'], ['线性代数II']).similarity, 1);
+  assert.equal(content(['雅思'], ['IELTS']).similarity, 1);
+  assert.equal(content(['高数'], ['微积分']).similarity, 1);
+  const reasons = score(profile({ subjects: ['LeetCode'], planTags: ['技能自学'] }), profile({ subjects: ['考研数学刷题'], planTags: ['考研'] })).reasons;
+  assert.ok(!reasons.some((r) => r.includes('都在准备')), reasons.join(' / '));
+});
+
+test('a neutral-filled personality direction is never punished as a core weakness', () => {
+  const base = complete({ personality: traits({ needSupervision: 4 }), mbti: '', dislikeTags: [] });
+  const none = score(base, complete({ personality: traits({}), mbti: '', dislikeTags: [] }));
+  const favourable = score(base, complete({ personality: traits({ giveSupervision: 3 }), mbti: '', dislikeTags: [] }));
+  // B 只回答了一项、且对 A 有利；B 自己的方向没有任何信息，不能因此降低“你符合 TA 的期待”
+  assert.ok(favourable.forThem >= none.forThem, `${none.forThem} → ${favourable.forThem}`);
+  assert.ok(favourable.score >= none.score - 1);
+});
+
+test('free text in 期望对方地点补充 adds to my own places instead of replacing them', () => {
+  const withText = score(profile({ places: ['library'], expectedPlacesOther: '图书馆三楼' }), profile({ places: ['library'] }));
+  assert.equal(dimension(withText, 'places').forMe, 1);
+  assert.ok(!withText.cautions.some((c) => c.includes('地点')), withText.cautions.join(' / '));
+});
+
+test('place reasons say where they come from and never contradict the cautions', () => {
+  const result = score(profile({ places: ['dorm'], expectedPlaces: ['library'] }), profile({ places: ['library'] }));
+  assert.ok(result.reasons.some((r) => r.startsWith('TA 常去你期望的地点')), result.reasons.join(' / '));
+  assert.ok(!result.reasons.some((r) => r.startsWith('常去同样的地点')));
+  const same = score(profile({ places: ['library'] }), profile({ places: ['library'] }));
+  assert.ok(same.reasons.some((r) => r.startsWith('常去同样的地点')), same.reasons.join(' / '));
+});

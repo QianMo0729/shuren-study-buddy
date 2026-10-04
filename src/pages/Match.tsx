@@ -8,7 +8,7 @@ import { useToast } from '../lib/toast';
 import { Button, Empty, Segmented } from '../components/ui';
 import { CardSkeleton, ProfileCard } from '../components/ProfileCard';
 import { ProfileOverlay } from '../components/ProfileOverlay';
-import { SwipeDeck } from '../components/SwipeDeck';
+import { DECK_HEIGHT, SwipeDeck } from '../components/SwipeDeck';
 import { MatchCelebration } from '../components/match/MatchCelebration';
 import { MatchEmpty } from '../components/match/MatchEmpty';
 import { useDeckQueue } from '../components/match/useDeckQueue';
@@ -177,10 +177,10 @@ function DeckAside({ meta, remaining, onRefresh }: { meta: Omit<DeckResponse, 'i
       </div>
       <div className="rounded-md border border-line p-5 text-[13px] leading-relaxed text-ink-2">
         <p className="mb-2 flex items-center gap-1.5 font-semibold text-ink"><Info size={14} aria-hidden />契合度怎么算</p>
-        <p>综合共同时间、学习内容、学习性格、学习方式、地点、节奏与兴趣 7 项，双方都满意才会高分。分数是问卷契合程度，不是成功概率。</p>
+        <p>综合共同时间、学习内容、学习性格、学习方式、地点、节奏与兴趣 7 项，双方都满意才会高分；时间、内容、性格任一项明显不合适都会拉低总分。分数是问卷契合程度，不是成功概率。</p>
         <ul className="mt-3 space-y-1 text-ink-3">
-          <li><b className="font-semibold text-ink-2">很合拍</b> 80 分以上</li>
-          <li><b className="font-semibold text-ink-2">较合拍</b> 65–79 分</li>
+          <li><b className="font-semibold text-ink-2">很合拍</b> 80 分以上，且共同时间、学习内容、学习性格都达标，问卷信息足够完整</li>
+          <li><b className="font-semibold text-ink-2">较合拍</b> 65 分以上</li>
           <li><b className="font-semibold text-ink-2">可以聊聊</b> 65 分以下</li>
         </ul>
         <p className="mt-3">你的选择只有你自己知道；只有双方都选了「感兴趣」，才会互相通知。</p>
@@ -193,7 +193,7 @@ function DeckSkeleton() {
   return (
     <div className="mx-auto w-full max-w-[440px]" aria-hidden>
       <div className="mb-3 h-7" />
-      <div className="skeleton h-[clamp(360px,calc(100dvh-430px),540px)] rounded-md" />
+      <div className={`skeleton ${DECK_HEIGHT} rounded-md`} />
       <div className="mt-6 flex justify-center gap-8">
         <div className="skeleton size-14 rounded-full" />
         <div className="skeleton mt-1.5 size-11 rounded-full" />

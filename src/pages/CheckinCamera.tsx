@@ -43,7 +43,8 @@ export function CheckinCamera() {
   const camera = useLiveCamera(!done);
   const live = camera.state.status === 'live';
   const session = useCheckinSession(live);
-  const [geoOn, setGeoOn] = useState(() => readPref(GEO_KEY) === '1');
+  // 水印默认带地点（浏览器会请求定位权限）；用户关掉后记住选择
+  const [geoOn, setGeoOn] = useState(() => readPref(GEO_KEY) !== '0');
   const geo = useGeoLabel(geoOn && !done);
   const [visibility, setVisibility] = useState<CheckinVisibility>(() => (readPref(VIS_KEY) === 'buddies' ? 'buddies' : 'all'));
   const [caption, setCaption] = useState('');

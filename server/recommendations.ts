@@ -1,7 +1,8 @@
 import {
-  DURATIONS, FREQUENCIES, INTERESTS, PERIODS, PERSONALITY_ITEMS, PLACES, PLAN_PRESETS, SLOT_COUNT, STUDY_TYPES, SYNONYMS,
+  DURATIONS, FREQUENCIES, INTERESTS, PERIODS, PERSONALITY_ITEMS, PLACES, PLAN_PRESETS, SLOT_COUNT, STUDY_TYPES,
   optionLabel, slotPeriod, slotsHours,
 } from '../shared/options.ts';
+import { type SubjectForm, sameSubject, subjectForm } from '../shared/subjects.ts';
 import { effectiveSchedule } from '../shared/profileRules.ts';
 import type {
   DimensionKey, Personality, PersonalityKey, ProfileCard, ProfileInput, RecommendationDimension, RecommendationInfo,
@@ -94,45 +95,19 @@ export function hardFilter(a: ProfileInput, b: ProfileInput): null | { reason: '
 
 // ---------- 学习内容：具体科目 ----------
 
-const subjectKey = (raw: string) => String(raw ?? '').normalize('NFKC').toLowerCase().replace(/[\s·•・()（）[\]【】「」『』"'“”‘’_\-—–]+/gu, '');
-const SYNONYM_KEYS = SYNONYMS.map((group) => [...new Set(group.map(subjectKey).filter(Boolean))]);
-
-/** 科目本身 + 同义词（线代 = 线性代数，雅思 = ielts） */
-function subjectAliases(key: string): string[] {
-  const out = new Set([key]);
-  for (const group of SYNONYM_KEYS) if (group.includes(key)) group.forEach((alias) => out.add(alias));
-  return [...out];
-}
-
-/** 包含关系也算同一科目（线性代数 ⊂ 线性代数II）；英文短词要求两侧不是字母，避免 gre ⊂ progress */
-function contains(long: string, short: string): boolean {
-  if (short.length < 2 || long.length <= short.length) return false;
-  const ascii = /^[\x20-\x7e]+$/.test(short);
-  for (let i = long.indexOf(short); i >= 0; i = long.indexOf(short, i + 1)) {
-    if (!ascii) return true;
-    const before = long[i - 1] ?? '';
-    const after = long[i + short.length] ?? '';
-    if (!/[a-z]/.test(before) && !/[a-z]/.test(after)) return true;
-  }
-  return false;
-}
-
-interface Subject { label: string; aliases: string[] }
+interface Subject extends SubjectForm { label: string }
 
 function subjectsOf(p: ProfileInput): Subject[] {
   const seen = new Set<string>();
   const out: Subject[] = [];
   for (const label of list(p.subjects)) {
-    const key = subjectKey(label);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push({ label: label.trim(), aliases: subjectAliases(key) });
+    const form = subjectForm(label);
+    if (!form || seen.has(form.key)) continue;
+    seen.add(form.key);
+    out.push({ ...form, label: label.trim() });
   }
   return out;
 }
-
-const sameSubject = (a: Subject, b: Subject) =>
-  a.aliases.some((x) => b.aliases.some((y) => x === y || contains(x, y) || contains(y, x)));
 
 const DAY_MS = 86_400_000;
 function dayNumber(value: string): number | null {
@@ -236,14 +211,22 @@ function styleSimilarity(x: string, y: string): number | null {
 const styleLabel = (value: string) => optionLabel(STUDY_TYPES, value);
 
 /** s(A←B)：A 期望的地点（没填期望则用 A 自己的地点）与 B 实际地点 */
-function placesToward(a: ProfileInput, b: ProfileInput): { value: number | null; shared: string[]; any: boolean } {
-  const expected = answerSet(a.expectedPlaces, PLACE_VALUES, 'other', a.expectedPlacesOther, true);
-  const wanted = expected.count ? expected : answerSet(a.places, PLACE_VALUES, 'other', a.placesOther, true);
+function placesToward(a: ProfileInput, b: ProfileInput): { value: number | null; shared: string[]; any: boolean; fromExpectation: boolean } {
+  // 选了「期望对方的地点」选项时用期望；没选时用自己常去的地点。补充文字只是追加，不会取代自己的地点
+  const hasExpectedChoice = list(a.expectedPlaces).some((value) => PLACE_VALUES.has(value));
+  const wanted = hasExpectedChoice
+    ? answerSet(a.expectedPlaces, PLACE_VALUES, 'other', a.expectedPlacesOther, true)
+    : answerSet(a.places, PLACE_VALUES, 'other', a.placesOther, true);
+  const extra = normalizeText(a.expectedPlacesOther);
+  if (!hasExpectedChoice && extra && !wanted.values.has(`other:${extra}`)) {
+    wanted.values.add(`other:${extra}`);
+    wanted.count += 1;
+  }
   const actual = answerSet(b.places, PLACE_VALUES, 'other', b.placesOther, true);
-  if (!wanted.count || !actual.count) return { value: null, shared: [], any: false };
-  if (wanted.values.has('choice:any') || actual.values.has('choice:any')) return { value: 1, shared: [], any: true };
+  if (!wanted.count || !actual.count) return { value: null, shared: [], any: false, fromExpectation: hasExpectedChoice };
+  if (wanted.values.has('choice:any') || actual.values.has('choice:any')) return { value: 1, shared: [], any: true, fromExpectation: hasExpectedChoice };
   const shared = common(wanted, actual);
-  return { value: shared.length ? 1 : 0.25, shared, any: false };
+  return { value: shared.length ? 1 : 0.25, shared, any: false, fromExpectation: hasExpectedChoice };
 }
 
 const FREQUENCY_ORDER = ['daily', 'weekly3', 'weekly1'];
@@ -268,6 +251,8 @@ interface Part {
   forThem: number | null;
   /** 维度信息量（0–1），只有学习性格可能是部分信息 */
   info?: number;
+  /** 某个方向只是用中性 0.5 补齐、并没有真实信息时为 false；这种方向不参与核心短板惩罚 */
+  measured?: { forMe: boolean; forThem: boolean };
   detail: string;
   /** 推荐理由：weight 用于在维度内排序（贡献 = 维度权重 × 相似度 × weight） */
   reasons?: Note[];
@@ -395,6 +380,7 @@ function personalityPart(a: ProfileInput, b: ProfileInput): Part {
     // 一个方向缺少信息时按中性 0.5 计，保留另一方向（例如监督互补、雷区）的信号
     forMe: me.value ?? 0.5,
     forThem: them.value ?? 0.5,
+    measured: { forMe: me.value !== null, forThem: them.value !== null },
     info: (me.info + them.info) / 2,
     reasons,
     cautions,
@@ -434,7 +420,11 @@ function placesPart(a: ProfileInput, b: ProfileInput): Part {
   if (me.value === null || them.value === null) return { forMe: null, forThem: null, detail: '一方或双方缺少可比较的学习地点，此项按中性计入。' };
   const reasons: Note[] = [];
   const cautions: Note[] = [];
-  if (me.shared.length) reasons.push({ text: `常去同样的地点：${choiceLabels(me.shared, PLACES).join('、')}`, weight: 0.8 });
+  // 理由按来源措辞：来自我的期望时说“TA 常去你期望的地点”，只有双方实际地点相同时才说“常去同样的地点”
+  if (me.shared.length) {
+    const labels = choiceLabels(me.shared, PLACES).join('、');
+    reasons.push({ text: me.fromExpectation ? `TA 常去你期望的地点：${labels}` : `常去同样的地点：${labels}`, weight: 0.8 });
+  }
   else if (me.any && them.value === 1) reasons.push({ text: '学习地点不限，容易约', weight: 0.5 });
   if (me.value < 1) cautions.push({ text: 'TA 常去的学习地点和你期望的不同，见面地点需要商量', weight: 2.5 });
   else if (them.value < 1) cautions.push({ text: '你常去的地点不是 TA 期望的，见面地点可以商量', weight: 1 });
@@ -516,10 +506,11 @@ export function recommendationFor(a: ProfileInput, b: ProfileInput): Recommendat
       similarity: missing ? null : round((forMe! + forThem!) / 2), forMe, forThem, detail: part.detail,
     };
   });
-  // 每个方向：加权平均（缺失维度按中性 0.5）× 核心维度短板惩罚
+  // 每个方向：加权平均（缺失维度按中性 0.5）× 核心维度短板惩罚（只惩罚真实测得的短板，中性补齐的不算）
   const satisfaction = (side: 'forMe' | 'forThem') =>
     dimensions.reduce((sum, d) => sum + d.weight * (d[side] ?? 0.5), 0) / 100
-    * dimensions.reduce((factor, d) => factor * (CORE_DIMENSIONS.includes(d.key) ? coreFactor(d[side]) : 1), 1);
+    * dimensions.reduce((factor, d) => factor
+      * (CORE_DIMENSIONS.includes(d.key) && (parts[d.key].measured?.[side] ?? true) ? coreFactor(d[side]) : 1), 1);
   const sMe = satisfaction('forMe');
   const sThem = satisfaction('forThem');
   const score = sMe + sThem > 0 ? Math.round(100 * (2 * (sMe * sThem)) / (sMe + sThem)) : 0;

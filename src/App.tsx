@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router';
 import { Shell } from './components/Shell';
 import { useAuth } from './lib/auth';
@@ -74,8 +74,12 @@ export function App() {
   const location = useLocation();
   const section = location.pathname.split('/')[1] || 'home';
 
+  // 进入新的分区时回到顶部；同一分区内（匹配页打开主页浮层、私聊切换会话）保持滚动位置
+  const previousSection = useRef(section);
   useEffect(() => {
-    if (section !== 'match' && section !== 'messages') window.scrollTo({ top: 0 });
+    const stay = previousSection.current === section && (section === 'match' || section === 'messages');
+    previousSection.current = section;
+    if (!stay) window.scrollTo({ top: 0 });
   }, [location.pathname, section]);
 
   const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy';

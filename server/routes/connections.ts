@@ -179,12 +179,21 @@ connectionsRouter.post('/:userId/exclude', (req, res) => {
   if (!target && !matchBetween(uid, other)) throw new HttpError(404, '该主页暂不可用');
   tx(() => {
     q.run('INSERT OR IGNORE INTO exclusions (user_id, target_id) VALUES (?, ?)', uid, other);
-    q.run('DELETE FROM contact_requests WHERE (requester_id = ? AND recipient_id = ?) OR (requester_id = ? AND recipient_id = ?)', uid, other, other, uid);
+    // 被拒绝的申请保留（7 天再次申请的冷却不能靠“排除再取消排除”绕过），其余申请作废
+    q.run(`DELETE FROM contact_requests WHERE status <> 'rejected'
+           AND ((requester_id = ? AND recipient_id = ?) OR (requester_id = ? AND recipient_id = ?))`, uid, other, other, uid);
     q.run('DELETE FROM favorites WHERE (user_id = ? AND target_id = ?) OR (user_id = ? AND target_id = ?)', uid, other, other, uid);
     q.run('DELETE FROM contact_views WHERE (viewer_id = ? AND target_id = ?) OR (viewer_id = ? AND target_id = ?)', uid, other, other, uid);
     // 排除即解除配对（静默，不通知对方；排除后双方都看不到这段聊天）
     const active = activeMatchBetween(uid, other);
     if (active) closeMatch(active.id, uid);
+    // 排除者对对方的选择记为“不感兴趣”（不参与个性化学习）：取消排除后不会因为对方仍保留的“感兴趣”立刻重新配对，
+    // 需要在「我的 · 推荐偏好」中放回推荐后再次选择
+    q.run(
+      `INSERT INTO match_feedback (user_id, target_id, action, features) VALUES (?, ?, 'dislike', '{}')
+       ON CONFLICT(user_id, target_id) DO UPDATE SET action = 'dislike', features = '{}', updated_at = datetime('now')`,
+      uid, other,
+    );
   });
   res.json({ ok: true });
 });

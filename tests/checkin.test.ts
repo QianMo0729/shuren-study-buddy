@@ -372,9 +372,9 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     assert.equal((await report(other, buddiesId)).status, 404);
     assert.equal((await report(excluded, publicId)).status, 404);
     assert.equal((await report(author, publicId)).status, 404);
-    const stored = db.prepare("SELECT detail FROM reports WHERE target_type = 'checkin' AND target_id = ?").get(publicId) as { detail: string };
-    assert.match(stored.detail, /图书馆三楼/);
-    assert.match(stored.detail, new RegExp(publicImage));
+    const stored = db.prepare("SELECT snapshot FROM reports WHERE target_type = 'checkin' AND target_id = ?").get(publicId) as { snapshot: string };
+    assert.match(stored.snapshot, /图书馆三楼/);
+    assert.match(stored.snapshot, new RegExp(publicImage));
   });
 
   await t.test('taken-down check-ins are hidden from others but visible to the author (with reason) and admins', async () => {

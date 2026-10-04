@@ -257,8 +257,8 @@ test('forum posts, comments, likes, search and file access respect ownership, ex
 
     const report = await api('/reports', b.cookie, 'POST', { targetType: 'comment', targetId: c.body.comment.id, reason: '其他' });
     assert.equal(report.status, 200);
-    const detail = db.prepare("SELECT detail FROM reports WHERE target_type = 'comment' AND target_id = ?").get(c.body.comment.id) as { detail: string };
-    assert.match(detail.detail, /一起！我也在复习线代/);
+    const detail = db.prepare("SELECT snapshot FROM reports WHERE target_type = 'comment' AND target_id = ?").get(c.body.comment.id) as { snapshot: string };
+    assert.match(detail.snapshot, /一起！我也在复习线代/);
 
     assert.equal((await api(`/forum/comments/${c.body.comment.id}`, a.cookie, 'DELETE')).status, 403, 'post author cannot delete others\' comments');
     assert.equal((await api(`/forum/comments/${c.body.comment.id}`, viewer.cookie, 'DELETE')).status, 200);
@@ -375,9 +375,9 @@ test('forum posts, comments, likes, search and file access respect ownership, ex
     assert.equal(restored.body.post.takedownReason, null);
     const report = await api('/reports', viewer.cookie, 'POST', { targetType: 'forum_post', targetId: postA, reason: '其他', detail: '补充' });
     assert.equal(report.status, 200);
-    const stored = db.prepare("SELECT detail FROM reports WHERE target_type = 'forum_post' AND target_id = ?").get(postA) as { detail: string };
-    assert.match(stored.detail, /补充/);
-    assert.match(stored.detail, /期末周的图书馆/);
+    const stored = db.prepare("SELECT detail, snapshot FROM reports WHERE target_type = 'forum_post' AND target_id = ?").get(postA) as { detail: string; snapshot: string };
+    assert.equal(stored.detail, '补充');
+    assert.match(stored.snapshot, /期末周的图书馆/);
   });
 
   await t.test('forum images are readable only through posts visible to the viewer', async () => {

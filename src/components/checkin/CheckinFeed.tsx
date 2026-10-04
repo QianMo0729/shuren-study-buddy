@@ -7,6 +7,7 @@ import { cx } from '../../lib/format';
 import { Button, Empty, Segmented } from '../ui';
 import { Stamp } from '../brand';
 import { CheckinCard, CheckinSkeleton } from './CheckinCard';
+import { onAccountChanged } from '../../lib/auth';
 
 type Scope = 'all' | 'buddies' | 'mine';
 const SCOPES: { value: Scope; label: string }[] = [
@@ -21,6 +22,8 @@ const cache: { scope: Scope; feeds: Partial<Record<Scope, { items: Checkin[]; ha
   feeds: {},
   stats: null,
 };
+// 换号或退出后丢弃上一位同学的打卡流与统计
+onAccountChanged(() => { cache.scope = 'all'; cache.feeds = {}; cache.stats = null; });
 
 const EMPTY: Record<Scope, { title: string; desc: string }> = {
   all: { title: '还没有同学打卡', desc: '用网页相机拍一张正在学习的照片，做第一个打卡的人。' },

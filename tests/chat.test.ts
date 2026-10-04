@@ -456,10 +456,11 @@ test('private chat between mutually interested students', { timeout: 120_000 }, 
     assert.equal((await report(b, 9_999_999)).status, 404);
     const ok = await report(b, messageId);
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
-    const row = db.prepare("SELECT detail, reporter_id FROM reports WHERE target_type = 'message' AND target_id = ?").get(messageId) as { detail: string; reporter_id: number };
+    const row = db.prepare("SELECT detail, snapshot, reporter_id FROM reports WHERE target_type = 'message' AND target_id = ?").get(messageId) as { detail: string; snapshot: string; reporter_id: number };
     assert.equal(row.reporter_id, b.id);
     assert.match(row.detail, /补充说明/);
-    assert.match(row.detail, /这是一条需要核实的消息/);
+    assert.equal(row.snapshot, '这是一条需要核实的消息', 'the message text is stored in its own column');
+    assert.doesNotMatch(row.detail, /这是一条需要核实的消息/);
   });
 
   await t.test('account deletion removes the matches and messages of that student', async () => {

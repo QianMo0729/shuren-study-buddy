@@ -84,13 +84,35 @@ export function currentPrior(): PreferenceModel {
 
 export interface UserModel { model: PreferenceModel; prior: PreferenceModel; samples: number }
 
+/** 重建个人模型时最多重放的反馈条数（取最近的） */
+const USER_MAX_ROWS = 500;
+
+/**
+ * 个人模型 = 从当前先验出发，按时间顺序重放本人所有带特征快照的反馈（在线更新）。
+ * 每次都重新计算，因此撤销、改写、解除配对都是精确的，全站先验更新后也不会出现“相对旧先验”的偏差。
+ * 规模很小（≤ 500 条 × 14 个特征），比存储增量更可靠。
+ */
 export function userModel(uid: number): UserModel {
   const prior = currentPrior();
-  const row = q.get<{ weights: string; samples: number }>('SELECT weights, samples FROM preference_models WHERE user_id = ?', uid);
-  if (!row) return { model: cloneModel(prior), prior, samples: 0 };
-  return { model: parseModel(row.weights, prior), prior, samples: Math.max(0, Number(row.samples) || 0) };
+  const rows = q.all<{ features: string; action: FeedbackAction }>(
+    `SELECT features, action FROM (
+       SELECT features, action, updated_at, target_id FROM match_feedback
+       WHERE user_id = ? AND features <> '{}' ORDER BY updated_at DESC, target_id DESC LIMIT ?
+     ) ORDER BY updated_at, target_id`,
+    uid, USER_MAX_ROWS,
+  );
+  let model = cloneModel(prior);
+  let samples = 0;
+  for (const row of rows) {
+    const features = parseFeatures(row.features);
+    if (!features || (row.action !== 'like' && row.action !== 'dislike' && row.action !== 'skip')) continue;
+    model = onlineUpdate(model, prior, features, row.action);
+    samples += 1;
+  }
+  return { model, prior, samples };
 }
 
+/** 缓存一份当前个人模型，便于运维查看；排序始终以 userModel() 的实时重建为准 */
 function saveUserModel(uid: number, model: PreferenceModel, samples: number) {
   q.run(
     `INSERT INTO preference_models (user_id, weights, samples, updated_at) VALUES (?, ?, ?, datetime('now'))
@@ -100,44 +122,41 @@ function saveUserModel(uid: number, model: PreferenceModel, samples: number) {
 }
 
 /**
- * 根据一次反馈更新个人模型。改写同一对象的旧反馈时，先撤回旧反馈的影响，再学习新的（样本数不变）。
- * 没有特征快照（例如没有共同时间、无法计算契合度）的反馈不参与学习。
+ * 反馈已写入 match_feedback 之后调用：重建并缓存个人模型；有特征快照的新反馈计入全站事件数，
+ * 必要时在响应之后异步重算全站先验。previous 参数保留以兼容调用方，重放已自动处理改写。
  */
-export function learnFromFeedback(uid: number, features: Features | null, action: FeedbackAction, previous?: { features: Features | null; action: FeedbackAction }) {
+export function learnFromFeedback(uid: number, features: Features | null, _action: FeedbackAction, previous?: { features: Features | null; action: FeedbackAction }) {
   if (!features && !previous?.features) return;
-  const { model, prior, samples } = userModel(uid);
-  let next = model;
-  let count = samples;
-  if (previous?.features) {
-    next = onlineUpdate(next, prior, previous.features, previous.action, -1);
-    count -= 1;
-  }
-  if (features) {
-    next = onlineUpdate(next, prior, features, action);
-    count += 1;
-    const events = Number(getSetting(EVENTS_KEY, '0')) + 1;
-    setSetting(EVENTS_KEY, String(events));
-  }
-  saveUserModel(uid, next, count);
-  if (features) maybeRefitGlobalPrior();
+  if (features) setSetting(EVENTS_KEY, String(Number(getSetting(EVENTS_KEY, '0')) + 1));
+  const { model, samples } = userModel(uid);
+  saveUserModel(uid, model, samples);
+  if (features) scheduleGlobalRefit();
 }
 
-/** 撤销一次反馈（如“撤销上一步”“放回推荐”）对个人模型的影响 */
-export function unlearnFeedback(uid: number, features: Features | null, action: FeedbackAction) {
-  if (!features) return;
-  const { model, prior, samples } = userModel(uid);
-  if (samples <= 0) return;
-  saveUserModel(uid, onlineUpdate(model, prior, features, action, -1), samples - 1);
+/** 反馈被删除之后调用（如“撤销上一步”“放回推荐”）：重建并缓存个人模型（解除配对时清空过特征快照，所以总是重建） */
+export function unlearnFeedback(uid: number, _features: Features | null, _action: FeedbackAction) {
+  const { model, samples } = userModel(uid);
+  saveUserModel(uid, model, samples);
 }
 
-/** 全站反馈 ≥ 200 条时拟合全站先验；之后每新增 50 条反馈重算一次（同步计算，规模很小） */
+let refitScheduled = false;
+/** 全站先验的重算放到响应之后执行，不阻塞当前请求 */
+function scheduleGlobalRefit() {
+  if (refitScheduled) return;
+  refitScheduled = true;
+  setImmediate(() => {
+    refitScheduled = false;
+    try { maybeRefitGlobalPrior(); } catch (error) { console.error('[match] 全站先验重算失败', error); }
+  });
+}
+
+/** 全站反馈 ≥ 200 条时拟合全站先验；之后每新增 50 条反馈重算一次（只用最近 5000 条，类型化数组计算，耗时很短） */
 export function maybeRefitGlobalPrior(force = false): boolean {
   const events = Number(getSetting(EVENTS_KEY, '0'));
   const current = loadGlobal();
   if (!force && current && events - current.events < GLOBAL_REFIT_EVERY) return false;
   const count = q.get<{ n: number }>("SELECT COUNT(*) n FROM match_feedback WHERE features <> '{}'")!.n;
   if (!force && count < GLOBAL_MIN_FEEDBACK) return false;
-  // 只用最近的反馈，保证同步拟合的耗时有上限
   const rows = q.all<{ features: string; action: FeedbackAction }>(
     "SELECT features, action FROM match_feedback WHERE features <> '{}' ORDER BY updated_at DESC, user_id, target_id LIMIT ?", GLOBAL_MAX_ROWS,
   );
@@ -181,10 +200,12 @@ export function candidatePool(viewer: ViewerContext): CandidatePool {
   const blocked = new Set<number>([
     // 任一方向的排除
     ...idSet(q.all<{ id: number }>('SELECT CASE WHEN user_id = ? THEN target_id ELSE user_id END AS id FROM exclusions WHERE user_id = ? OR target_id = ?', uid, uid, uid)),
-    // 旧版联系申请被拒绝的
+    // 旧版联系申请被拒绝的（从未配对过的同学之间；私聊中的拒绝由配对与反馈状态处理，不应永久屏蔽推荐）
     ...idSet(q.all<{ id: number }>(
-      `SELECT CASE WHEN requester_id = ? THEN recipient_id ELSE requester_id END AS id
-       FROM contact_requests WHERE status = 'rejected' AND (requester_id = ? OR recipient_id = ?)`, uid, uid, uid,
+      `SELECT CASE WHEN c.requester_id = ? THEN c.recipient_id ELSE c.requester_id END AS id
+       FROM contact_requests c WHERE c.status = 'rejected' AND (c.requester_id = ? OR c.recipient_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM matches m WHERE (m.user_a = c.requester_id AND m.user_b = c.recipient_id)
+                                                  OR (m.user_a = c.recipient_id AND m.user_b = c.requester_id))`, uid, uid, uid,
     )),
     // 我已感兴趣 / 不感兴趣；稍后再看未满冷却期
     ...idSet(q.all<{ id: number }>(
@@ -263,17 +284,21 @@ export function buildDeck(uid: number, limit: number, now = new Date()): DeckRes
   ).map((r) => [r.id, r.n]));
   const scored = candidates.map((c) => {
     const personal = personalizedScore(c.rec.score, predict(m.model, c.features), m.samples);
+    // 公开加成：登录活跃度、被大量请求的人后移——这些不涉及隐私，可以影响展示顺序
     let boost = 0;
-    if (likedMe.has(c.row.user_id)) boost += BOOST.likedMe;
     const since = msAgo(c.row.last_login_at);
     if (since !== null && since <= 7 * DAY) boost += BOOST.recentLogin;
     else if (since !== null && since > 30 * DAY) boost += BOOST.staleLogin;
     if ((pending.get(c.row.user_id) ?? 0) > CROWDED_PENDING_LIKES) boost += BOOST.crowded;
-    // 对外的 rankScore 不含加成，避免从分数推断“对方已对我感兴趣”
-    return { c, personal, sortKey: personal + boost };
+    // “对方已对我感兴趣”只影响谁能进入这一批（selectKey），不影响批内顺序（sortKey），
+    // 否则卡片顺序与展示的分数对不上，就能推断出谁对我感兴趣
+    const secret = likedMe.has(c.row.user_id) ? BOOST.likedMe : 0;
+    return { c, personal, sortKey: personal + boost, selectKey: personal + boost + secret };
   });
   const cards = (list: typeof scored) => list.map((s) => ({ s, card: cardOf(viewer, s.c, s.personal, false) }));
-  const ranked = cards(scored).sort((a, b) => b.s.sortKey - a.s.sortKey || compareRecommendationCards(a.card, b.card));
+  const byKey = (key: 'sortKey' | 'selectKey') => (a: { s: (typeof scored)[number]; card: DeckCard }, b: { s: (typeof scored)[number]; card: DeckCard }) =>
+    b.s[key] - a.s[key] || compareRecommendationCards(a.card, b.card);
+  const ranked = cards(scored).sort(byKey('selectKey'));
 
   const positions = explorePositions(limit);
   const date = beijingDate(now);
@@ -282,7 +307,7 @@ export function buildDeck(uid: number, limit: number, now = new Date()): DeckRes
     .sort((a, b) => a.h - b.h || a.entry.card.id - b.entry.card.id)
     .slice(0, positions.length)
     .map(({ entry }) => ({ ...entry.card, explore: true }));
-  const main = ranked.slice(0, limit - pool.length).map((entry) => entry.card);
+  const main = ranked.slice(0, limit - pool.length).sort(byKey('sortKey')).map((entry) => entry.card);
   const items: DeckCard[] = [...main];
   pool.forEach((card, k) => items.splice(Math.min(positions[k], items.length), 0, card));
 

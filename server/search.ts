@@ -1,4 +1,5 @@
 import { SLOT_COUNT, overlapSlots, slotsHours } from '../shared/options.ts';
+import { type SubjectForm, sameSubject, subjectForm } from '../shared/subjects.ts';
 import { collegeOf } from '../shared/majors.ts';
 import type { AdvancedQuery, Criterion, CriterionField, MatchInfo, ProfileInput } from '../shared/types.ts';
 
@@ -45,17 +46,19 @@ const textTerms = (values: string[]) => [...new Set(values.flatMap(tokenize))].s
 /** 科目名标准化：全角转半角、忽略大小写与空白（「C 语言」=「c语言」） */
 export const normalizeSubject = (s: string) => s.normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
 
-/** 科目条件：按逗号、顿号等分隔（不按空格，以免拆开「C 语言程序设计」）；同义词扩展，包含关系也算同一科目 */
+/**
+ * 科目条件：按逗号、顿号等分隔（不按空格，以免拆开「C 语言程序设计」）。
+ * 与匹配算法使用同一套科目等价规则（shared/subjects.ts）：等价叫法与包含关系算同一科目。
+ */
 export function subjectsHit(values: string[], subjects: string[]): boolean {
   if (!subjects.length) return false;
-  const mine = subjects.map(normalizeSubject).filter(Boolean);
+  const mine = subjects.map(subjectForm).filter((f): f is SubjectForm => !!f);
   const terms = values
     .flatMap((v) => v.split(/[,，、;；/|]+/))
-    .map(normalizeSubject)
-    .filter(Boolean)
-    .slice(0, MAX_TERMS)
-    .flatMap((t) => expand(t).map(normalizeSubject));
-  return terms.some((t) => mine.some((s) => s.includes(t) || (s.length >= 2 && t.includes(s))));
+    .map(subjectForm)
+    .filter((f): f is SubjectForm => !!f)
+    .slice(0, MAX_TERMS);
+  return terms.some((t) => mine.some((s) => sameSubject(t, s)));
 }
 
 /** 文本是否包含任一关键词（含同义词）；返回命中的同义词列表，供生成摘要 */

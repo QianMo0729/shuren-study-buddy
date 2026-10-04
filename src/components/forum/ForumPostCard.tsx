@@ -71,7 +71,8 @@ export function ForumPostCard({ post, onOpen, onChange, matchLabel, index = 0 }:
       <ImageGrid images={post.images} onOpen={() => onOpen()} className="mt-3" />
 
       <div className="mt-3 -mb-1 flex items-center gap-1 border-t border-line pt-2">
-        <LikeButton type="post" id={post.id} liked={post.liked} count={post.likeCount} onChange={(r) => onChange?.({ liked: r.liked, likeCount: r.likeCount })} />
+        {/* 被撤下的帖子（只有作者自己看得到）不能点赞，与详情页一致 */}
+        {!post.takenDown && <LikeButton type="post" id={post.id} liked={post.liked} count={post.likeCount} onChange={(r) => onChange?.({ liked: r.liked, likeCount: r.likeCount })} />}
         <span className="inline-flex h-8 items-center gap-1.5 px-2 text-[13px] text-ink-3">
           <MessageSquare size={16} aria-hidden />
           <span className="tabular">{post.commentCount > 0 ? post.commentCount : '评论'}</span>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
 import { Flag } from 'lucide-react';
 import type { ChatMessage } from '../../../shared/types';
 import { cx } from '../../lib/format';
@@ -10,6 +10,8 @@ function useLongPress(onLongPress: () => void, ms = 480) {
   const timer = useRef<number | undefined>(undefined);
   const start = useRef<{ x: number; y: number } | null>(null);
   const pointer = useRef<string>('mouse');
+  // 长按已经打开面板：松手时要吞掉浏览器随后补发的 click，否则会立刻点到面板背景把它关掉
+  const fired = useRef(false);
   const clear = () => {
     if (timer.current !== undefined) window.clearTimeout(timer.current);
     timer.current = undefined;
@@ -20,19 +22,26 @@ function useLongPress(onLongPress: () => void, ms = 480) {
       pointer.current = e.pointerType;
       if (e.pointerType === 'mouse') return;
       start.current = { x: e.clientX, y: e.clientY };
+      fired.current = false;
       clear();
-      timer.current = window.setTimeout(() => { timer.current = undefined; onLongPress(); }, ms);
+      timer.current = window.setTimeout(() => { timer.current = undefined; fired.current = true; onLongPress(); }, ms);
     },
     onPointerMove: (e: ReactPointerEvent) => {
       if (timer.current !== undefined && start.current && Math.hypot(e.clientX - start.current.x, e.clientY - start.current.y) > 10) clear();
     },
     onPointerUp: clear,
+    onTouchEnd: (e: ReactTouchEvent) => {
+      if (!fired.current) return;
+      fired.current = false;
+      // touchend 不是被动监听，preventDefault 可以阻止随后合成的 mouse 事件与 click
+      e.preventDefault();
+    },
     onPointerCancel: clear,
     onPointerLeave: clear,
     onContextMenu: (e: ReactMouseEvent) => {
       if (pointer.current === 'mouse') return;
       e.preventDefault();
-      if (timer.current !== undefined) { clear(); onLongPress(); }
+      if (timer.current !== undefined) { clear(); fired.current = true; onLongPress(); }
     },
   };
 }

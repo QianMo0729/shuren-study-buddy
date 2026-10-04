@@ -12,16 +12,29 @@ interface AuthState {
 
 const Ctx = createContext<AuthState>(null!);
 
+/** 登录账号变化（退出、换号）时广播，模块级缓存据此清空，避免上一位同学的内容出现在下一位的屏幕上 */
+export const ACCOUNT_CHANGED = 'dz:account-changed';
+export function onAccountChanged(handler: () => void) {
+  if (typeof window !== 'undefined') window.addEventListener(ACCOUNT_CHANGED, handler);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, updateUser] = useState<SessionUser | null>(null);
+  const [user, setUserState] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const revision = useRef(0);
+  const accountId = useRef<number | null | undefined>(undefined);
+  const updateUser = useCallback((next: SessionUser | null) => {
+    const id = next?.id ?? null;
+    if (accountId.current !== undefined && accountId.current !== id) window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED));
+    accountId.current = id;
+    setUserState(next);
+  }, []);
 
   const setUser = useCallback((next: SessionUser | null) => {
     revision.current += 1;
     updateUser(next);
     setLoading(false);
-  }, []);
+  }, [updateUser]);
 
   const refresh = useCallback(async () => {
     const requestRevision = ++revision.current;
@@ -35,7 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       if (requestRevision === revision.current) setLoading(false);
     }
-  }, []);
+  }, [updateUser]);
 
   useEffect(() => {
     void refresh();

@@ -16,6 +16,9 @@ const VISIBLE = 3;
  * 滑卡：一次一张大卡，后面叠两张。右滑 / ♥ 感兴趣，左滑 / ✕ 不感兴趣，「稍后再看」把卡片收起。
  * 键盘：← 不感兴趣、→ 感兴趣、↓ 稍后再看。只负责展示与手势，反馈请求由调用方处理。
  */
+/** 卡片高度：手机端下限更低，给顶部标题、操作按钮和底部标签栏留出空间 */
+export const DECK_HEIGHT = 'h-[clamp(280px,calc(100dvh-470px),540px)] md:h-[clamp(360px,calc(100dvh-430px),540px)]';
+
 export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, active = true, header, className }: {
   cards: DeckCard[];
   /** 卡片上方左侧的说明（如个性化提示）；右侧固定放「撤销上一步」 */
@@ -99,7 +102,8 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
           </button>
         )}
       </div>
-      <div className="relative h-[clamp(360px,calc(100dvh-430px),540px)]" role="region" aria-roledescription="滑卡" aria-label="推荐的同学">
+      {/* 手机上卡片高度随屏幕收缩，操作按钮固定在底部标签栏上方，矮屏也不会被遮住 */}
+      <div className={`relative ${DECK_HEIGHT}`} role="region" aria-roledescription="滑卡" aria-label="推荐的同学">
         {stack.map((card, index) => {
           const isTop = index === 0;
           return (
@@ -149,7 +153,7 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
         })}
       </div>
 
-      <div className="mt-5 flex items-start justify-center gap-6 sm:mt-6 sm:gap-8">
+      <div className="sticky bottom-[calc(58px+env(safe-area-inset-bottom)+6px)] z-10 mt-4 flex items-start justify-center gap-6 rounded-xl bg-paper/90 pt-2 pb-1 backdrop-blur-sm sm:gap-8 md:static md:mt-6 md:bg-transparent md:p-0 md:backdrop-blur-none">
         <DeckButton label="不感兴趣" hint="←" onClick={() => void commit('dislike')} disabled={!top} className="size-14 border border-line-strong bg-surface text-ink-2 hover:border-ink-3 hover:text-ink">
           <X size={26} strokeWidth={2.2} />
         </DeckButton>

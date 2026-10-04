@@ -124,27 +124,44 @@ export interface TrainingSample {
   action: FeedbackAction;
 }
 
-/** 全站先验：对全部带特征快照的反馈做批量梯度下降，L2 拉向默认先验 */
+/**
+ * 全站先验：对全部带特征快照的反馈做批量梯度下降，L2 拉向默认先验。
+ * 用类型化数组计算（5000 条 × 300 轮约几十毫秒），避免按键名取值带来的开销。
+ */
 export function fitGlobalPrior(samples: TrainingSample[], base: PreferenceModel = defaultPrior(), epochs = 300, rate = 1): PreferenceModel {
   const model = cloneModel(base);
   const total = samples.reduce((sum, s) => sum + SAMPLE_WEIGHT[s.action], 0);
   if (!total) return model;
+  const k = FEATURE_KEYS.length;
+  const n = samples.length;
+  const x = new Float64Array(n * k);
+  const y = new Float64Array(n);
+  const sw = new Float64Array(n);
+  samples.forEach((s, i) => {
+    FEATURE_KEYS.forEach((key, j) => { x[i * k + j] = s.features[key] - 0.5; });
+    y[i] = LABEL[s.action];
+    sw[i] = SAMPLE_WEIGHT[s.action];
+  });
+  const w = new Float64Array(FEATURE_KEYS.map((key) => model.weights[key]));
+  const w0 = new Float64Array(FEATURE_KEYS.map((key) => base.weights[key]));
+  let b = model.bias;
+  const grad = new Float64Array(k);
   for (let epoch = 0; epoch < epochs; epoch++) {
-    const grad = {} as Features;
-    for (const key of FEATURE_KEYS) grad[key] = 0;
+    grad.fill(0);
     let gradBias = 0;
-    for (const s of samples) {
-      const g = (predict(model, s.features) - LABEL[s.action]) * SAMPLE_WEIGHT[s.action];
-      for (const key of FEATURE_KEYS) grad[key] += g * (s.features[key] - 0.5);
+    for (let i = 0; i < n; i++) {
+      let z = b;
+      const row = i * k;
+      for (let j = 0; j < k; j++) z += w[j] * x[row + j];
+      const g = (sigmoid(z) - y[i]) * sw[i];
+      for (let j = 0; j < k; j++) grad[j] += g * x[row + j];
       gradBias += g;
     }
-    for (const key of FEATURE_KEYS) {
-      model.weights[key] -= rate * (grad[key] / total + LAMBDA * (model.weights[key] - base.weights[key]));
-    }
-    model.bias -= rate * (gradBias / total + LAMBDA * (model.bias - base.bias));
+    for (let j = 0; j < k; j++) w[j] -= rate * (grad[j] / total + LAMBDA * (w[j] - w0[j]));
+    b -= rate * (gradBias / total + LAMBDA * (b - base.bias));
   }
-  for (const key of FEATURE_KEYS) model.weights[key] = round(model.weights[key]);
-  model.bias = round(model.bias);
+  FEATURE_KEYS.forEach((key, j) => { model.weights[key] = round(w[j]); });
+  model.bias = round(b);
   return model;
 }
 

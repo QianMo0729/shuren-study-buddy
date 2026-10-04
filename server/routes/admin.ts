@@ -361,14 +361,10 @@ adminRouter.post('/approve', (req, res) => {
 
 // ---------- 举报 ----------
 
-const SNAPSHOT_MARK = '【被举报内容】';
-
-/** 举报时留存的内容快照附在 detail 末尾（见 routes/misc.ts），这里拆成举报人的补充说明与内容原文 */
-function splitDetail(type: ReportTargetType, detail: string): { note: string; snapshot: string | null } {
+/** 举报人的补充说明在 detail 列，举报时留存的内容原文在独立的 snapshot 列（见 routes/misc.ts） */
+function splitDetail(type: ReportTargetType, detail: string, stored: string): { note: string; snapshot: string | null } {
   if (type === 'profile' || type === 'post') return { note: detail, snapshot: null };
-  const at = detail.indexOf(SNAPSHOT_MARK);
-  if (at < 0) return { note: detail, snapshot: null };
-  return { note: detail.slice(0, at).replace(/\n$/, ''), snapshot: detail.slice(at + SNAPSHOT_MARK.length) };
+  return { note: detail, snapshot: stored ? stored : null };
 }
 
 function reportLabel(type: ReportTargetType, id: number): string {
@@ -422,7 +418,7 @@ adminRouter.get('/reports', (req, res) => {
       .map((r) => {
         const type = r.target_type as ReportTargetType;
         const detail = String(r.detail ?? '');
-        const { note, snapshot } = splitDetail(type, detail);
+        const { note, snapshot } = splitDetail(type, detail, String(r.snapshot ?? ''));
         return {
           id: r.id, targetType: type, targetId: r.target_id, targetLabel: reportLabel(type, r.target_id),
           reason: r.reason, detail, note, snapshot, link: linkFor(type, r.target_id),

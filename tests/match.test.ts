@@ -355,17 +355,21 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.deepEqual(order(await ranked(viewer)), [x.id, y.id]);
   });
 
-  await t.test('a pending like and login activity change the order without being revealed', async () => {
+  await t.test('a pending like only decides who makes the batch, never the order; login activity changes the order', async () => {
     reset();
     const viewer = createUser();
     const best = createUser();
     const admirer = createUser({ interests: ['music'] });
     assert.deepEqual(ids((await deck(viewer)).items), [best.id, admirer.id]);
+    assert.deepEqual(ids((await deck(viewer, 1)).items), [best.id]);
     await feedback(admirer, viewer, 'like');
     const boosted = await deck(viewer);
-    assert.deepEqual(ids(boosted.items), [admirer.id, best.id]);
+    // 批内顺序与展示的分数一致，不能从顺序推断谁对我感兴趣
+    assert.deepEqual(ids(boosted.items), [best.id, admirer.id]);
     for (const item of boosted.items) assert.equal(item.rankScore, item.recommendation.score, 'rankScore never includes hidden boosts');
     assert.equal(JSON.stringify(boosted).includes('liked'), false);
+    // 只有一个名额时，对我感兴趣的同学更容易进入这一批
+    assert.deepEqual(ids((await deck(viewer, 1)).items), [admirer.id]);
     assert.deepEqual(ids((await ranked(viewer)).items), [best.id, admirer.id]);
     db.exec('DELETE FROM match_feedback');
     db.prepare("UPDATE users SET last_login_at = datetime('now', '-40 days') WHERE id = ?").run(best.id);
@@ -442,7 +446,12 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal(inserted, 200);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM settings WHERE key = 'pref_global_model'").get()!.n, 0);
     assert.equal((await feedback(members[0], members[1], 'like')).status, 200);
-    const stored = db.prepare("SELECT value FROM settings WHERE key = 'pref_global_model'").get() as { value: string } | undefined;
+    // 全站先验在响应之后异步重算，不阻塞这次请求
+    let stored: { value: string } | undefined;
+    for (let i = 0; i < 50 && !stored; i++) {
+      stored = db.prepare("SELECT value FROM settings WHERE key = 'pref_global_model'").get() as { value: string } | undefined;
+      if (!stored) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     assert.ok(stored, 'global prior stored in settings');
     const global = JSON.parse(stored.value);
     assert.ok(Number.isFinite(global.model.bias));

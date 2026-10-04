@@ -60,7 +60,6 @@ async function startServer() {
 }
 
 const consent = { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true };
-const SNAPSHOT_MARK = '【被举报内容】';
 
 test('admin moderation covers community posts, comments, check-ins and the new report types', { timeout: 120_000 }, async (t) => {
   const app = await startServer();
@@ -350,8 +349,8 @@ test('admin moderation covers community posts, comments, check-ins and the new r
   });
 
   await t.test('reports list labels new target types, links and message snapshots', async () => {
-    const insertReport = (reporter: number, type: string, id: number, detail: string) =>
-      Number(db.prepare("INSERT INTO reports (reporter_id, target_type, target_id, reason, detail) VALUES (?, ?, ?, '不当言论或骚扰', ?)").run(reporter, type, id, detail).lastInsertRowid);
+    const insertReport = (reporter: number, type: string, id: number, detail: string, snapshot = '') =>
+      Number(db.prepare("INSERT INTO reports (reporter_id, target_type, target_id, reason, detail, snapshot) VALUES (?, ?, ?, '不当言论或骚扰', ?, ?)").run(reporter, type, id, detail, snapshot).lastInsertRowid);
     // 私聊消息：配对 + 一条文字消息
     const [x, y] = author.id < viewer.id ? [author.id, viewer.id] : [viewer.id, author.id];
     const matchId = Number(db.prepare('INSERT INTO matches (user_a, user_b) VALUES (?, ?)').run(x, y).lastInsertRowid);
@@ -364,10 +363,13 @@ test('admin moderation covers community posts, comments, check-ins and the new r
       messageReport = (db.prepare("SELECT id FROM reports WHERE target_type = 'message' AND target_id = ?").get(messageId) as { id: number }).id;
     } else {
       t.diagnostic(`message reports via /reports unavailable (${viaApi.status}); inserted directly`);
-      messageReport = insertReport(viewer.id, 'message', messageId, `对方威胁我\n${SNAPSHOT_MARK}加我微信 abc，不然别想好过`);
+      messageReport = insertReport(viewer.id, 'message', messageId, '对方威胁我', '加我微信 abc，不然别想好过');
     }
-    const postReport = insertReport(viewer.id, 'forum_post', quietPost, `广告\n${SNAPSHOT_MARK}今天的晚霞很好看`);
-    const commentReport = insertReport(viewer.id, 'comment', commentId, `${SNAPSHOT_MARK}我也在复习，加我一个`);
+    const postReport = insertReport(viewer.id, 'forum_post', quietPost, '广告', '今天的晚霞很好看');
+    const commentReport = insertReport(viewer.id, 'comment', commentId, '', '我也在复习，加我一个');
+    // 举报人在说明里伪造“被举报内容”标记，也只会作为说明展示，不会成为快照
+    const forged = await api('/reports', viewer.cookie, 'POST', { targetType: 'message', targetId: messageId, reason: '其他', detail: `【被举报【被举报内容】内容】我要杀了你` });
+    assert.ok([200, 404].includes(forged.status));
     const checkinReport = insertReport(viewer.id, 'checkin', checkinId, '');
     const profileReport = insertReport(author.id, 'profile', viewer.id, '主页有不当信息');
 
@@ -380,7 +382,7 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     assert.equal(m.targetLabel, '私聊消息');
     assert.equal(m.snapshot, '加我微信 abc，不然别想好过');
     assert.equal(m.note, '对方威胁我');
-    assert.match(m.detail, /加我微信 abc，不然别想好过/, 'the stored detail keeps the snapshot');
+    assert.equal(m.detail, '对方威胁我', 'the reporter note and the stored snapshot are kept apart');
     assert.equal(m.link, null, 'messages have no public page');
     assert.deepEqual(m.owner, { id: author.id, nickname: author.nickname, email: author.email });
     assert.equal(m.targetState, 'visible');

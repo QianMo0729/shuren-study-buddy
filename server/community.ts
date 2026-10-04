@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS checkin_sessions (
 );
 `);
 
+// 举报时留存的内容快照单独存一列，举报人填写的说明永远不会被当作“被举报内容”展示
+if (!q.all<{ name: string }>('PRAGMA table_info(reports)').some((c) => c.name === 'snapshot')) {
+  db.exec("ALTER TABLE reports ADD COLUMN snapshot TEXT NOT NULL DEFAULT ''");
+}
+
 registerAccountCleanup((uid) => {
   q.run('DELETE FROM forum_likes WHERE user_id = ?', uid);
   q.run('DELETE FROM forum_comments WHERE user_id = ?', uid);
