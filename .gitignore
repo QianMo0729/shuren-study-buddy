@@ -1,0 +1,32 @@
+# Dependencies and generated output
+/node_modules/
+/dist/
+/coverage/
+*.tsbuildinfo
+
+# Private environment and persistent user data
+.env
+.env.*
+!.env.example
+/data/
+/uploads/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.pem
+*.key
+
+# Local operations records and source design attachment
+/deploy/
+/*.docx
+
+# Local caches and editor files
+.DS_Store
+*.log
+.vite/
+.vscode/
+.idea/

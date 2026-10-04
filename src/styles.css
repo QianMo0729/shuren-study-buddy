@@ -1,0 +1,269 @@
+@import 'tailwindcss';
+
+/*
+ * 《树仁搭子图鉴》视觉系统
+ *
+ * 概念：把搭子广场做成一本书院同学的「校园图鉴」。每位同学的系统昵称是一种南科大校园里真实存在的动植物，
+ * 默认形象是这种动植物的一幅公版博物画。所有视觉决定都从这本「图鉴」出发：
+ *
+ * 字体（均为网页字体，按 unicode-range 切片、本地托管）
+ *   抖音美好体   标题、昵称、印章：字形方正有力，带一点圆润，只有一个粗字重
+ *   MiSans       正文与界面：400 / 500 / 600 / 700 四个字重
+ *   Source Sans 3 斜体   物种学名（学名用斜体是博物学惯例）
+ *
+ * 颜色
+ *   纸  #F3F1EB    卡纸（图版底） #E7E2D6    墨 #1C2320
+ *   树仁绿 #005C65：书院标识色，用于操作与选中
+ *   朱砂   #B8392A：印泥色，只用于印章（学习类型、收录章）与「共同学习时间」
+ */
+:root {
+  --paper: #f3f1eb;
+  --paper-2: #e9e6dd;
+  --surface: #fbfaf6;
+  --surface-2: #f6f4ee;
+  --mat: #e7e2d6;
+  --ink: #1c2320;
+  --ink-2: #4a524d;
+  --ink-3: #7c837e;
+  --ink-4: #aab0aa;
+  --line: rgba(28, 35, 32, 0.11);
+  --line-strong: rgba(28, 35, 32, 0.22);
+
+  --brand: #005c65;
+  --brand-2: #006b75;
+  --brand-3: #2a8a86;
+  --brand-text: #005c65;
+  --brand-soft: #dde8e4;
+  --brand-softer: #ebf0ec;
+  --brand-glow: rgba(0, 92, 101, 0.2);
+
+  --seal: #b8392a;
+  --accent: #b8392a;
+  --accent-text: #a3301f;
+  --accent-soft: #f3e1da;
+  --gold: #8a6a1f;
+  --danger: #b3261e;
+  --danger-soft: #f6e0db;
+
+  --shadow-sm: 0 1px 2px rgba(28, 35, 32, 0.06);
+  --shadow-md: 0 6px 18px -8px rgba(28, 35, 32, 0.2);
+  --shadow-lg: 0 24px 60px -24px rgba(20, 28, 24, 0.4), 0 2px 8px rgba(20, 28, 24, 0.06);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #151917;
+    --paper-2: #1d221f;
+    --surface: #1b201d;
+    --surface-2: #202622;
+    --mat: #262b27;
+    --ink: #ebe7de;
+    --ink-2: #b4b3aa;
+    --ink-3: #85867e;
+    --ink-4: #585b55;
+    --line: rgba(235, 231, 222, 0.1);
+    --line-strong: rgba(235, 231, 222, 0.2);
+    --brand: #17838c;
+    --brand-2: #1d929b;
+    --brand-3: #52b1a6;
+    --brand-text: #8fcfc5;
+    --brand-soft: rgba(143, 207, 197, 0.13);
+    --brand-softer: rgba(143, 207, 197, 0.07);
+    --seal: #d65a47;
+    --accent: #d65a47;
+    --accent-text: #ec8a78;
+    --accent-soft: rgba(214, 90, 71, 0.15);
+    --gold: #cfb178;
+    --danger: #f0786a;
+    --danger-soft: rgba(240, 120, 106, 0.13);
+    --shadow-sm: none;
+    --shadow-md: 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 24px 60px -24px rgba(0, 0, 0, 0.85);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-mat: var(--mat);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+  --color-brand-3: var(--brand-3);
+  --color-brand-text: var(--brand-text);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-softer: var(--brand-softer);
+  --color-seal: var(--seal);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+  --color-gold: var(--gold);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  --font-sans: 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-display: 'Douyin Sans', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-latin: 'Source Sans 3', 'MiSans', sans-serif;
+
+  --ease-out-soft: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.65;
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    min-height: 100dvh;
+    caret-color: var(--brand);
+    line-break: strict;
+    text-autospace: normal;
+    text-spacing-trim: normal;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+    line-height: 1.3;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--seal) 22%, transparent);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  a {
+    text-underline-offset: 3px;
+  }
+  button {
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--ink-4);
+  }
+  img {
+    -webkit-user-drag: none;
+  }
+}
+
+/* 标题、昵称、印章：抖音美好体（只有 700 一个字重） */
+@utility font-display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+/* 同学自己写的话：正文字重，稍大一号，保留原本的换行 */
+@utility font-hand {
+  font-family: var(--font-sans);
+  font-weight: 400;
+}
+/* 学名：拉丁文斜体是博物学的书写惯例 */
+@utility latin {
+  font-family: var(--font-latin);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+@utility safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility glass {
+  background: color-mix(in oklab, var(--paper) 90%, transparent);
+  backdrop-filter: saturate(1.6) blur(18px);
+  -webkit-backdrop-filter: saturate(1.6) blur(18px);
+}
+@utility emphasis {
+  text-emphasis: dot var(--seal);
+  text-emphasis-position: under right;
+  -webkit-text-emphasis: dot var(--seal);
+  -webkit-text-emphasis-position: under right;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--paper-2) 25%, var(--surface-2) 50%, var(--paper-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* 博物画放在卡纸上：用正片叠底吃掉旧纸的底色，让不同年代的图版在同一张卡纸上显得统一 */
+.plate-img {
+  mix-blend-mode: multiply;
+  filter: saturate(0.92) contrast(1.02);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .plate-img {
+    mix-blend-mode: normal;
+    filter: saturate(0.85) brightness(0.92);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

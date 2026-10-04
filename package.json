@@ -1,0 +1,48 @@
+{
+  "name": "shuren-dazi",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "树仁学发 · 学习搭子匹配系统",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch --clear-screen=false server/index.ts",
+    "dev:web": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "seed": "tsx server/seed.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@chinese-fonts/dymh": "^3.0.0",
+    "@fontsource/source-sans-3": "^5.3.0",
+    "bcryptjs": "^3.0.3",
+    "express": "^5.2.1",
+    "lucide-react": "^1.48.0",
+    "misans-webfont": "^4.3.1",
+    "motion": "^12.43.0",
+    "nodemailer": "^10.0.11",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^7.18.4",
+    "tsx": "^4.23.15",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.3",
+    "@types/nodemailer": "^8.0.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "concurrently": "^10.0.5",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6"
+  }
+}
