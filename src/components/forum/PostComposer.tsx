@@ -43,14 +43,16 @@ function writeDraft(uid: number | undefined, d: Draft | null) {
 }
 
 /**
- * 发帖 / 编辑帖子。发帖时默认收起成一行，点开后展开；未发出的内容保存在本机草稿里。
+ * 发帖 / 编辑帖子。传入 collapsible 可收起成一行；未发出的内容保存在本机草稿里。
  * 图片在浏览器端压缩后上传（kind = forum），最多 4 张，可拖动排序。
  */
-export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
+export function PostComposer({ post, onDone, onCancel, onBusyChange, collapsible = false }: {
   /** 传入时为编辑模式 */
   post?: ForumPost;
   onDone: (post: ForumPost) => void;
   onCancel?: () => void;
+  /** 弹窗发布时，上传或提交期间暂不允许关闭。 */
+  onBusyChange?: (busy: boolean) => void;
   collapsible?: boolean;
 }) {
   const { user } = useAuth();
@@ -63,6 +65,11 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const submitting = useRef(false);
+
+  useEffect(() => {
+    onBusyChange?.(uploading > 0 || sending);
+  }, [uploading, sending, onBusyChange]);
 
   useEffect(() => {
     if (!editing) writeDraft(user?.id, draft);
@@ -91,12 +98,14 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
   };
 
   const submit = async () => {
+    if (submitting.current || uploading > 0) return;
     const body = draft.body.trim();
     if (!body) {
       toast.info('写点什么再发布吧');
       bodyRef.current?.focus();
       return;
     }
+    submitting.current = true;
     setSending(true);
     try {
       const payload = { title: draft.title.trim(), body, images: draft.images };
@@ -106,11 +115,12 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
         writeDraft(user?.id, null);
         if (collapsible) setExpanded(false);
       }
-      toast.success(editing ? '已保存修改' : '已发布');
+      toast.success(r.post.reviewPending ? '已提交，等待审核' : editing ? '已保存修改' : '已发布');
       onDone(r.post);
     } catch (e) {
       toast.error(editing ? '保存失败' : '发布失败', e instanceof ApiError ? e.message : undefined);
     } finally {
+      submitting.current = false;
       setSending(false);
     }
   };
@@ -213,11 +223,11 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
         </div>
       )}
 
-      <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
         <button
           type="button"
           onClick={() => fileInput.current?.click()}
-          disabled={draft.images.length + uploading >= IMAGE_MAX}
+          disabled={sending || draft.images.length + uploading >= IMAGE_MAX}
           className="inline-flex h-9 items-center gap-1.5 rounded-md px-2 text-[13.5px] text-ink-2 transition-colors hover:bg-ink/[.05] hover:text-ink disabled:opacity-40"
         >
           <ImagePlus size={17} aria-hidden /> 图片
@@ -229,8 +239,10 @@ export function PostComposer({ post, onDone, onCancel, collapsible = false }: {
         </span>
         {(onCancel || collapsible) && (
           <Button
+            type="button"
             variant="ghost"
             size="sm"
+            disabled={busy || sending}
             onClick={() => {
               if (onCancel) onCancel();
               else setExpanded(false);

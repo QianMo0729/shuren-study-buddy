@@ -128,12 +128,14 @@ export function paintWatermark(rgba: Uint8Array, width: number, height: number, 
   return layout;
 }
 
-export const DECODE_LIMITS = { maxResolutionInMP: 16, maxMemoryUsageInMB: 512 } as const;
+// 网页相机最长边只有 1600 像素，这里按 400 万像素设上限；解码时的内存占用另有硬上限
+export const DECODE_LIMITS = { maxResolutionInMP: 4, maxMemoryUsageInMB: 128 } as const;
 export const STAMP_QUALITY = 88;
 
 /**
  * 解码 JPEG → 盖水印 → 以质量 88 重新编码。重新编码同时去掉了 EXIF 等全部元数据。
  * 解码失败会抛出异常，由调用方转换成用户可读的错误。
+ * 这是同步的重计算：处理请求时不要直接调用，交给 server/stampPool.ts 的工作线程。
  */
 export function stampWatermark(input: Buffer, lines: string[]): Buffer {
   const img = jpeg.decode(input, { useTArray: true, formatAsRGBA: true, ...DECODE_LIMITS });

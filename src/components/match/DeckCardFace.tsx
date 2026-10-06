@@ -9,6 +9,7 @@ import { TIER_LABEL, hours } from './labels';
 /**
  * 滑卡正面。信息按决策顺序排：契合度 → 学什么 → 为什么推荐 → 需要先聊的 → 共同时间；
  * 昵称与图版缩小放在角落，避免只凭外表做决定。
+ * 手机上卡片矮、放不下全部内容：提醒排到理由前面并只留一条理由，被截掉的不能是唯一的反面信息。
  */
 export function DeckCardFace({ card, onOpen }: { card: DeckCard; onOpen?: () => void }) {
   const r = card.recommendation;
@@ -42,7 +43,7 @@ export function DeckCardFace({ card, onOpen }: { card: DeckCard; onOpen?: () => 
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3.5 overflow-hidden border-t border-dashed border-line-strong px-4 pt-3.5 sm:space-y-4 sm:px-6 sm:pt-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-hidden border-t border-dashed border-line-strong px-4 pt-3.5 sm:gap-4 sm:px-6 sm:pt-4">
         <section aria-label="学习内容">
           <p className="mb-1.5 text-[12px] text-ink-3">{subjects.length ? '在学' : '近期目标'}</p>
           <div className="flex flex-wrap gap-1.5">
@@ -51,19 +52,19 @@ export function DeckCardFace({ card, onOpen }: { card: DeckCard; onOpen?: () => 
             ))}
             {!subjects.length && !goals.length && <span className="text-[13px] text-ink-4">未填写</span>}
           </div>
-          {subjects.length > 0 && goals.length > 0 && <p className="mt-1.5 truncate text-[12.5px] text-ink-3">目标：{goals.join(' · ')}</p>}
+          {subjects.length > 0 && goals.length > 0 && <p className="mt-1.5 truncate text-[12.5px] text-ink-3 max-sm:hidden">目标：{goals.join(' · ')}</p>}
         </section>
 
         {r.reasons.length > 0 && (
-          <section aria-label="推荐理由">
+          <section aria-label="推荐理由" className="max-sm:order-2">
             <ul className="space-y-1.5 border-l-2 border-brand/30 pl-3 text-[14px] leading-relaxed text-ink">
-              {r.reasons.slice(0, 3).map((reason) => <li key={reason} className="line-clamp-2">{reason}</li>)}
+              {r.reasons.slice(0, 3).map((reason, i) => <li key={reason} className={cx('line-clamp-2', i > 0 && 'max-sm:hidden')}>{reason}</li>)}
             </ul>
           </section>
         )}
 
         {caution && (
-          <p className="flex gap-2 rounded-[5px] bg-paper-2 px-3 py-2 text-[13px] leading-relaxed text-ink-2">
+          <p className="flex gap-2 rounded-[5px] bg-paper-2 px-3 py-2 text-[13px] leading-relaxed text-ink-2 max-sm:order-1">
             <CircleAlert size={15} className="mt-[3px] shrink-0 text-ink-3" aria-hidden />
             <span className="line-clamp-2"><span className="sr-only">提醒：</span>{caution}</span>
           </p>
@@ -76,7 +77,7 @@ export function DeckCardFace({ card, onOpen }: { card: DeckCard; onOpen?: () => 
           每周共同 <b className="font-semibold tabular">{hours(r.overlapHours)}</b> 小时
         </span>
         {onOpen && (
-          <button type="button" onClick={onOpen} onPointerDownCapture={(e) => e.stopPropagation()} className="text-[13px] font-semibold text-brand-text hover:underline">
+          <button type="button" onClick={onOpen} onPointerDownCapture={(e) => e.stopPropagation()} className="-my-2.5 -mr-2 px-2 py-2.5 text-[13px] font-semibold text-brand-text hover:underline">
             查看详情
           </button>
         )}

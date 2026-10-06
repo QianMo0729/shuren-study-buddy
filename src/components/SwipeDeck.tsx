@@ -6,15 +6,13 @@ import { cx } from '../lib/format';
 import { ease } from '../lib/motion';
 import { DeckCardFace } from './match/DeckCardFace';
 import { TIER_LABEL } from './match/labels';
+import { FEEDBACK_EXIT_DIRECTION, feedbackForDrag, feedbackForKey, SWIPE_THRESHOLD } from './match/swipeDecision';
 
-/** 拖过这个距离（或甩得足够快）就算做出选择 */
-const THRESHOLD = 110;
-const FLING_VELOCITY = 800;
 const VISIBLE = 3;
 
 /**
- * 滑卡：一次一张大卡，后面叠两张。右滑 / ♥ 感兴趣，左滑 / ✕ 不感兴趣，「稍后再看」把卡片收起。
- * 键盘：← 不感兴趣、→ 感兴趣、↓ 稍后再看。只负责展示与手势，反馈请求由调用方处理。
+ * 滑卡：一次一张大卡，后面叠两张。左滑 / ♥ 感兴趣，右滑 / ✕ 不感兴趣，「稍后再看」把卡片收起。
+ * 键盘：← 感兴趣、→ 不感兴趣、↓ 稍后再看。只负责展示与手势，反馈请求由调用方处理。
  */
 /** 卡片高度：手机端下限更低，给顶部标题、操作按钮和底部标签栏留出空间 */
 export const DECK_HEIGHT = 'h-[clamp(280px,calc(100dvh-470px),540px)] md:h-[clamp(360px,calc(100dvh-430px),540px)]';
@@ -37,8 +35,8 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
   const lift = useMotionValue(0);
   const fade = useMotionValue(1);
   const rotate = useTransform(x, [-320, 0, 320], [-12, 0, 12]);
-  const likeOpacity = useTransform(x, [24, THRESHOLD], [0, 1]);
-  const nopeOpacity = useTransform(x, [-THRESHOLD, -24], [1, 0]);
+  const likeOpacity = useTransform(x, [-SWIPE_THRESHOLD, -24], [1, 0]);
+  const nopeOpacity = useTransform(x, [24, SWIPE_THRESHOLD], [0, 1]);
   const busy = useRef(false);
   const pressAt = useRef<{ x: number; y: number } | null>(null);
   const top = cards[0];
@@ -62,15 +60,15 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
         ]);
       } else {
         const width = typeof window === 'undefined' ? 800 : window.innerWidth;
-        await animate(x, (action === 'like' ? 1 : -1) * (width * 0.6 + 260), { duration: 0.26, ease });
+        await animate(x, FEEDBACK_EXIT_DIRECTION[action] * (width * 0.6 + 260), { duration: 0.26, ease });
       }
     }
     onDecide(top, action);
   }, [top, reduced, x, lift, fade, onDecide]);
 
   const onDragEnd = (_: unknown, info: PanInfo) => {
-    if (info.offset.x > THRESHOLD || info.velocity.x > FLING_VELOCITY) void commit('like');
-    else if (info.offset.x < -THRESHOLD || info.velocity.x < -FLING_VELOCITY) void commit('dislike');
+    const action = feedbackForDrag(info.offset.x, info.velocity.x);
+    if (action) void commit(action);
     else animate(x, 0, { type: 'spring', stiffness: 480, damping: 34 });
   };
 
@@ -80,7 +78,7 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.closest('[role="dialog"],[role="menu"],[role="radiogroup"]'))) return;
-      const action = ({ ArrowLeft: 'dislike', ArrowRight: 'like', ArrowDown: 'skip' } as Record<string, FeedbackAction>)[e.key];
+      const action = feedbackForKey(e.key);
       if (!action) return;
       e.preventDefault();
       void commit(action);
@@ -136,10 +134,10 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
                   aria-label={`${card.nickname}，${TIER_LABEL[card.recommendation.tier]}，契合度 ${card.recommendation.score}`}
                 >
                   <DeckCardFace card={card} onOpen={() => onOpen(card)} />
-                  <motion.span style={{ opacity: likeOpacity }} className="pointer-events-none absolute top-[30%] left-5 -rotate-12 rounded-[6px] border-[3px] border-seal px-2.5 py-1 font-display text-[24px] text-seal" aria-hidden>
+                  <motion.span style={{ opacity: likeOpacity }} className="pointer-events-none absolute top-[30%] right-5 rotate-12 rounded-[6px] border-[3px] border-seal px-2.5 py-1 font-display text-[24px] text-seal" aria-hidden>
                     感兴趣
                   </motion.span>
-                  <motion.span style={{ opacity: nopeOpacity }} className="pointer-events-none absolute top-[30%] right-5 rotate-12 rounded-[6px] border-[3px] border-ink-3 px-2.5 py-1 font-display text-[24px] text-ink-3" aria-hidden>
+                  <motion.span style={{ opacity: nopeOpacity }} className="pointer-events-none absolute top-[30%] left-5 -rotate-12 rounded-[6px] border-[3px] border-ink-3 px-2.5 py-1 font-display text-[24px] text-ink-3" aria-hidden>
                     不感兴趣
                   </motion.span>
                 </motion.div>
@@ -154,17 +152,17 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
       </div>
 
       <div className="sticky bottom-[calc(58px+env(safe-area-inset-bottom)+6px)] z-10 mt-4 flex items-start justify-center gap-6 rounded-xl bg-paper/90 pt-2 pb-1 backdrop-blur-sm sm:gap-8 md:static md:mt-6 md:bg-transparent md:p-0 md:backdrop-blur-none">
-        <DeckButton label="不感兴趣" hint="←" onClick={() => void commit('dislike')} disabled={!top} className="size-14 border border-line-strong bg-surface text-ink-2 hover:border-ink-3 hover:text-ink">
-          <X size={26} strokeWidth={2.2} />
+        <DeckButton label="感兴趣" hint="←" onClick={() => void commit('like')} disabled={!top} className="size-14 bg-brand text-white hover:bg-brand-2">
+          <Heart size={24} strokeWidth={2.2} className="fill-current" />
         </DeckButton>
         <DeckButton label="稍后再看" hint="↓" onClick={() => void commit('skip')} disabled={!top} className="mt-1.5 size-11 border border-line bg-surface text-ink-3 hover:text-ink">
           <Clock3 size={19} />
         </DeckButton>
-        <DeckButton label="感兴趣" hint="→" onClick={() => void commit('like')} disabled={!top} className="size-14 bg-brand text-white hover:bg-brand-2">
-          <Heart size={24} strokeWidth={2.2} className="fill-current" />
+        <DeckButton label="不感兴趣" hint="→" onClick={() => void commit('dislike')} disabled={!top} className="size-14 border border-line-strong bg-surface text-ink-2 hover:border-ink-3 hover:text-ink">
+          <X size={26} strokeWidth={2.2} />
         </DeckButton>
       </div>
-      <p className="mt-3 hidden text-center text-[12.5px] text-ink-4 md:block">键盘：← 不感兴趣 · → 感兴趣 · ↓ 稍后再看</p>
+      <p className="mt-3 text-center text-[12.5px] text-ink-4"><span className="md:hidden">左滑感兴趣 · 右滑不感兴趣</span><span className="hidden md:inline">键盘：← 感兴趣 · → 不感兴趣 · ↓ 稍后再看</span></p>
     </div>
   );
 }

@@ -10,10 +10,10 @@ import type { SessionUser } from '../../shared/types.ts';
 import { missingFields, pickProfileInput } from '../../shared/profileRules.ts';
 import { config } from '../config.ts';
 import { q, tx } from '../db.ts';
-import { sendCodeMail } from '../mail.ts';
+import { sendAccountNoticeMail, sendCodeMail } from '../mail.ts';
 import {
-  HttpError, accountEmail, canShowDevCodes, consumeCode, consumeSetupToken, createSession, destroySession,
-  issueCode, issueSetupToken, rateLimit, requirePassword, requireUser, revokeAccountCredentials, setupTokenEmail, sha256, studentEmail,
+  HttpError, accountEmail, canShowDevCodes, clientKey, consumeCode, consumeSetupToken, createSession, destroySession, discardCode,
+  issueCode, issueSetupToken, rateLimit, requirePassword, requireUser, revokeAccountCredentials, setupTokenEmail, studentEmail,
 } from '../auth.ts';
 import type { CodePurpose } from '../auth.ts';
 
@@ -31,20 +31,26 @@ function verificationCode(value: unknown): string {
   return value;
 }
 
-async function deliverCode(email: string, purpose: CodePurpose) {
-  const code = issueCode(email, purpose);
-  const status = await sendCodeMail(email, code, purpose);
+const hasPassword = (user: Account | undefined) => !!user?.activated && !!user.password_hash;
+
+/**
+ * 发码接口对任何格式正确的邮箱都走同一条路：同样的冷却与每小时上限、一封邮件、同样的响应。
+ * 邮箱不符合条件（激活时账号已激活、重置时账号不存在或未激活）时，登记的是无法通过校验的占位记录，
+ * 邮件内容改为说明情况——只有邮箱的主人能知道账号状态。
+ */
+async function deliverCode(email: string, purpose: CodePurpose, eligible: boolean) {
+  const issued = issueCode(email, purpose, !eligible);
+  const status = issued.code ? await sendCodeMail(email, issued.code, purpose) : await sendAccountNoticeMail(email, purpose);
   if (status === 'failed') {
-    q.run('DELETE FROM email_codes WHERE email = ? AND purpose = ? AND code_hash = ? AND used = 0',
-      email, purpose, sha256(`${email}:${purpose}:${code}`));
+    discardCode(issued.id);
     throw new HttpError(502, '验证码邮件发送失败，请稍后重试');
   }
-  return code;
+  return issued.code ?? undefined;
 }
 
+/** 只在已经验证过邮箱（持有激活凭证）之后调用，不会向未验证的请求方透露账号状态 */
 function ensureCanActivate(email: string) {
-  const user = account(email);
-  if (user?.activated && user.password_hash) throw new HttpError(409, '该账号已激活，请使用邮箱和密码登录，或找回密码');
+  if (hasPassword(account(email))) throw new HttpError(409, '该账号已激活，请使用邮箱和密码登录，或找回密码');
 }
 
 export function sessionUser(userId: number): SessionUser | null {
@@ -81,17 +87,18 @@ authRouter.get('/me', (req, res) => {
 
 authRouter.post('/request-activation-code', async (req, res) => {
   const email = studentEmail(req.body?.studentId);
-  rateLimit(`code:${req.ip}`, 20, 60 * 60_000);
-  ensureCanActivate(email);
-  const code = await deliverCode(email, 'activation');
+  rateLimit(`code:${clientKey(req)}`, 20, 60 * 60_000);
+  const code = await deliverCode(email, 'activation', !hasPassword(account(email)));
   res.json({ ok: true, email, devCode: canShowDevCodes(req) ? code : undefined });
 });
 
 authRouter.post('/verify-activation-code', (req, res) => {
   const email = studentEmail(req.body?.studentId);
   const code = verificationCode(req.body?.code);
-  rateLimit(`verify:${req.ip}:${email}`, 10, 10 * 60_000);
-  ensureCanActivate(email);
+  // 先按来源限额，再登记含邮箱的键：一个来源不能靠更换学号无限制地登记限流键
+  rateLimit(`verify-ip:${clientKey(req)}`, 60, 10 * 60_000);
+  rateLimit(`verify:${clientKey(req)}:${email}`, 10, 10 * 60_000);
+  // 已激活的账号没有可用的激活验证码，与输错验证码的表现完全相同
   const outcome = tx(() => {
     try {
       consumeCode(email, 'activation', code);
@@ -107,7 +114,7 @@ authRouter.post('/verify-activation-code', (req, res) => {
 });
 
 authRouter.post('/activate', async (req, res) => {
-  rateLimit(`activate:${req.ip}`, 30, 10 * 60_000);
+  rateLimit(`activate:${clientKey(req)}`, 30, 10 * 60_000);
   const password = requirePassword(req.body?.password);
   const email = setupTokenEmail(req.body?.setupToken);
   ensureCanActivate(email);
@@ -129,7 +136,7 @@ authRouter.post('/activate', async (req, res) => {
 });
 
 authRouter.post('/login', async (req, res) => {
-  rateLimit(`login-ip:${req.ip}`, 60, 10 * 60_000);
+  rateLimit(`login-ip:${clientKey(req)}`, 60, 10 * 60_000);
   const email = accountEmail(req.body?.email);
   rateLimit(`login-email:${email}`, 15, 10 * 60_000);
   const password: unknown = req.body?.password;
@@ -151,12 +158,10 @@ authRouter.post('/login', async (req, res) => {
 
 authRouter.post('/request-reset-code', async (req, res) => {
   const email = accountEmail(req.body?.email);
-  rateLimit(`code:${req.ip}`, 20, 60 * 60_000);
+  rateLimit(`code:${clientKey(req)}`, 20, 60 * 60_000);
   rateLimit(`reset-request:${email}`, 5, 60 * 60_000);
-  const user = account(email);
   // A reset request never reveals whether an address has a password-enabled account.
-  if (!user?.activated || !user.password_hash) return res.json({ ok: true });
-  const code = await deliverCode(email, 'password_reset');
+  const code = await deliverCode(email, 'password_reset', hasPassword(account(email)));
   res.json({ ok: true, devCode: canShowDevCodes(req) ? code : undefined });
 });
 
@@ -164,10 +169,9 @@ authRouter.post('/reset-password', async (req, res) => {
   const email = accountEmail(req.body?.email);
   const code = verificationCode(req.body?.code);
   const password = requirePassword(req.body?.password);
-  rateLimit(`reset:${req.ip}:${email}`, 10, 10 * 60_000);
-  rateLimit(`reset-ip:${req.ip}`, 30, 10 * 60_000);
-  const user = account(email);
-  if (!user?.activated || !user.password_hash) throw new HttpError(400, '验证码不正确或已失效，请重新获取');
+  rateLimit(`reset-ip:${clientKey(req)}`, 30, 10 * 60_000);
+  rateLimit(`reset:${clientKey(req)}:${email}`, 10, 10 * 60_000);
+  // 无论账号是否存在都先做同样的哈希计算，再校验验证码：响应内容与耗时不随账号状态变化
   const hash = await bcrypt.hash(password, PASSWORD_COST);
   const outcome = tx(() => {
     try {
@@ -176,6 +180,8 @@ authRouter.post('/reset-password', async (req, res) => {
       if (error instanceof HttpError) return { error };
       throw error;
     }
+    const user = account(email);
+    if (!user || !hasPassword(user)) return { error: new HttpError(400, '验证码不正确') };
     q.run('UPDATE users SET password_hash = ? WHERE id = ?', hash, user.id);
     revokeAccountCredentials(user.id, email);
     return { ok: true };

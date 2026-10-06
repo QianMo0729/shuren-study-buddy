@@ -1,0 +1,6 @@
+{
+  "component": "src/components/forum/PostCreateIcon.tsx",
+  "source": "为本项目编写的 SVG 基础几何与自绘叶芽路径",
+  "theme": "圆盘使用 brand / brand-2，叶芽使用 brand-3 / brand-text，衬底使用 surface / line-strong；继承系统深浅色主题。",
+  "note": "已移除先前复制的图片；当前组件不嵌入、引用或描摹该图片，也不依赖第三方图标素材。"
+}

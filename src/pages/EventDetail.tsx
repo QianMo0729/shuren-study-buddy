@@ -1,3 +1,4 @@
+import { PendingReviewNotice } from '../components/ReviewStatus';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ChevronLeft, ChevronRight, Flag, Lock, Pencil, ShieldX, Trash2 } from 'lucide-react';
@@ -57,7 +58,7 @@ export function EventDetail() {
         <ChevronLeft size={17} /> 活动大厅
       </button>
 
-      {post.takenDown && (
+      {post.reviewPending ? <PendingReviewNotice /> : post.takenDown && (
         <p className="mb-4 rounded-lg bg-danger-soft px-4 py-3 text-[14px] text-danger">
           这条招募已被管理员撤下{post.takedownReason ? `，原因：${post.takedownReason}` : ''}。只有你和管理员能看到。
         </p>
@@ -68,7 +69,7 @@ export function EventDetail() {
           <div className="flex flex-wrap items-center gap-3">
             <CategoryTag value={post.category} />
             {post.status === 'closed' && <span className="rounded-md bg-paper-2 px-2 py-0.5 text-[13px] text-ink-2">招募已结束</span>}
-            <span className="ml-auto text-[13px] text-ink-3">{timeAgo(post.createdAt)}发布</span>
+            <span className="ml-auto text-[13px] text-ink-3">{timeAgo(post.createdAt)}{post.reviewPending ? '提交' : '发布'}</span>
           </div>
           <h1 className="mt-4 font-display text-[28px] leading-snug text-ink sm:text-[36px]">{post.title}</h1>
 
@@ -100,6 +101,7 @@ export function EventDetail() {
                 </Button>
                 <Button
                   icon={<Lock size={15} />}
+                  disabled={post.reviewPending || post.takenDown}
                   onClick={async () => {
                     const next = post.status === 'open' ? 'closed' : 'open';
                     await api.setPostStatus(post.id, next);
@@ -115,7 +117,7 @@ export function EventDetail() {
               </>
             ) : (
               <>
-                {post.status === 'open' && <InterestButton post={post} size="lg" onChange={(p) => setPost({ ...post, ...p })} />}
+                {post.status === 'open' && !post.reviewPending && !post.takenDown && <InterestButton post={post} size="lg" onChange={(p) => setPost({ ...post, ...p })} />}
                 <button onClick={() => setReport(true)} className="ml-auto inline-flex items-center gap-1.5 text-[13px] text-ink-3 hover:text-danger">
                   <Flag size={14} /> 举报
                 </button>
@@ -174,7 +176,7 @@ export function EventDetail() {
               </ul>
             </div>
           )}
-          <p className="px-1 text-[12.5px] text-ink-3">发布于 {fullDateTime(post.createdAt)}</p>
+          <p className="px-1 text-[12.5px] text-ink-3">{post.reviewPending ? '提交于' : '发布于'} {fullDateTime(post.createdAt)}</p>
         </aside>
       </div>
 

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SessionUser } from '../../shared/types';
 import { api } from './api';
+import { purgeAccountDrafts } from './questionnaireDraft';
 
 interface AuthState {
   user: SessionUser | null;
@@ -23,8 +24,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const revision = useRef(0);
   const accountId = useRef<number | null | undefined>(undefined);
-  const updateUser = useCallback((next: SessionUser | null) => {
+  const updateUser = useCallback((next: SessionUser | null, confirmed = true) => {
     const id = next?.id ?? null;
+    // 服务器确认了当前账号（或确认已退出：退出登录、会话失效、注销）之后，本机只保留这个账号的未提交草稿。
+    // 仅仅是连不上服务器时不清理，离线期间填写的内容还要等联网后同步。
+    if (confirmed) {
+      try { purgeAccountDrafts(localStorage, id); } catch { /* Storage can be disabled. */ }
+    }
     if (accountId.current !== undefined && accountId.current !== id) window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED));
     accountId.current = id;
     setUserState(next);
@@ -43,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (requestRevision === revision.current) updateUser(user);
       return user;
     } catch {
-      if (requestRevision === revision.current) updateUser(null);
+      if (requestRevision === revision.current) updateUser(null, false);
       return null;
     } finally {
       if (requestRevision === revision.current) setLoading(false);

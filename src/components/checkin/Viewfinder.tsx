@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
 import { captureSize } from './useLiveCamera';
+import { isCameraPreviewReady } from './cameraPreview';
 import { beijingStamp, paintPreview, previewLayout } from './watermarkPreview';
 
 /**
@@ -39,13 +40,19 @@ export function Viewfinder({ videoRef, width, height, live, placeLabel, clockOff
     let last = 0;
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
-      if (now - last < 120 || !video.videoWidth) return;
+      if (now - last < 120 || !isCameraPreviewReady(video)) return;
       last = now;
       const kx = video.videoWidth / cap.width;
       const ky = video.videoHeight / cap.height;
       const { box } = layout;
       // 把水印区域的画面缩小到点阵尺寸：每个点约等于该区块的平均色
-      sample.drawImage(video, box.x * kx, box.y * ky, box.w * kx, box.h * ky, 0, 0, layout.cols, layout.rows);
+      // iPhone 切镜头或系统暂停相机时，元数据可能仍在，但当前帧已不可读取。
+      // 下一帧恢复后继续画水印，不让一次 drawImage 异常打断整个预览。
+      try {
+        sample.drawImage(video, box.x * kx, box.y * ky, box.w * kx, box.h * ky, 0, 0, layout.cols, layout.rows);
+      } catch {
+        return;
+      }
       const lines = [placeLabel, beijingStamp(Date.now() + offsetRef.current)];
       paintPreview(overlay, sample, { ...layout, lines: layout.lines.map((l, i) => ({ ...l, text: lines[i] })) });
     };
@@ -61,7 +68,7 @@ export function Viewfinder({ videoRef, width, height, live, placeLabel, clockOff
       className="relative mx-auto w-full overflow-hidden bg-[#0c1415] sm:rounded-md"
       style={{ aspectRatio: `${cap.width} / ${cap.height}`, maxWidth: `calc(68dvh * ${ratio.toFixed(4)})` }}
     >
-      <video ref={videoRef} muted playsInline autoPlay aria-label="相机取景画面" className="absolute inset-0 h-full w-full object-contain" />
+      <video ref={videoRef} muted playsInline autoPlay disablePictureInPicture aria-label="相机取景画面" className="absolute inset-0 block h-full w-full object-contain" />
       {layout && (
         <canvas
           ref={overlayRef}

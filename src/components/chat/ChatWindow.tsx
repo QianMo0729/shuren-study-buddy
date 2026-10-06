@@ -437,12 +437,19 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
         </div>
       </Modal>
 
-      <ReportDialog open={reportOpen} onClose={() => setReportOpen(false)} targetType={report.type} targetId={report.id} />
+      <ReportDialog
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        targetType={report.type}
+        targetId={report.id}
+        // 举报「这位同学」不会附带聊天内容；想让管理员看到某条消息，要举报那一条
+        note={report.type === 'profile' ? <>想让管理员看到某一条消息？<span className="[@media(pointer:coarse)]:hidden">把鼠标移到那条消息上，点旁边的小旗。</span><span className="hidden [@media(pointer:coarse)]:inline">长按那条消息，选「举报这条消息」。</span></> : undefined}
+      />
 
       <ConfirmDialog
         open={confirm === 'close'}
         title="解除配对？"
-        desc="解除后聊天会关闭，双方都不能再发送消息，也不再互相展示联系方式；之后不会再向你推荐这位同学。对方不会收到通知，但会在聊天里看到「配对已解除」。"
+        desc="解除后聊天会关闭，双方都不能再发送消息，也不再互相展示联系方式；之后不会再向你推荐这位同学。对方不会收到通知，但会在聊天里看到「配对已解除」。想恢复时，可以在「我的 → 推荐偏好」把 TA 放回推荐，双方再次选「感兴趣」后重新配对。"
         confirmText="解除配对"
         tone="danger"
         loading={confirmBusy}

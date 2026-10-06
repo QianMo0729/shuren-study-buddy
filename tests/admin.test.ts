@@ -73,7 +73,7 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare("INSERT INTO users (email, activated, password_hash, role) VALUES (?, 1, 'x', ?)").run(email, opts.role ?? 'user').lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `私密姓名${id}`, studentId, privacyConsent: consent, planTags: ['期末复习备考'],
+      ...emptyProfile(), realName: `私密姓名${id}`, studentId, gender: 'male', grade: 'y1', privacyConsent: consent, planTags: ['期末复习备考'],
       places: ['library'], schedule: [0, 1], studyType: 'quiet', ...opts.profile,
     };
     const nickname = `审核同学${id}`;
@@ -118,6 +118,10 @@ test('admin moderation covers community posts, comments, check-ins and the new r
   const checkinId = insertCheckin(author.id, '今天背了 80 个单词', image('c'));
   const commentId = insertComment(commenter.id, 'post', postId, '我也在复习，加我一个');
   const checkinComment = insertComment(viewer.id, 'checkin', checkinId, '坚持就是胜利');
+  // 待审核队列只包含自动拦截的内容，未标记的普通内容无需人工审核。
+  for (const table of ['forum_posts', 'forum_comments', 'checkins']) {
+    db.prepare(`UPDATE ${table} SET auto_held = 1, taken_down = 1, risk_reasons = '["测试风险"]'`).run();
+  }
 
   await t.test('non-admins cannot reach any admin endpoint', async () => {
     assert.equal((await api('/admin/overview')).status, 401);
@@ -132,7 +136,7 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     for (const [endpoint, method, body] of calls) {
       assert.equal((await api(endpoint, author.cookie, method, body)).status, 403, `${method} ${endpoint}`);
     }
-    assert.equal(row('forum_posts', postId).taken_down, 0);
+    assert.equal(row('forum_posts', postId).taken_down, 1);
     assert.equal(row('checkins', checkinId).reviewed_at, null);
   });
 
@@ -141,7 +145,7 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.pendingContent, { forum_post: 2, comment: 2, checkin: 1 });
     assert.equal(r.body.stats.pendingCommunity, 5);
-    assert.equal(r.body.stats.forumPosts, 2);
+    assert.equal(r.body.stats.forumPosts, 0, 'automatically held posts are not publicly visible');
     assert.equal(typeof r.body.stats.checkinsToday, 'number');
   });
 
@@ -163,6 +167,8 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     assert.deepEqual(p.images, [image('a'), image('b')]);
     assert.equal(p.link, `/community/posts/${postId}`);
     assert.equal(p.takenDown, false);
+    assert.equal(p.reviewPending, true);
+    assert.deepEqual(p.reviewReasons, ['测试风险']);
     assert.equal(p.reviewedAt, null);
     assert.equal(p.reports, 0);
     assert.ok(!ids(await content('forum_post', 'all')).includes(deletedPost), 'deleted posts are not listed');
@@ -339,13 +345,126 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     assert.equal((await api('/admin/restore', admin.cookie, 'POST', { type: 'profile', id: viewer.id })).status, 200);
     assert.equal((db.prepare('SELECT taken_down FROM profiles WHERE user_id = ?').get(viewer.id) as { taken_down: number }).taken_down, 0);
 
-    const recruit = Number(db.prepare("INSERT INTO posts (user_id, title, category, description) VALUES (?, '数分期末互助', 'study', '每周两次')").run(author.id).lastInsertRowid);
+    const recruit = Number(db.prepare("INSERT INTO posts (user_id, title, category, description, auto_held, taken_down, risk_reasons) VALUES (?, '数分期末互助', 'study', '每周两次', 1, 1, '[\"测试风险\"]')").run(author.id).lastInsertRowid);
     assert.ok((await api('/admin/posts?filter=pending', admin.cookie)).body.items.some((p: { id: number }) => p.id === recruit));
     assert.equal((await api('/admin/approve', admin.cookie, 'POST', { type: 'post', ids: [recruit] })).status, 200);
     assert.ok(!(await api('/admin/posts?filter=pending', admin.cookie)).body.items.some((p: { id: number }) => p.id === recruit));
     const down = await api('/admin/takedown', admin.cookie, 'POST', { type: 'post', id: recruit, reason: '虚假招募' });
     assert.equal(down.status, 200);
     assert.ok((await notifications(author)).some((n) => n.title === '你的帖子已被管理员撤下' && n.link === `/events/${recruit}`));
+  });
+
+  await t.test('profiles and recruitment posts can only be reported while visible, and the report keeps what was shown', async () => {
+    const report = (user: { cookie: string }, targetType: string, targetId: number, detail = '') =>
+      api('/reports', user.cookie, 'POST', { targetType, targetId, reason: '其他', detail });
+    const stored = (type: string, id: number) =>
+      db.prepare("SELECT snapshot, detail FROM reports WHERE target_type = ? AND target_id = ? ORDER BY id DESC LIMIT 1").get(type, id) as { snapshot: string; detail: string } | undefined;
+    const count = () => (db.prepare('SELECT COUNT(*) n FROM reports').get() as { n: number }).n;
+    const setProfile = (id: number, sql: string, ...params: unknown[]) => db.prepare(`UPDATE profiles SET ${sql} WHERE user_id = ?`).run(...(params as any[]), id);
+    const target = createUser({ profile: { bio: '加我微信看不可描述的内容', major: '计算机系', photos: [image('d')], photoVisibility: 'public' } });
+    const before = count();
+
+    // 看不到的主页一律按不存在处理：未公开、被撤下、撤回隐私同意、互相排除、根本不存在
+    const hidden: [string, () => void, () => void][] = [
+      ['unpublished', () => setProfile(target.id, 'published = 0'), () => setProfile(target.id, 'published = 1')],
+      ['taken down', () => setProfile(target.id, 'taken_down = 1'), () => setProfile(target.id, 'taken_down = 0')],
+      ['consent withdrawn', () => setProfile(target.id, "data = json_set(data, '$.privacyConsent.policy', json('false'))"),
+        () => setProfile(target.id, "data = json_set(data, '$.privacyConsent.policy', json('true'))")],
+      ['excluded', () => db.prepare('INSERT INTO exclusions (user_id, target_id) VALUES (?, ?)').run(target.id, viewer.id),
+        () => db.prepare('DELETE FROM exclusions WHERE user_id = ?').run(target.id)],
+    ];
+    const missingProfile = await report(viewer, 'profile', 99_999_999);
+    assert.equal(missingProfile.status, 404);
+    for (const [label, hide, show] of hidden) {
+      hide();
+      const refused = await report(viewer, 'profile', target.id);
+      assert.equal(refused.status, 404, label);
+      assert.deepEqual(refused.body, missingProfile.body, `${label}: a hidden profile answers exactly like a missing one`);
+      show();
+    }
+    assert.equal((await report(target, 'profile', target.id)).status, 404, 'reporting yourself is not a thing');
+    assert.equal(count(), before, 'none of the refused reports reached the moderation queue');
+
+    // 看得到的主页可以举报；留存的是举报那一刻对外展示的内容
+    assert.equal((await report(viewer, 'profile', target.id, '主页里有引流信息')).status, 200);
+    const profileEvidence = stored('profile', target.id)!;
+    assert.match(profileEvidence.snapshot, /自我介绍：加我微信看不可描述的内容/);
+    assert.match(profileEvidence.snapshot, /专业 \/ 院系：计算机系/);
+    assert.ok(profileEvidence.snapshot.includes(image('d')), 'public photo names are kept so the admin can open them');
+    assert.doesNotMatch(profileEvidence.snapshot, /私密姓名|1263\d{4}/, 'identity fields are not part of the public snapshot');
+    assert.equal(profileEvidence.detail, '主页里有引流信息');
+    // 被举报后立刻改掉内容、撤回主页，管理员看到的仍是原文
+    setProfile(target.id, "published = 0, data = json_set(data, '$.bio', '大家好')");
+    const listed = ((await api('/admin/reports', admin.cookie)).body.items as any[]).find((i) => i.targetType === 'profile' && i.targetId === target.id);
+    assert.equal(listed.snapshot, profileEvidence.snapshot);
+    assert.equal(listed.note, '主页里有引流信息');
+    setProfile(target.id, 'published = 1');
+
+    // 招募同理
+    const insertRecruit = (title: string) => Number(db.prepare(
+      "INSERT INTO posts (user_id, title, category, description, time_text, location, tags) VALUES (?, ?, 'study', '每周两次，带上不可描述的资料', '周三晚上', '琳恩图书馆', '[\"期末\"]')").run(target.id, title).lastInsertRowid);
+    const recruit = insertRecruit('数分互助小组');
+    const setPost = (sql: string) => db.prepare(`UPDATE posts SET ${sql} WHERE id = ?`).run(recruit);
+    const postCount = count();
+    const missingPost = await report(viewer, 'post', 99_999_999);
+    for (const [label, hide, show] of [
+      ['taken down', 'taken_down = 1', 'taken_down = 0'], ['deleted', 'deleted = 1', 'deleted = 0'],
+    ] as const) {
+      setPost(hide);
+      const refused = await report(viewer, 'post', recruit);
+      assert.equal(refused.status, 404, label);
+      assert.deepEqual(refused.body, missingPost.body, label);
+      setPost(show);
+    }
+    db.prepare('INSERT INTO exclusions (user_id, target_id) VALUES (?, ?)').run(viewer.id, target.id);
+    assert.equal((await report(viewer, 'post', recruit)).status, 404, 'excluded');
+    db.prepare('DELETE FROM exclusions WHERE user_id = ?').run(viewer.id);
+    assert.equal((await report(target, 'post', recruit)).status, 404, 'own post');
+    assert.equal(count(), postCount);
+    assert.equal((await report(viewer, 'post', recruit)).status, 200);
+    const postEvidence = stored('post', recruit)!.snapshot;
+    for (const part of ['标题：数分互助小组', '时间：周三晚上', '地点：琳恩图书馆', '标签：期末', '说明：每周两次，带上不可描述的资料']) assert.ok(postEvidence.includes(part), part);
+    setPost("title = '已改', description = '已改', deleted = 1");
+    const listedPost = ((await api('/admin/reports', admin.cookie)).body.items as any[]).find((i) => i.targetType === 'post' && i.targetId === recruit);
+    assert.equal(listedPost.snapshot, postEvidence);
+    assert.equal(listedPost.targetState, 'deleted');
+
+    // 最长的社区帖子也完整留存，不再截到 1000 字；图片文件名一并记录
+    const longBody = '长'.repeat(1990) + '结尾还在';
+    const longPost = insertPost(target.id, '标题', longBody, [image('e')]);
+    assert.equal((await report(viewer, 'forum_post', longPost)).status, 200);
+    const longEvidence = stored('forum_post', longPost)!.snapshot;
+    assert.ok(longEvidence.startsWith(`标题\n${longBody}`));
+    assert.ok(longEvidence.endsWith(`图片：${image('e')}`));
+    db.prepare("UPDATE reports SET status = 'dismissed' WHERE status = 'open'").run();
+  });
+
+  await t.test('a recruitment post stops carrying profile fields once the author withdraws the profile or consent', async () => {
+    const poster = createUser({ profile: { major: '物理系', studyType: 'discuss', photos: [image('f')], photoVisibility: 'public' } });
+    const recruit = Number(db.prepare(
+      "INSERT INTO posts (user_id, title, category, description, time_text, location) VALUES (?, '周末自习', 'study', '一起去图书馆自习两小时', '周六', '图书馆')").run(poster.id).lastInsertRowid);
+    const seen = async () => {
+      const list = ((await api('/posts', viewer.cookie)).body.items as any[]).find((p) => p.id === recruit).author;
+      const detail = (await api(`/posts/${recruit}`, viewer.cookie)).body.post.author;
+      assert.deepEqual(detail, list);
+      return list;
+    };
+    assert.deepEqual(await seen(), { id: poster.id, nickname: poster.nickname, major: '物理系', studyType: 'discuss', cover: image('f'), published: true });
+    const anonymous = { id: poster.id, nickname: poster.nickname, major: '', studyType: '', cover: null, published: false };
+    const setProfile = (sql: string) => db.prepare(`UPDATE profiles SET ${sql} WHERE user_id = ?`).run(poster.id);
+
+    assert.equal((await api('/profiles/me/unpublish', poster.cookie, 'POST', {})).status, 200);
+    assert.deepEqual(await seen(), anonymous, 'unpublished');
+    // 撤回之后再改资料，新内容也不会从旧招募里漏出去
+    setProfile("data = json_set(data, '$.major', '改过的专业')");
+    assert.deepEqual(await seen(), anonymous);
+    setProfile("published = 1, data = json_set(data, '$.privacyConsent.withdrawal', json('false'))");
+    assert.deepEqual(await seen(), anonymous, 'consent withdrawn');
+    setProfile("taken_down = 1, data = json_set(data, '$.privacyConsent.withdrawal', json('true'))");
+    assert.deepEqual(await seen(), anonymous, 'taken down');
+    setProfile('taken_down = 0');
+    assert.equal((await seen()).major, '改过的专业', 'visible again once the profile is public again');
+    db.prepare('UPDATE posts SET deleted = 1 WHERE id = ?').run(recruit);
   });
 
   await t.test('reports list labels new target types, links and message snapshots', async () => {

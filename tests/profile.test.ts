@@ -6,7 +6,7 @@ import type { PrivacyConsent, ProfileInput } from '../shared/types.ts';
 
 const consent: PrivacyConsent = { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true };
 const publishable = (): ProfileInput => ({
-  ...emptyProfile(), realName: '测试同学', planTags: ['期末复习备考'], places: ['library'],
+  ...emptyProfile(), realName: '测试同学', gender: 'male', grade: 'y1', planTags: ['期末复习备考'], places: ['library'],
   schedule: [0], studyType: 'quiet', privacyConsent: { ...consent },
 });
 
@@ -22,18 +22,18 @@ test('new profiles default to private photos and no implicit privacy consent', (
   assert.deepEqual(second.photos, []);
 });
 
-test('optional demographics, photos, bio, contacts and learning rhythm do not block publication', () => {
+test('major, photos, bio, contacts and learning rhythm remain optional after gender and grade are required', () => {
   const p = publishable();
-  assert.equal(p.gender, '');
+  assert.equal(p.gender, 'male');
   assert.equal(p.major, '');
-  assert.equal(p.grade, '');
+  assert.equal(p.grade, 'y1');
   assert.equal(p.bio, '');
   assert.deepEqual(p.photos, []);
   assert.deepEqual(missingFields(p), []);
 });
 
-test('publication requires a name, recognized goal, location, available time, study style and all four consents', () => {
-  assert.deepEqual(new Set(missingFields(emptyProfile()).map((item) => item.key)), new Set(['realName', 'planTags', 'places', 'schedule', 'studyType', 'privacyConsent']));
+test('publication requires a name, gender, grade, recognized goal, location, available time, study style and all four consents', () => {
+  assert.deepEqual(new Set(missingFields(emptyProfile()).map((item) => item.key)), new Set(['realName', 'gender', 'grade', 'planTags', 'places', 'schedule', 'studyType', 'privacyConsent']));
   assert.ok(missingFields({ ...publishable(), planTags: ['unrecognized'] }).some((item) => item.key === 'planTags'));
   for (const key of Object.keys(consent) as (keyof PrivacyConsent)[]) {
     const p = { ...publishable(), privacyConsent: { ...consent, [key]: false } };
@@ -41,6 +41,27 @@ test('publication requires a name, recognized goal, location, available time, st
     assert.deepEqual(missingFields(p).map((item) => item.key), ['privacyConsent']);
   }
   assert.equal(hasPrivacyConsent({ privacyConsent: { ...consent, policy: 'true' } as unknown as PrivacyConsent }), false);
+});
+
+test('gender accepts only male or female and grade requires a listed value regardless of public visibility', () => {
+  for (const gender of ['', 'other', 'unknown']) {
+    assert.deepEqual(missingFields({ ...publishable(), gender }), [{ key: 'gender', label: '性别' }]);
+  }
+  for (const grade of ['', 'y5', 'unknown']) {
+    assert.deepEqual(missingFields({ ...publishable(), grade }), [{ key: 'grade', label: '年级' }]);
+  }
+  for (const gender of ['male', 'female']) {
+    for (const grade of ['y1', 'y2', 'y3', 'y4', 'grad']) {
+      assert.deepEqual(missingFields({ ...publishable(), gender, grade, genderVisibility: 'private' }), []);
+    }
+  }
+});
+
+test('old profiles keep public gender while explicit private visibility survives normalization', () => {
+  assert.equal(emptyProfile().genderVisibility, 'public');
+  assert.equal(pickProfileInput({ gender: 'male' }).genderVisibility, 'public');
+  assert.equal(pickProfileInput({ schemaVersion: 2, gender: 'female', genderVisibility: 'private' }).genderVisibility, 'private');
+  assert.equal(pickProfileInput({ genderVisibility: 'invalid' as ProfileInput['genderVisibility'] }).genderVisibility, 'public');
 });
 
 test('expected partner time restricts the comparison without altering actual availability', () => {
@@ -123,6 +144,7 @@ test('schema v2 does not repeat schedule migration or overwrite explicit photo a
 test('v2 questionnaire fields are optional, default safely and never join the required set', () => {
   const p = publishable();
   assert.deepEqual(p.subjects, []);
+  assert.deepEqual(p.semesterCourses, []);
   assert.equal(p.goalDeadline, '');
   assert.equal(p.studyFormat, '');
   assert.equal(p.buddyGender, 'any');
@@ -130,6 +152,7 @@ test('v2 questionnaire fields are optional, default safely and never join the re
   assert.deepEqual(missingFields(p), []);
   const stored = pickProfileInput({ ...publishable(), subjects: undefined, personality: undefined, studyFormat: undefined } as unknown as Partial<ProfileInput>);
   assert.deepEqual(stored.subjects, []);
+  assert.deepEqual(stored.semesterCourses, []);
   assert.equal(stored.studyFormat, '');
   assert.deepEqual(stored.personality, { talk: 0, noise: 0, punctual: 0, plan: 0, needSupervision: 0, giveSupervision: 0, social: 0 });
   const partial = pickProfileInput({ ...publishable(), personality: { talk: 4 } as ProfileInput['personality'] });
@@ -145,15 +168,29 @@ test('server sanitization bounds subjects, deadlines, study format, buddy gender
   process.env.DATA_DIR = dir;
   try {
     const { sanitizeProfile } = await import('../server/profiles.ts');
-    const long = '超'.repeat(40);
     const clean = sanitizeProfile({
       ...publishable(),
-      subjects: [' 线性代数 ', '线性代数', 'ＩＥＬＴＳ', 'ielts', 42, '', '   ', 'Linear  Algebra', 'linear algebra', long, '雅思​', 'a', 'b', 'c', 'd', 'e'],
+      subjects: [' ＣＳ１０９ ', 'CS109', 'ＩＥＬＴＳ', 'ielts', 42, '', '   ', '雅思​'],
       goalDeadline: '2026-12-20', studyFormat: 'online', buddyGender: 'female',
       personality: { talk: 3, noise: '4', punctual: 6, plan: 2.5, social: 0, needSupervision: 5, giveSupervision: true, extra: 3 },
     });
-    assert.deepEqual(clean.subjects, ['线性代数', 'IELTS', 'Linear Algebra', '超'.repeat(30), '雅思', 'a', 'b', 'c']);
+    assert.deepEqual(clean.subjects, ['CS109 计算机程序设计基础', '雅思']);
+    assert.throws(() => sanitizeProfile({ ...publishable(), subjects: ['任意填写的课程'] }), /请从课程或考试列表中选择/);
+    assert.deepEqual(sanitizeProfile({ ...publishable(), subjects: ['原有自由科目'] }, ['原有自由科目']).subjects, ['原有自由科目']);
+    const goals = ['雅思', '托福', 'GRE', 'GMAT'];
+    assert.throws(() => sanitizeProfile({ ...publishable(), subjects: goals }), /目标科目最多选择 3 项/);
+    assert.throws(() => sanitizeProfile({ ...publishable(), subjects: goals }, goals), /目标科目最多选择 3 项/);
+    assert.deepEqual(sanitizeProfile({ ...publishable(), subjects: goals }, goals, { draft: true }).subjects, goals);
+    assert.throws(() => sanitizeProfile({ ...publishable(), subjects: goals }, [], { draft: true }), /目标科目最多选择 3 项/);
+    assert.deepEqual(sanitizeProfile({ ...publishable(), semesterCourses: ['CS109', 'CS109 计算机程序设计基础', 'CS317'] }).semesterCourses,
+      ['CS109 计算机程序设计基础', 'CS317 计算机科学与技术前沿讲座 I']);
+    for (const semesterCourses of [['雅思'], ['任意课程'], [42], 'CS109']) {
+      assert.throws(() => sanitizeProfile({ ...publishable(), semesterCourses }), /本学期课表课程只能从课程目录选择/);
+    }
     assert.equal(clean.goalDeadline, '2026-12-20');
+    assert.equal(clean.genderVisibility, 'public');
+    assert.equal(sanitizeProfile({ ...publishable(), genderVisibility: 'private' }).genderVisibility, 'private');
+    assert.equal(sanitizeProfile({ ...publishable(), genderVisibility: 'invalid' }).genderVisibility, 'public');
     assert.equal(clean.studyFormat, 'online');
     assert.equal(clean.buddyGender, 'female');
     assert.deepEqual(clean.personality, { talk: 3, noise: 0, punctual: 0, plan: 0, social: 0, needSupervision: 5, giveSupervision: 0 });

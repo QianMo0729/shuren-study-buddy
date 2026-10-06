@@ -91,6 +91,22 @@ export function sendCodeMail(to: string, code: string, purpose: string) {
   return sendMail(to, `【${BRAND}】${what}验证码`, html, `你正在进行「${what}」操作，验证码：${code}（10 分钟内有效）。请勿向他人透露验证码。如非本人操作，请忽略此邮件。`);
 }
 
+/**
+ * 发码接口收到不符合条件的邮箱时，改发这封说明邮件（见 routes/auth.ts 的 deliverCode）。
+ * 接口本身的响应不透露账号状态，只有邮箱的主人能从邮件里知道。
+ */
+export function sendAccountNoticeMail(to: string, purpose: string) {
+  const [title, text] = purpose === 'activation'
+    ? ['你的账号已经激活', '有人（可能是你本人）正在用这个邮箱对应的学号激活学习搭子账号。这个账号此前已经激活，不需要再次激活：请直接使用学校邮箱和密码登录；忘记密码时，在登录页选择「忘记密码」即可重新设置。']
+    : ['这个邮箱还没有激活账号', '有人（可能是你本人）正在为这个邮箱申请重设学习搭子的登录密码，但它还没有激活账号，所以没有可以重设的密码。如果你想使用学习搭子，请在登录页选择「激活账号」。'];
+  const html = layout(
+    title,
+    `<p style="margin:0;color:#4A5650;line-height:1.8">${text}</p>
+     <p style="margin:18px 0 0;color:#8A948E;font-size:13px;line-height:1.7">这封邮件里没有验证码。如非本人操作，请忽略此邮件。</p>`,
+  );
+  return sendMail(to, `【${BRAND}】${title}`, html, `${text}这封邮件里没有验证码。如非本人操作，请忽略此邮件。`);
+}
+
 export function sendContactRequestMail(to: string, nickname: string, matchId: number) {
   const link = `${config.appUrl}/messages/${matchId}`;
   return sendMail(

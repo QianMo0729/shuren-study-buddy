@@ -153,7 +153,7 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
           <p className="flex items-center gap-2 text-[15px] font-semibold text-ink">
             <CalendarClock size={17} /> 周期巡查
           </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-3">按参与人数设定巡查周期；新发布或修改过的内容会进入「待审核」，巡查时逐条通过或撤下。</p>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-3">内容默认直接公开，只有系统判定为极高风险的内容会暂缓公开并进入「待审核」。巡查时可复核这些内容或处理举报。</p>
           <div className="mt-5 flex items-center gap-3">
             <span className="text-[13.5px] text-ink-2">每</span>
             <div className="flex items-center rounded-full border border-line-strong/70">
@@ -230,20 +230,20 @@ function Toolbar({ filter, setFilter, q, setQ, extra, placeholder }: { filter: s
   );
 }
 
-function StatusPill({ takenDown, reviewedAt, reports }: { takenDown: boolean; reviewedAt: string | null; reports: number }) {
+function StatusPill({ takenDown, reviewPending, reports }: { takenDown: boolean; reviewPending: boolean; reports: number }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      {takenDown ? (
+      {reviewPending ? (
+        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[11.5px] font-medium text-accent">
+          <AlertTriangle size={11} /> 待审核 · 暂未公开
+        </span>
+      ) : takenDown ? (
         <span className="inline-flex items-center gap-1 rounded-full bg-danger-soft px-2 py-0.5 text-[11.5px] font-medium text-danger">
           <ShieldX size={11} /> 已撤下
         </span>
-      ) : reviewedAt ? (
-        <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[11.5px] font-medium text-brand-text">
-          <Check size={11} /> 已审核
-        </span>
       ) : (
-        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[11.5px] font-medium text-accent">
-          <AlertTriangle size={11} /> 待审核
+        <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[11.5px] font-medium text-brand-text">
+          <Check size={11} /> 已公开
         </span>
       )}
       {reports > 0 && (
@@ -253,6 +253,11 @@ function StatusPill({ takenDown, reviewedAt, reports }: { takenDown: boolean; re
       )}
     </span>
   );
+}
+
+function ReviewReasons({ reasons, pending }: { reasons: string[]; pending: boolean }) {
+  if (!pending) return null;
+  return <span className="basis-full text-[12.5px] leading-relaxed text-accent">自动暂存原因：{reasons.length ? reasons.join('；') : '极高风险内容，等待人工复核'}</span>;
 }
 
 function useList<T>(fetcher: (filter: string, q: string) => Promise<{ items: T[] }>) {
@@ -292,7 +297,7 @@ function ProfilesReview({ onChange }: { onChange: () => void }) {
   const { filter, setFilter, q, setQ, items, load } = useList<AdminProfile>(fetchProfiles);
   const [target, setTarget] = useState<Target | null>(null);
   const refresh = () => (load(), onChange());
-  const pending = items?.filter((i) => !i.takenDown && !i.reviewedAt) ?? [];
+  const pending = items?.filter((i) => i.reviewPending) ?? [];
 
   return (
     <div>
@@ -333,7 +338,8 @@ function ProfilesReview({ onChange }: { onChange: () => void }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[15px] font-semibold text-ink">{p.nickname}</span>
-                    <StatusPill takenDown={p.takenDown} reviewedAt={p.reviewedAt} reports={p.reports} />
+                    <StatusPill takenDown={p.takenDown} reviewPending={p.reviewPending} reports={p.reports} />
+                    <ReviewReasons reasons={p.reviewReasons} pending={p.reviewPending} />
                   </div>
                   <p className="mt-1 text-[12.5px] text-ink-3">
                     {p.realName || '—'} · {p.studentId || '—'} · {p.email} · {p.major || '未填专业'}
@@ -349,15 +355,15 @@ function ProfilesReview({ onChange }: { onChange: () => void }) {
                     </div>
                   )}
                   <p className="mt-2 text-[11.5px] text-ink-4">
-                    上线 {timeAgo(p.publishedAt)} · 最近保存 {dateTime(p.savedAt)}
-                    {p.takenDown && ` · 撤下于 ${dateTime(p.takenDownAt)}（${p.takedownReason}）`}
+                    {p.reviewPending ? '提交' : '上线'} {timeAgo(p.publishedAt)} · 最近保存 {dateTime(p.savedAt)}
+                    {p.takenDown && !p.reviewPending && ` · 撤下于 ${dateTime(p.takenDownAt)}（${p.takedownReason}）`}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-1.5 sm:flex-col sm:items-stretch">
                   <Link to={`/u/${p.id}`} target="_blank" className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-line-strong px-3 text-[13px] text-ink-2 hover:border-ink-4">
                     <ExternalLink size={13} /> 查看
                   </Link>
-                  {p.takenDown ? (
+                  {p.takenDown && !p.reviewPending ? (
                     <Button
                       size="sm"
                       icon={<RotateCcw size={13} />}
@@ -371,7 +377,7 @@ function ProfilesReview({ onChange }: { onChange: () => void }) {
                     </Button>
                   ) : (
                     <>
-                      {!p.reviewedAt && (
+                      {p.reviewPending && (
                         <Button
                           size="sm"
                           variant="soft"
@@ -409,7 +415,7 @@ function PostsReview({ onChange }: { onChange: () => void }) {
   const { filter, setFilter, q, setQ, items, load } = useList<AdminPost>(fetchPosts);
   const [target, setTarget] = useState<Target | null>(null);
   const refresh = () => (load(), onChange());
-  const pending = items?.filter((i) => !i.takenDown && !i.reviewedAt) ?? [];
+  const pending = items?.filter((i) => i.reviewPending) ?? [];
   return (
     <div>
       <Toolbar
@@ -446,26 +452,27 @@ function PostsReview({ onChange }: { onChange: () => void }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <CategoryTag value={p.category} />
-                    <StatusPill takenDown={p.takenDown} reviewedAt={p.reviewedAt} reports={p.reports} />
+                    <StatusPill takenDown={p.takenDown} reviewPending={p.reviewPending} reports={p.reports} />
+                    <ReviewReasons reasons={p.reviewReasons} pending={p.reviewPending} />
                   </div>
                   <p className="mt-2.5 text-[16px] font-semibold text-ink">{p.title}</p>
                   <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-ink-2">{p.description}</p>
                   <p className="mt-2 text-[11.5px] text-ink-4">
                     {p.nickname} · {p.email} · {timeAgo(p.createdAt)}发布 · {p.timeText} · {p.location}
-                    {p.takenDown && ` · 撤下于 ${dateTime(p.takenDownAt)}（${p.takedownReason}）`}
+                    {p.takenDown && !p.reviewPending && ` · 撤下于 ${dateTime(p.takenDownAt)}（${p.takedownReason}）`}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-1.5 sm:flex-col sm:items-stretch">
                   <Link to={`/events/${p.id}`} target="_blank" className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-line-strong px-3 text-[13px] text-ink-2 hover:border-ink-4">
                     <ExternalLink size={13} /> 查看
                   </Link>
-                  {p.takenDown ? (
+                  {p.takenDown && !p.reviewPending ? (
                     <Button size="sm" icon={<RotateCcw size={13} />} onClick={async () => { await api.admin.restore('post', p.id); toast.success('已恢复展示'); refresh(); }}>
                       恢复
                     </Button>
                   ) : (
                     <>
-                      {!p.reviewedAt && (
+                      {p.reviewPending && (
                         <Button size="sm" variant="soft" icon={<Check size={13} />} onClick={async () => { await api.admin.approve('post', [p.id]); refresh(); }}>
                           通过
                         </Button>
@@ -511,7 +518,7 @@ function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentT
         .then((r) => {
           setItems(r.items);
           // 列表刷新后只保留仍待审核的勾选项
-          setSelected((s) => new Set(r.items.filter((i) => s.has(i.id) && !i.takenDown && !i.reviewedAt).map((i) => i.id)));
+          setSelected((s) => new Set(r.items.filter((i) => s.has(i.id) && i.reviewPending).map((i) => i.id)));
         })
         .catch((e) => toast.error('加载失败', errorText(e))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -528,7 +535,7 @@ function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentT
     setSelected(new Set());
   };
   const refresh = () => (load(), onChange());
-  const pendingItems = items?.filter((i) => !i.takenDown && !i.reviewedAt) ?? [];
+  const pendingItems = items?.filter((i) => i.reviewPending) ?? [];
   const typeLabel = CONTENT_TYPES.find((t) => t.value === type)!.label;
 
   const approve = async (ids: number[]) => {
@@ -604,7 +611,7 @@ function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentT
         <div className="space-y-3">
           <AnimatePresence initial={false}>
             {items.map((c) => {
-              const isPending = !c.takenDown && !c.reviewedAt;
+              const isPending = c.reviewPending;
               const label = c.title || c.body.slice(0, 30) || typeLabel;
               return (
                 <motion.div key={`${c.type}-${c.id}`} layout exit={{ opacity: 0 }} className="flex gap-3 rounded-xl bg-surface p-4 sm:p-5">
@@ -622,7 +629,8 @@ function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentT
                   <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-start">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill takenDown={c.takenDown} reviewedAt={c.reviewedAt} reports={c.reports} />
+                        <StatusPill takenDown={c.takenDown} reviewPending={c.reviewPending} reports={c.reports} />
+                        <ReviewReasons reasons={c.reviewReasons} pending={c.reviewPending} />
                         {c.title && <span className={cx('min-w-0 truncate', c.type === 'forum_post' ? 'text-[15px] font-semibold text-ink' : 'text-[12.5px] text-ink-3')}>{c.title}</span>}
                       </div>
                       {c.body ? (
@@ -648,7 +656,7 @@ function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentT
                       )}
                       <p className="mt-2 text-[11.5px] text-ink-4">
                         {c.nickname || '—'} · {c.email} · {timeAgo(c.createdAt)}发布
-                        {c.takenDown && ` · 撤下于 ${dateTime(c.takenDownAt)}（${c.takedownReason}）`}
+                        {c.takenDown && !c.reviewPending && ` · 撤下于 ${dateTime(c.takenDownAt)}（${c.takedownReason}）`}
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1.5 sm:flex-col sm:items-stretch">
@@ -657,7 +665,7 @@ function CommunityReview({ pending, onChange }: { pending?: Record<AdminContentT
                           <ExternalLink size={13} /> {c.type === 'comment' ? '查看原帖' : '查看'}
                         </Link>
                       )}
-                      {c.takenDown ? (
+                      {c.takenDown && !c.reviewPending ? (
                         <Button size="sm" icon={<RotateCcw size={13} />} onClick={() => restore(c)}>
                           恢复
                         </Button>

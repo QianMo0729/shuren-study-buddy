@@ -76,7 +76,7 @@ test('review regressions', { timeout: 180_000 }, async (t) => {
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `回归测试${id}`, studentId, planTags: ['期末复习备考'], places: ['library'], schedule: [0, 1, 2, 3],
+      ...emptyProfile(), realName: `回归测试${id}`, studentId, gender: 'male', grade: 'y1', planTags: ['期末复习备考'], places: ['library'], schedule: [0, 1, 2, 3],
       studyType: 'quiet', privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
       contacts: { showEmail: false, wechat: `wechat-${id}`, qq: '', phone: '', other: '' },
       ...patch,

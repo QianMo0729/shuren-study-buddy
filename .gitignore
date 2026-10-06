@@ -2,6 +2,7 @@
 /node_modules/
 /dist/
 /coverage/
+/output/
 *.tsbuildinfo
 
 # Private environment and persistent user data

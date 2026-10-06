@@ -7,6 +7,7 @@ import { isExcluded } from './connections.ts';
 import { iso, q } from './db.ts';
 import { getProfileRow, parseData } from './profiles.ts';
 import { contentTargetFor, registerContentTarget, registerFileAccess, registerReportTarget } from './social.ts';
+import { reviewState } from './autoModeration.ts';
 
 export const FORUM_LIMITS = {
   title: 60,
@@ -19,6 +20,8 @@ export const FORUM_LIMITS = {
 } as const;
 
 export interface ForumPostRow {
+  auto_held?: number;
+  risk_reasons?: string | null;
   id: number;
   user_id: number;
   title: string;
@@ -34,6 +37,8 @@ export interface ForumPostRow {
 }
 
 export interface ForumCommentRow {
+  auto_held?: number;
+  risk_reasons?: string | null;
   id: number;
   target_type: ForumTargetType;
   target_id: number;
@@ -178,8 +183,9 @@ export function toForumPosts(rows: ForumPostRow[], viewer: Viewer, resolve = aut
       liked: e.liked,
       commentCount: e.commentCount,
       isMine: r.user_id === viewer.id,
-      takenDown: canSeeModeration && !!r.taken_down,
-      takedownReason: canSeeModeration && r.taken_down ? r.takedown_reason : null,
+      ...reviewState(r, canSeeModeration),
+      takenDown: canSeeModeration && !!r.taken_down && !r.auto_held,
+      takedownReason: canSeeModeration && r.taken_down && !r.auto_held ? r.takedown_reason : null,
     };
     const m = matches?.get(r.id);
     if (m) post.match = m;
@@ -205,6 +211,7 @@ export function toForumComment(r: ForumCommentRow, viewerId: number, resolve = a
     createdAt: iso(r.created_at)!,
     author: resolve(r.user_id).author,
     isMine: r.user_id === viewerId,
+    ...reviewState(r, r.user_id === viewerId),
   };
 }
 
@@ -233,10 +240,12 @@ registerReportTarget('forum_post', {
   canReport: (reporterId, id) => canViewPost(reporterId, id),
   label: postLabel,
   ownerOf: (id) => getPostRow(id)?.user_id ?? null,
-  // 作者之后可能修改或删除帖子，举报时留存原文
+  // 作者之后可能修改或删除帖子，举报时留存原文与图片文件名（管理员可直接打开图片；举报处理前这些图片不会被清理）
   snapshot: (id) => {
     const row = getPostRow(id);
-    return row ? `${row.title ? `${row.title}\n` : ''}${row.body}` : '';
+    if (!row) return '';
+    const images = parseImages(row.images);
+    return `${row.title ? `${row.title}\n` : ''}${row.body}${images.length ? `\n图片：${images.join('、')}` : ''}`;
   },
 });
 

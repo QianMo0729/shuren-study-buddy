@@ -76,7 +76,7 @@ test('forum posts, comments, likes, search and file access respect ownership, ex
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare("INSERT INTO users (email, activated, password_hash, role) VALUES (?, 1, 'x', ?)").run(email, opts.role ?? 'user').lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `私密姓名${id}`, studentId,
+      ...emptyProfile(), realName: `私密姓名${id}`, studentId, gender: 'male', grade: 'y1',
       contacts: { showEmail: true, wechat: `private-wechat-${id}`, qq: '', phone: '', other: '' },
       privacyConsent: consent, planTags: ['期末复习备考'], places: ['library'], schedule: [0, 1], studyType: 'quiet',
       ...opts.profile,
@@ -179,7 +179,8 @@ test('forum posts, comments, likes, search and file access respect ownership, ex
     const edited = await api(`/forum/posts/${postA}`, a.cookie, 'PUT', { title: '期末周的图书馆', body: '最近在复习线性代数和高数，一起刷题吗？', images: [imageA] });
     assert.equal(edited.status, 200, edited.text);
     assert.match(edited.body.post.body, /高数/);
-    assert.equal(db.prepare('SELECT reviewed_at FROM forum_posts WHERE id = ?').get(postA)!.reviewed_at, null, 'edits go back to review');
+    assert.ok(db.prepare('SELECT reviewed_at FROM forum_posts WHERE id = ?').get(postA)!.reviewed_at, 'ordinary edits pass automatic screening immediately');
+    assert.equal(edited.body.post.reviewPending, false);
     const disposable = (await create(a, { body: '马上删掉' })).body.post.id;
     assert.equal((await api(`/forum/posts/${disposable}`, a.cookie, 'DELETE')).status, 200);
     assert.equal((await api(`/forum/posts/${disposable}`, a.cookie)).status, 404);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { REPORT_REASONS, TAKEDOWN_REASONS } from '../../shared/options';
 import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
@@ -10,7 +10,11 @@ const TARGET_TEXT: Record<ReportTargetType, string> = {
   profile: '主页', post: '招募', forum_post: '帖子', comment: '评论', checkin: '打卡', message: '消息',
 };
 
-export function ReportDialog({ open, onClose, targetType, targetId }: { open: boolean; onClose: () => void; targetType: ReportTargetType; targetId: number }) {
+export function ReportDialog({ open, onClose, targetType, targetId, note }: {
+  open: boolean; onClose: () => void; targetType: ReportTargetType; targetId: number;
+  /** 说明文字下方的补充提示（例如私聊里告诉用户怎样举报单条消息） */
+  note?: ReactNode;
+}) {
   const toast = useToast();
   const [reason, setReason] = useState('');
   const [detail, setDetail] = useState('');
@@ -19,6 +23,7 @@ export function ReportDialog({ open, onClose, targetType, targetId }: { open: bo
     <Modal open={open} onClose={onClose} title={`举报该${TARGET_TEXT[targetType]}`} size="sm">
       <div className="px-6 pt-2 pb-6">
         <p className="text-[14px] text-ink-2">{targetType === 'message' ? '举报后，这条消息的内容会提交给管理员核实；其他聊天记录不会被查看。' : '举报只有管理员能看到，学发会尽快核实。'}</p>
+        {note && <p className="mt-2 text-[13px] leading-relaxed text-ink-3">{note}</p>}
         <div className="mt-4 space-y-1.5">
           {REPORT_REASONS.map((r) => (
             <button

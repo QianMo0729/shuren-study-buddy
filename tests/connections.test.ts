@@ -69,7 +69,7 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
   function createUser(studentId: string) {
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
-    const data = { ...emptyProfile(), schemaVersion: 2, realName: `私密姓名${id}`, studentId,
+    const data = { ...emptyProfile(), schemaVersion: 2, realName: `私密姓名${id}`, studentId, gender: 'male', grade: 'y1',
       contacts: { showEmail: true, wechat: `private-wechat-${id}`, qq: '', phone: '', other: '' },
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true } };
     db.prepare('INSERT INTO profiles (user_id, nickname, data, published) VALUES (?, ?, ?, 1)').run(id, `测试同学${id}`, JSON.stringify(data));
@@ -102,7 +102,7 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
     assert.ok(assignedNickname);
     assert.equal(initial.body.profile.studentId, studentId);
     const minimum = {
-      realName: '测试姓名', studentId: '99999999', nickname: '尝试伪造的昵称',
+      realName: '测试姓名', studentId: '99999999', nickname: '尝试伪造的昵称', gender: 'male', grade: 'y1',
       planTags: ['期末复习备考'], places: ['library'], schedule: [0], studyType: 'quiet',
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
     };
@@ -112,9 +112,11 @@ test('contact exchange, exclusion and account withdrawal preserve privacy', { ti
     assert.equal(saved.body.profile.studentId, studentId);
     assert.equal(saved.body.profile.nickname, assignedNickname);
     assert.equal(JSON.parse(String(db.prepare('SELECT data FROM profiles WHERE user_id = ?').get(member.id)!.data)).studentId, studentId);
-    for (const field of ['gender', 'major', 'grade', 'mbti', 'bio', 'frequency', 'duration']) {
+    for (const field of ['major', 'mbti', 'bio', 'frequency', 'duration']) {
       assert.equal(saved.body.profile[field], '', `${field} must remain optional`);
     }
+    assert.equal(saved.body.profile.gender, 'male');
+    assert.equal(saved.body.profile.grade, 'y1');
     assert.equal((await api('/profiles/me/nickname', member.cookie, 'POST', {})).status, 410);
     assert.equal((await api('/profiles/me', member.cookie)).body.profile.nickname, assignedNickname);
 

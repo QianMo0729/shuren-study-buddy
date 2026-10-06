@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ChevronDown, Lock, ShieldCheck } from 'lucide-react';
 import type { ChatSummary, ContactRequest, ContactReveal } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { useToast } from '../../lib/toast';
-import { Button, ConfirmDialog } from '../ui';
+import { Button, ConfirmDialog, Input } from '../ui';
 import { ContactRows } from '../ContactRequests';
 
 const REREQUEST_DAYS = 7;
@@ -30,9 +30,12 @@ export function ContactCard({ other, contactState, onChanged }: {
   const [loaded, setLoaded] = useState(false);
   const [problem, setProblem] = useState<Problem>(null);
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState<'request' | 'accept' | null>(null);
+  const [confirm, setConfirm] = useState<'request' | 'accept' | 'reject' | null>(null);
   const [expanded, setExpanded] = useState(false);
   const revision = useRef(0);
+  // 因为自己还没填联系方式而没做成的那一步：填好之后接着做，不用回到问卷再绕回来
+  const blocked = useRef<'request' | 'accept'>('request');
+  const [own, setOwn] = useState({ wechat: '', qq: '' });
 
   const load = useCallback(async () => {
     const mine = ++revision.current;
@@ -79,10 +82,28 @@ export function ContactCard({ other, contactState, onChanged }: {
       setConfirm(null);
     }
   };
-  const sendRequest = () => act(() => api.requestConnection(other.id, ''), '已申请交换联系方式');
+  const sendRequest = () => {
+    blocked.current = 'request';
+    return act(() => api.requestConnection(other.id, ''), '已申请交换联系方式');
+  };
   const respond = (action: 'accept' | 'reject') => {
     if (!request) return;
+    if (action === 'accept') blocked.current = 'accept';
     void act(() => api.respondConnection(request.id, action), action === 'accept' ? '已同意交换联系方式' : '已拒绝交换');
+  };
+  const saveMineAndContinue = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy || (!own.wechat.trim() && !own.qq.trim())) return;
+    setBusy(true);
+    try {
+      await api.saveContacts({ wechat: own.wechat.trim(), qq: own.qq.trim() });
+    } catch (cause) {
+      setBusy(false);
+      toast.error('联系方式没有保存成功', cause instanceof ApiError ? cause.message : undefined);
+      return;
+    }
+    if (blocked.current === 'accept') respond('accept');
+    else void sendRequest();
   };
 
   if (!loaded) return <div className="h-[52px] border-b border-line bg-surface-2" aria-hidden />;
@@ -116,7 +137,7 @@ export function ContactCard({ other, contactState, onChanged }: {
     actions = (
       <>
         <Button size="sm" variant="primary" disabled={busy} onClick={() => setConfirm('accept')}>同意</Button>
-        <Button size="sm" disabled={busy} loading={busy && confirm === null} onClick={() => respond('reject')}>拒绝</Button>
+        <Button size="sm" disabled={busy} onClick={() => setConfirm('reject')}>拒绝</Button>
       </>
     );
   } else if (state === 'rejected' && request?.direction === 'outgoing') {
@@ -140,10 +161,16 @@ export function ContactCard({ other, contactState, onChanged }: {
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
       {problem?.kind === 'needContacts' && (
-        <div className="border-t border-line px-4 py-2.5 text-[13px] text-ink-2" role="alert">
-          <p>{problem.message}</p>
-          <Link to="/me/edit" className="mt-1 inline-block font-semibold text-brand-text underline">去填写联系方式</Link>
-        </div>
+        <form className="border-t border-line px-4 py-3" onSubmit={saveMineAndContinue}>
+          <p className="text-[13px] leading-relaxed text-ink-2" role="alert">交换之前，先填一种你自己的联系方式。它只在双方都同意后给对方看到，之后可以在问卷里修改。</p>
+          <div className="mt-2.5 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <Input aria-label="我的微信号" placeholder="微信号" maxLength={40} value={own.wechat} disabled={busy} onChange={(e) => setOwn((v) => ({ ...v, wechat: e.target.value }))} />
+            <Input aria-label="我的 QQ 号" placeholder="QQ 号" inputMode="numeric" maxLength={20} value={own.qq} disabled={busy} onChange={(e) => setOwn((v) => ({ ...v, qq: e.target.value.replace(/\D/g, '') }))} />
+            <Button type="submit" variant="primary" loading={busy} disabled={!own.wechat.trim() && !own.qq.trim()}>
+              {blocked.current === 'accept' ? '保存并同意交换' : '保存并发送申请'}
+            </Button>
+          </div>
+        </form>
       )}
       {state === 'pending_incoming' && !problem && (
         <p className="border-t border-line px-4 py-2 text-[12.5px] text-ink-3">同意后，你在资料里填写的联系方式会向对方开放；开启了交换校园邮箱的话，邮箱里包含学号。</p>
@@ -155,14 +182,16 @@ export function ContactCard({ other, contactState, onChanged }: {
       )}
       <ConfirmDialog
         open={confirm !== null}
-        title={confirm === 'accept' ? '同意交换联系方式？' : '申请交换联系方式？'}
+        title={confirm === 'accept' ? '同意交换联系方式？' : confirm === 'reject' ? '暂时不交换联系方式？' : '申请交换联系方式？'}
         desc={confirm === 'accept'
           ? `同意后，你和 ${other.nickname} 会互相看到对方在资料里填写的联系方式（微信、QQ、手机等；开启交换的校园邮箱包含学号）。`
-          : `对方同意后，你们会互相看到对方在资料里填写的联系方式。被拒绝后需要等 ${REREQUEST_DAYS} 天才能再次申请。`}
-        confirmText={confirm === 'accept' ? '同意交换' : '发送申请'}
+          : confirm === 'reject'
+            ? `${other.nickname} 会在聊天里看到你暂时不想交换，${REREQUEST_DAYS} 天内不能再次申请。你之后可以随时改为主动申请。`
+            : `对方同意后，你们会互相看到对方在资料里填写的联系方式。被拒绝后需要等 ${REREQUEST_DAYS} 天才能再次申请。`}
+        confirmText={confirm === 'accept' ? '同意交换' : confirm === 'reject' ? '暂不交换' : '发送申请'}
         loading={busy}
         onCancel={() => { if (!busy) setConfirm(null); }}
-        onConfirm={() => (confirm === 'accept' ? respond('accept') : void sendRequest())}
+        onConfirm={() => (confirm === 'accept' ? respond('accept') : confirm === 'reject' ? respond('reject') : void sendRequest())}
       />
     </section>
   );

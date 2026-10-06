@@ -2,15 +2,17 @@ import crypto from 'node:crypto';
 import {
   BUDDY_GENDERS, FUTURE_PLANS, GENDERS, GRADES, MBTIS, MODES, PLACES, SLOT_COUNT, SPORTS, STATUSES, STUDY_TYPES, TRAITS,
   overlapSlots, slotsHours, STUDY_METHODS, FREQUENCIES, DURATIONS, INTERESTS, DISLIKE_OPTIONS, PLAN_PRESETS,
-  PERSONALITY_ITEMS, STUDY_FORMATS,
+  PERSONALITY_ITEMS, STUDY_FORMATS, SUBJECT_LIMIT, SEMESTER_COURSE_LIMIT,
 } from '../shared/options.ts';
 import { SPECIES } from '../shared/species.ts';
-import { emptyProfile, missingFields, pickProfileInput, hasPrivacyConsent } from '../shared/profileRules.ts';
+import { emptyProfile, missingFields, pickProfileInput, hasPrivacyConsent, publicGender } from '../shared/profileRules.ts';
 export { emptyProfile, missingFields };
 import type { MyProfile, Personality, ProfileCard, ProfileInput, PublicProfile, StudyFormat } from '../shared/types.ts';
 import { iso, q } from './db.ts';
+import { reviewState } from './autoModeration.ts';
 import { HttpError } from './auth.ts';
 import { matchStateFor } from './matches.ts';
+import { invalidSelectedSemesterCourses, invalidSelectedSubjects, normalizeSelectedSemesterCourses, normalizeSelectedSubjects } from '../shared/courseCatalog.ts';
 
 // ---------- 系统随机昵称 ----------
 
@@ -35,8 +37,40 @@ const pickMany = (v: unknown, allowed: { value: string }[]) =>
   Array.isArray(v) ? [...new Set(v.filter((x) => allowed.some((o) => o.value === x)).map(String))] : [];
 const fileName = (v: unknown) => (typeof v === 'string' && /^[a-f0-9]{24}\.(jpg|png|webp)$/.test(v) ? v : null);
 
-export function sanitizeProfile(raw: any): ProfileInput {
+export function sanitizeContacts(c: any): ProfileInput['contacts'] {
+  return {
+    showEmail: c?.showEmail === true,
+    wechat: str(c?.wechat, 40),
+    qq: str(c?.qq, 20).replace(/\D/g, ''),
+    phone: str(c?.phone, 20).replace(/[^\d+\- ]/g, ''),
+    other: str(c?.other, 60),
+  };
+}
+
+export function sanitizeProfile(raw: any, legacySubjects: string[] = [], options: { draft?: boolean } = {}): ProfileInput {
   const r = raw ?? {};
+  const subjects = normalizeSelectedSubjects(r.subjects, legacySubjects);
+  const newUnknown = invalidSelectedSubjects(r.subjects).filter((subject) => !normalizeSelectedSubjects([subject], legacySubjects).length);
+  if (newUnknown.length) throw new HttpError(400, '请从课程或考试列表中选择，不能直接填写', {
+    missing: [{ key: 'subjects', label: '具体课程 / 考试（请从列表重新选择）' }],
+  });
+  const legacy = new Set(normalizeSelectedSubjects(legacySubjects, legacySubjects));
+  if (subjects.length > SUBJECT_LIMIT && !(options.draft && subjects.every((subject) => legacy.has(subject)))) {
+    throw new HttpError(400, `目标科目最多选择 ${SUBJECT_LIMIT} 项，请先删减`, {
+      missing: [{ key: 'subjects', label: `目标科目（最多 ${SUBJECT_LIMIT} 项）` }],
+    });
+  }
+  if ((r.semesterCourses !== undefined && !Array.isArray(r.semesterCourses)) || invalidSelectedSemesterCourses(r.semesterCourses).length) {
+    throw new HttpError(400, '本学期课表课程只能从课程目录选择，不能加入考试或自行填写', {
+      missing: [{ key: 'semesterCourses', label: '本学期课表课程（请从课程目录选择）' }],
+    });
+  }
+  const semesterCourses = normalizeSelectedSemesterCourses(r.semesterCourses);
+  if (semesterCourses.length > SEMESTER_COURSE_LIMIT) {
+    throw new HttpError(400, `本学期课表课程最多选择 ${SEMESTER_COURSE_LIMIT} 门`, {
+      missing: [{ key: 'semesterCourses', label: `本学期课表课程（最多 ${SEMESTER_COURSE_LIMIT} 门）` }],
+    });
+  }
   const c = r.contacts ?? {};
   const consent = r.privacyConsent ?? {};
   const slots = (v: unknown) => Array.isArray(v) ? [...new Set(v.filter((n) => Number.isInteger(n) && n >= 0 && n < SLOT_COUNT))].sort((a, b) => a - b) : [];
@@ -53,6 +87,7 @@ export function sanitizeProfile(raw: any): ProfileInput {
     realName: str(r.realName, 30),
     studentId: String(r.studentId ?? '').replace(/\D/g, '').slice(0, 8),
     gender: pick(r.gender, GENDERS),
+    genderVisibility: r.genderVisibility === 'private' ? 'private' : 'public',
     grade: pick(r.grade, GRADES),
     major: str(r.major, 60),
     buddyGender: pick(r.buddyGender, BUDDY_GENDERS) || 'any',
@@ -66,13 +101,7 @@ export function sanitizeProfile(raw: any): ProfileInput {
     studyPlan: str(r.studyPlan, 200),
     planTags: (Array.isArray(r.planTags) ? r.planTags : []).map((t: unknown) => str(t, 12)).filter(Boolean).filter((t: string) => PLAN_PRESETS.includes(t)).slice(0, 8),
     mbti: str(r.mbti, 30),
-    contacts: {
-      showEmail: c.showEmail === true,
-      wechat: str(c.wechat, 40),
-      qq: str(c.qq, 20).replace(/\D/g, ''),
-      phone: str(c.phone, 20).replace(/[^\d+\- ]/g, ''),
-      other: str(c.other, 60),
-    },
+    contacts: sanitizeContacts(c),
     status: pick(r.status, STATUSES) || 'seeking',
     futurePlan: pick(r.futurePlan, FUTURE_PLANS),
     futurePlanOther: str(r.futurePlanOther, 30),
@@ -96,15 +125,7 @@ export function sanitizeProfile(raw: any): ProfileInput {
     photoVisibility: r.photoVisibility === 'public' ? 'public' : 'private',
     privacyConsent: { policy: consent.policy === true, contactExchange: consent.contactExchange === true,
       silentExclusion: consent.silentExclusion === true, withdrawal: consent.withdrawal === true },
-    // 具体科目：全角转半角、合并空白、去掉控制字符；忽略大小写与空白后重复的只保留第一个
-    subjects: (Array.isArray(r.subjects) ? r.subjects : [])
-      .filter((t: unknown) => typeof t === 'string')
-      .map((t: string) => t.normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/gu, ' ').trim()).map((t: string) => [...t].slice(0, 30).join('').trim())
-      .filter((t: string, i: number, all: string[]) => {
-        const key = (x: string) => x.toLowerCase().replace(/\s+/gu, '');
-        return !!key(t) && all.findIndex((x) => key(x) === key(t)) === i;
-      })
-      .slice(0, 8),
+    semesterCourses, subjects,
     goalDeadline: calendarDate(r.goalDeadline),
     studyFormat: (pick(r.studyFormat, STUDY_FORMATS) || '') as StudyFormat,
     // 每题 1–5 的整数，其余一律视为未回答（0）
@@ -118,6 +139,8 @@ export function sanitizeProfile(raw: any): ProfileInput {
 // ---------- 读取 ----------
 
 interface ProfileRow {
+  auto_held?: number;
+  risk_reasons?: string | null;
   user_id: number;
   nickname: string;
   data: string;
@@ -167,9 +190,10 @@ export function toMyProfile(row: ProfileRow): MyProfile {
     published: !!row.published,
     publishedAt: iso(row.published_at),
     savedAt: iso(row.saved_at),
-    takenDown: !!row.taken_down,
+    ...reviewState(row),
+    takenDown: !!row.taken_down && !row.auto_held,
     takenDownAt: iso(row.taken_down_at),
-    takedownReason: row.takedown_reason,
+    takedownReason: row.auto_held ? null : row.takedown_reason,
     stats: { views: row.views, favorites, contactViews },
   };
 }
@@ -179,7 +203,7 @@ export function toCard(row: ProfileRow, d: ProfileInput, me: { id: number; sched
     id: row.user_id,
     nickname: row.nickname,
     major: d.major,
-    gender: d.gender,
+    gender: publicGender(d),
     grade: d.grade,
     studyType: d.studyType,
     modes: d.modes,
@@ -197,14 +221,14 @@ export function toCard(row: ProfileRow, d: ProfileInput, me: { id: number; sched
 
 export const overlapHoursOf = (a: number[], b: number[]) => slotsHours(overlapSlots(a, b));
 
-export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, mySchedule: number[]): PublicProfile {
+export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, mySchedule: number[], isAdmin = false): PublicProfile {
   const c = d.contacts;
   const isFavorite = !!q.get('SELECT 1 FROM favorites WHERE user_id = ? AND target_id = ?', viewerId, row.user_id);
   const relation = matchStateFor(viewerId, row.user_id);
   return {
     id: row.user_id,
     nickname: row.nickname,
-    gender: d.gender,
+    gender: publicGender(d),
     grade: d.grade,
     major: d.major,
     buddyGender: d.buddyGender,
@@ -243,10 +267,34 @@ export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, myS
     hasContacts: !!(c.showEmail || c.wechat || c.qq || c.phone || c.other),
     overlap: row.user_id === viewerId ? [] : overlapSlots(d.schedule, mySchedule),
     mySchedule,
-    takenDown: !!row.taken_down,
+    ...reviewState(row, row.user_id === viewerId || isAdmin),
+    takenDown: !!row.taken_down && !row.auto_held,
     matchState: relation.state,
     matchId: relation.matchId,
   };
+}
+
+/** 举报主页时留存的快照：当时展示给其他同学的文字内容，以及公开照片的文件名 */
+export function profileSnapshot(row: ProfileRow, d: ProfileInput): string {
+  const join = (...parts: string[]) => parts.filter(Boolean).join('；');
+  const lines: [string, string][] = [
+    ['昵称', row.nickname],
+    ['专业 / 院系', d.major],
+    ['一句话描述', d.studyPlan],
+    ['自我介绍', d.bio],
+    ['对搭子的期待', d.expectations],
+    ['雷区补充', d.dislikes],
+    ['科研 / 备赛', d.goalResearch],
+    ['自学技能', d.goalSkills],
+    ['其他目标', d.goalOther],
+    ['MBTI', d.mbti],
+    ['近期目标', d.planTags.join('、')],
+    ['科目', d.subjects.join('、')],
+    ['地点补充', join(d.placesOther, d.expectedPlacesOther)],
+    ['其他补充', join(d.futurePlanOther, d.traitsOther, d.sportsOther, d.arts, d.studyMethodsOther, d.interestsOther)],
+    ['公开照片', d.photoVisibility === 'public' && hasPrivacyConsent(d) ? d.photos.join('、') : ''],
+  ];
+  return lines.filter(([, value]) => value).map(([label, value]) => `${label}：${value}`).join('\n');
 }
 
 /** 广场上所有已发布的主页 */

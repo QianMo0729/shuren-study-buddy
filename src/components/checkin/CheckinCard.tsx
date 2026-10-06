@@ -1,3 +1,4 @@
+import { PendingReviewBadge } from '../ReviewStatus';
 import { motion } from 'motion/react';
 import { useState } from 'react';
 import { Lock, MapPin, MessageSquare } from 'lucide-react';
@@ -42,13 +43,13 @@ export function CheckinCard({ checkin, onOpen, onChange, index = 0 }: {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease, delay: Math.min(index, 6) * 0.03 }}
-      className={cx('rounded-md border bg-surface p-4 transition-colors duration-150 hover:border-line-strong sm:p-5', c.takenDown ? 'border-danger/40' : 'border-line')}
+      className={cx('rounded-md border bg-surface p-4 transition-colors duration-150 hover:border-line-strong sm:p-5', c.reviewPending ? 'border-accent/40' : c.takenDown ? 'border-danger/40' : 'border-line')}
       aria-labelledby={`checkin-${c.id}-title`}
     >
       <div className="flex items-start justify-between gap-3">
         <AuthorLine author={c.author} time={c.stampedAt} />
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-          {c.takenDown && <span className="rounded-[4px] bg-danger-soft px-2 py-0.5 text-[12px] text-danger">已被撤下，仅你可见</span>}
+          {c.reviewPending ? <PendingReviewBadge /> : c.takenDown && <span className="rounded-[4px] bg-danger-soft px-2 py-0.5 text-[12px] text-danger">已被撤下，仅你可见</span>}
           {c.visibility === 'buddies' && (
             <span className="inline-flex items-center gap-1 rounded-[4px] bg-paper-2 px-2 py-0.5 text-[12px] text-ink-2">
               <Lock size={11} aria-hidden /> 仅搭子可见
@@ -71,7 +72,7 @@ export function CheckinCard({ checkin, onOpen, onChange, index = 0 }: {
       </p>
 
       <div className="mt-3 -mb-1 flex items-center gap-1 border-t border-line pt-2">
-        <LikeButton type="checkin" id={c.id} liked={c.liked} count={c.likeCount} onChange={(r) => onChange?.({ liked: r.liked, likeCount: r.likeCount })} />
+        {!c.takenDown && !c.reviewPending && <LikeButton type="checkin" id={c.id} liked={c.liked} count={c.likeCount} onChange={(r) => onChange?.({ liked: r.liked, likeCount: r.likeCount })} />}
         <span className="inline-flex h-8 items-center gap-1.5 px-2 text-[13px] text-ink-3">
           <MessageSquare size={16} aria-hidden />
           <span className="tabular">{c.commentCount > 0 ? c.commentCount : '评论'}</span>

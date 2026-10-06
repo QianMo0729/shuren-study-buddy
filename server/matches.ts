@@ -119,7 +119,7 @@ function ensureMatch(a: number, b: number): { match: MatchRow; created: boolean 
   }
   const [x, y] = pair(a, b);
   const id = Number(q.run('INSERT INTO matches (user_a, user_b) VALUES (?, ?)', x, y).lastInsertRowid);
-  addSystemMessage(id, '你们互相感兴趣啦！先打个招呼，聊聊学习目标和时间安排。确认合适后，再决定是否交换联系方式。');
+  addSystemMessage(id, '你们互相感兴趣啦！先打个招呼，聊聊学习目标和时间安排。');
   return { match: q.get<MatchRow>('SELECT * FROM matches WHERE id = ?', id)!, created: true };
 }
 

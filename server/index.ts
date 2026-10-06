@@ -16,6 +16,7 @@ import { matchRouter } from './routes/match.ts';
 import { chatRouter } from './routes/chat.ts';
 import { forumRouter } from './routes/forum.ts';
 import { checkinRouter } from './routes/checkins.ts';
+import { startUploadMaintenance } from './uploads.ts';
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -78,6 +79,8 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   res.status(500).json({ error: '服务器开小差了，请稍后再试' });
 });
+
+startUploadMaintenance();
 
 app.listen(config.port, config.host, () => {
   console.log(`\n🌳 树仁学发 · 学习搭子 API 已启动：http://${config.host}:${config.port}`);

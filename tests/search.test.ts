@@ -89,6 +89,24 @@ test('gender preference is an optional mutual filter and empty criteria list rem
   assert.ok(advancedMatch({ criteria: [], mutualGender: false }, '', femalePreference, me));
 });
 
+test('hidden genders cannot be identified through profile or post-author criteria, including exclusion and scoring', () => {
+  const hidden: ProfileInput = { ...profile, genderVisibility: 'private' };
+  for (const value of ['female', 'male', 'other']) {
+    for (const mode of ['must', 'should', 'not'] as const) {
+      const criterion: Criterion = { field: 'gender', values: [value], mode };
+      assert.equal(criterionHit(criterion, hidden, '', []), false);
+      const query = { matchMode: 'fuzzy' as const, criteria: [criterion, should('studyType', ['quiet'])] };
+      const female = advancedMatch(query, '', hidden, me);
+      const male = advancedMatch(query, '', { ...hidden, gender: 'male' }, me);
+      assert.deepEqual(female, male, `hidden gender must not affect ${mode} ${value} search`);
+      assert.deepEqual(evaluateCriteria(query, (c) => criterionHit(c, hidden, '', [])), female);
+      assert.ok(!female?.matched.some((field) => field.endsWith(':gender')));
+    }
+  }
+  assert.equal(criterionHit(should('gender', ['female']), profile, '', []), true);
+  assert.ok(advancedMatch({ criteria: [] }, '', hidden, me));
+});
+
 test('subjects criterion normalizes width, case, spacing, synonyms and containment', () => {
   const learner = { ...profile, subjects: ['线性代数II', 'C 语言程序设计', 'IELTS'] };
   for (const value of ['线代', '线性代数', 'c语言', 'Ｃ 语言程序设计', '雅思', '数分、线代']) {

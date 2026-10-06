@@ -29,7 +29,7 @@ export function MatchCelebration({ match, onClose }: {
           </div>
           <h3 id="match-celebration-title" className="mt-6 font-display text-[24px] text-ink">你们互相感兴趣了</h3>
           <p id="match-celebration-desc" className="mt-2 text-[14px] leading-relaxed text-ink-2">
-            你和 <Nickname name={match.nickname} size={15} className="align-baseline" /> 都对彼此感兴趣。先打个招呼，聊聊学习目标和时间安排，确认合适后再决定是否交换联系方式。
+            你和 <Nickname name={match.nickname} size={15} className="align-baseline" /> 都对彼此感兴趣。先打个招呼，聊聊学习目标和时间安排。
           </p>
           <div className="mt-6 flex flex-col gap-2 sm:flex-row-reverse sm:justify-center">
             <Button variant="primary" size="lg" icon={<MessageCircle size={17} />} onClick={() => { onClose(); nav(`/messages/${match.matchId}`); }} autoFocus>

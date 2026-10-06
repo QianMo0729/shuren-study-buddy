@@ -160,7 +160,8 @@ export const SUBJECT_SUGGESTIONS: Record<string, string[]> = {
   技能自学: ['Python', '机器学习', 'LeetCode', 'CPA', 'SQL'],
   考研: ['考研数学一', '考研英语一', '考研政治', '408 计算机'],
 };
-export const SUBJECT_LIMIT = 8;
+export const SUBJECT_LIMIT = 3;
+export const SEMESTER_COURSE_LIMIT = 30;
 
 /** 推荐契合度档位（rules-v2：score ≥ 80 很合拍，≥ 65 较合拍，其余可以聊聊） */
 export const RECOMMENDATION_TIERS: Record<'great' | 'good' | 'fair', { label: string; min: number }> = {

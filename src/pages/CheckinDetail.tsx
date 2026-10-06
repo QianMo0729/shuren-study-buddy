@@ -1,3 +1,4 @@
+import { PendingReviewNotice } from '../components/ReviewStatus';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ChevronLeft, ExternalLink, Flag, Lock, MapPin, ShieldX, Trash2 } from 'lucide-react';
@@ -74,7 +75,7 @@ export function CheckinDetail() {
         <ChevronLeft size={17} /> 打卡
       </button>
 
-      {c.takenDown && (
+      {c.reviewPending ? <PendingReviewNotice /> : c.takenDown && (
         <p className="mb-4 rounded-md bg-danger-soft px-4 py-3 text-[14px] text-danger" role="status">
           这条打卡已被管理员撤下{c.takedownReason ? `，原因：${c.takedownReason}` : ''}。只有{c.isMine ? '你' : '作者'}和管理员能看到。
         </p>
@@ -114,7 +115,7 @@ export function CheckinDetail() {
           </dl>
 
           <div className="mt-3 flex flex-wrap items-center gap-1">
-            {!c.takenDown && (
+            {!c.takenDown && !c.reviewPending && (
               <LikeButton type="checkin" id={c.id} liked={c.liked} count={c.likeCount} onChange={(r) => setCheckin({ ...c, liked: r.liked, likeCount: r.likeCount })} />
             )}
             <div className="ml-auto flex flex-wrap items-center gap-1">
@@ -123,7 +124,7 @@ export function CheckinDetail() {
                   删除
                 </Button>
               ) : (
-                !c.takenDown && (
+                !c.takenDown && !c.reviewPending && (
                   <Button variant="ghost" size="sm" icon={<Flag size={14} />} className="text-ink-3 hover:text-danger" onClick={() => setReporting(true)}>
                     举报
                   </Button>
@@ -140,7 +141,9 @@ export function CheckinDetail() {
       </div>
 
       <section className="mt-8 max-w-[720px]" aria-label="评论">
-        {c.takenDown ? (
+        {c.reviewPending ? (
+          <p className="rounded-md bg-paper-2 px-4 py-3 text-[14px] text-ink-3">打卡审核通过后可以评论。</p>
+        ) : c.takenDown ? (
           <p className="rounded-md bg-paper-2 px-4 py-3 text-[14px] text-ink-3">打卡被撤下后不能再评论。</p>
         ) : (
           <Comments type="checkin" id={c.id} />

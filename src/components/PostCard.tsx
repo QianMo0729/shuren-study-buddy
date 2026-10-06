@@ -1,3 +1,4 @@
+import { PendingReviewBadge } from './ReviewStatus';
 import { motion } from 'motion/react';
 import { Heart, ShieldX } from 'lucide-react';
 import { POST_CATEGORIES } from '../../shared/options';
@@ -24,7 +25,7 @@ export function CategoryTag({ value, className }: { value: string; className?: s
 
 export function InterestButton({ post, onChange, size = 'md' }: { post: Post; onChange: (p: Partial<Post>) => void; size?: 'md' | 'lg' }) {
   const toast = useToast();
-  const disabled = post.isMine || (post.status === 'closed' && !post.interested);
+  const disabled = post.isMine || post.reviewPending || !!post.takenDown || (post.status === 'closed' && !post.interested);
   return (
     <button
       disabled={disabled}
@@ -74,6 +75,7 @@ export function PostCard({ post, onOpen, onChange, isAdmin, onTakedown }: {
         <CategoryTag value={post.category} />
         <span className="text-[12.5px] text-ink-3">{post.status === 'closed' ? '已结束' : timeAgo(post.createdAt)}</span>
       </div>
+      {post.reviewPending && <div className="mt-2"><PendingReviewBadge /></div>}
       <h3 className="mt-3 font-display text-[20px] leading-snug text-ink">{post.title}</h3>
       <p className="mt-1.5 line-clamp-2 text-[14px] leading-relaxed text-ink-2">{post.description}</p>
       <dl className="mt-4 grid grid-cols-[3em_minmax(0,1fr)] gap-x-2 gap-y-1 text-[13.5px]">
@@ -107,7 +109,7 @@ export function PostCard({ post, onOpen, onChange, isAdmin, onTakedown }: {
           >
             <ShieldX size={13} /> 撤下
           </button>
-        ) : post.status === 'open' ? (
+        ) : post.status === 'open' && !post.reviewPending && !post.takenDown ? (
           <InterestButton post={post} onChange={onChange} />
         ) : null}
       </div>

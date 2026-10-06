@@ -1,7 +1,7 @@
 import type {
-  AdvancedQuery, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal,
+  AdvancedQuery, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal, ContentReviewState,
   DeckCard, DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, ForumComment, ForumPost, ForumTargetType, ModerationTargetType,
-  MyProfile, NotificationItem, Post, PostSearchQuery, ProfileCard, ProfileInput, PublicProfile, RecommendationResponse, ReportTargetType, SessionUser,
+  MyProfile, NotificationItem, Post, PostSearchQuery, ProfileCard, ProfileDraft, ProfileInput, PublicProfile, QuestionnaireSection, RecommendationResponse, ReportTargetType, SessionUser,
 } from '../../shared/types';
 
 export class ApiError extends Error {
@@ -78,8 +78,11 @@ export const api = {
   restoreConnection: (userId: number) => del<{ ok: true }>(`/connections/${userId}/exclude`),
 
   myProfile: () => get<{ profile: MyProfile; missing: Missing }>('/profiles/me'),
+  profileDraft: () => get<{ draft: ProfileDraft | null }>('/profiles/me/draft'),
+  saveProfileDraft: (profile: ProfileInput, section: QuestionnaireSection) => put<{ draft: ProfileDraft }>('/profiles/me/draft', { profile, section }),
+  saveContacts: (contacts: { wechat?: string; qq?: string }) => put<{ contacts: { wechat: string; qq: string } }>('/profiles/me/contacts', contacts),
   saveProfile: (profile: ProfileInput) => put<{ profile: MyProfile; missing: Missing }>('/profiles/me', { profile }),
-  publish: () => post<{ ok: true }>('/profiles/me/publish'),
+  publish: () => post<{ ok: true } & ContentReviewState>('/profiles/me/publish'),
   unpublish: () => post<{ ok: true }>('/profiles/me/unpublish'),
 
   square: (q = '', sort = 'latest') =>
@@ -133,7 +136,7 @@ export const api = {
   checkins: {
     /** 打开摄像头后领取的一次性拍照凭证 */
     session: () => post<CheckinSession>('/checkins/session'),
-    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } | null }) =>
+    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } | null; placeId?: string | null }) =>
       post<{ checkin: Checkin; stats: CheckinStats }>('/checkins', b),
     list: (p: { scope?: 'all' | 'buddies' | 'mine'; before?: number } = {}) => get<{ items: Checkin[]; hasMore: boolean }>(`/checkins${qs(p)}`),
     get: (id: number) => get<{ checkin: Checkin }>(`/checkins/${id}`),
@@ -204,17 +207,17 @@ export interface AdminOverview {
   pendingContent: Record<AdminContentType, number>;
   review: ReviewState;
 }
-export interface AdminProfile {
+export interface AdminProfile extends ContentReviewState {
   id: number; nickname: string; email: string; realName: string; studentId: string; major: string; bio: string; studyPlan: string;
   cover: string | null; photos: string[]; publishedAt: string | null; reviewedAt: string | null; savedAt: string | null;
   takenDown: boolean; takenDownAt: string | null; takedownReason: string | null; reports: number;
 }
-export interface AdminPost {
+export interface AdminPost extends ContentReviewState {
   id: number; title: string; category: string; description: string; timeText: string; location: string; authorId: number;
   nickname: string; email: string; status: string; createdAt: string; reviewedAt: string | null; takenDown: boolean;
   takenDownAt: string | null; takedownReason: string | null; reports: number;
 }
-export interface AdminContent {
+export interface AdminContent extends ContentReviewState {
   type: AdminContentType; id: number; authorId: number; nickname: string; email: string;
   /** 帖子标题；评论为「评论 · 所属内容」；打卡为「地点 · 盖章时间」 */
   title: string; body: string; image: string | null; images: string[]; link: string | null; createdAt: string; reviewedAt: string | null;

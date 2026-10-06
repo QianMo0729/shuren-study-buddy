@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import jpeg from 'jpeg-js';
 import {
-  CAMPUS, CAMPUS_PLACES, MAX_ACCURACY_TOLERANCE_M, NO_LOCATION_LABEL, OFF_CAMPUS_LABEL, allPlaceLabels, distanceM, placeLabelFor,
+  CAMPUS, CAMPUS_PLACES, MAX_BUILDING_ACCURACY_M, NO_LOCATION_LABEL, OFF_CAMPUS_LABEL, allPlaceLabels, placeLabelFor,
 } from '../shared/campusPlaces.ts';
 import { GLYPHS, GLYPH_HEIGHT } from '../server/watermarkFont.ts';
 import { glyphOf, layoutWatermark, missingGlyphs, paintWatermark, stampWatermark, textWidth } from '../server/watermark.ts';
@@ -55,6 +55,17 @@ test('character set covers every place label, the time line and printable ASCII'
   for (const place of CAMPUS_PLACES) assert.deepEqual(missingGlyphs(`${CAMPUS.short}·${place.label}`), []);
   assert.deepEqual(missingGlyphs('0123456789-: 北京时间 年月日'), []);
   for (let c = 0x20; c <= 0x7e; c++) assert.deepEqual(missingGlyphs(String.fromCharCode(c)), []);
+});
+
+test('every selectable building watermark, including its manual-selection suffix, has complete glyphs', () => {
+  for (const place of CAMPUS_PLACES) {
+    const label = placeLabelFor(null, place.id);
+    assert.match(label, /（手选）$/);
+    assert.deepEqual(missingGlyphs(label), [], `manual building label lacks glyphs: ${label}`);
+    for (const character of label) {
+      assert.ok(GLYPHS[character], `missing actual glyph for ${character} in ${label}`);
+    }
+  }
 });
 
 test('layout: block size s = max(2, round(min(w,h)/400)), bottom-right, 4s margins, 3s line gap', () => {
@@ -201,43 +212,23 @@ test('stampWatermark decodes, stamps and re-encodes a JPEG without its metadata'
   assert.throws(() => stampWatermark(Buffer.from('not a jpeg'), LINES));
 });
 
-test('placeLabelFor maps coordinates to place text', () => {
+test('placeLabelFor maps verified building interiors to watermark text', () => {
   assert.equal(placeLabelFor(null), NO_LOCATION_LABEL);
   assert.equal(placeLabelFor({ lat: Number.NaN, lng: 0, accuracy: 10 }), NO_LOCATION_LABEL);
-  for (const p of CAMPUS_PLACES) {
+  for (const p of CAMPUS_PLACES.filter((place) => place.automatic)) {
     assert.equal(placeLabelFor({ lat: p.lat, lng: p.lng, accuracy: 5 }), `${CAMPUS.short}·${p.label}`);
   }
-  // 远离校园
   assert.equal(placeLabelFor({ lat: 39.9042, lng: 116.4074, accuracy: 20 }), OFF_CAMPUS_LABEL);
   assert.equal(placeLabelFor({ lat: 22.5, lng: 113.9, accuracy: 20 }), OFF_CAMPUS_LABEL);
-
-  // 校园内但不靠近任何地点 →「南方科技大学」
-  let inside: { lat: number; lng: number } | null = null;
-  for (let dy = -0.009; dy <= 0.009 && !inside; dy += 0.0005) {
-    for (let dx = -0.009; dx <= 0.009 && !inside; dx += 0.0005) {
-      const pt = { lat: CAMPUS.center.lat + dy, lng: CAMPUS.center.lng + dx };
-      if (distanceM(pt, CAMPUS.center) < CAMPUS.radiusM - 50 && CAMPUS_PLACES.every((p) => distanceM(pt, p) > p.radiusM + 60)) inside = pt;
-    }
-  }
-  assert.ok(inside, 'test needs a campus point away from all places');
-  assert.equal(placeLabelFor({ ...inside, accuracy: 10 }), CAMPUS.name);
+  // 南科大中心没有独立的一丹建筑轮廓，不能把综合体自动当成图书馆。
+  assert.equal(placeLabelFor({ lat: 22.59998770717294, lng: 113.9923345196037, accuracy: 5 }), CAMPUS.name);
+  assert.equal(placeLabelFor(null, 'yidan-library'), '南科大·一丹图书馆（手选）');
 });
 
-test('location accuracy widens the match, but by at most 150 m', () => {
-  const north = (p: { lat: number; lng: number }, m: number) => ({ lat: p.lat + m / 111_195, lng: p.lng });
-  // 找一个北边没有其他地点干扰的地点做测试
-  const isolated = CAMPUS_PLACES.find((p) => [100, p.radiusM + MAX_ACCURACY_TOLERANCE_M + 40].every((extra) => {
-    const pt = north(p, p.radiusM + extra);
-    return CAMPUS_PLACES.every((o) => o.id === p.id || distanceM(pt, o) > o.radiusM + MAX_ACCURACY_TOLERANCE_M + 10);
-  }));
-  assert.ok(isolated, 'test needs an isolated place');
-  const label = `${CAMPUS.short}·${isolated.label}`;
-  const near = north(isolated, isolated.radiusM + 100);
-  assert.notEqual(placeLabelFor({ ...near, accuracy: 10 }), label);
-  assert.equal(placeLabelFor({ ...near, accuracy: 120 }), label);
-  // 精度再差，也只按 150 米容忍
-  const far = north(isolated, isolated.radiusM + MAX_ACCURACY_TOLERANCE_M + 40);
-  assert.notEqual(placeLabelFor({ ...far, accuracy: 5000 }), label);
-  // 多个地点都符合时取最近的
-  for (const p of CAMPUS_PLACES) assert.equal(placeLabelFor({ lat: p.lat, lng: p.lng, accuracy: 150 }), `${CAMPUS.short}·${p.label}`);
+test('poor GPS precision never expands a building match', () => {
+  for (const p of CAMPUS_PLACES) {
+    for (const accuracy of [MAX_BUILDING_ACCURACY_M + 1, 120, 150, 5000]) {
+      assert.equal(placeLabelFor({ lat: p.lat, lng: p.lng, accuracy }), CAMPUS.name, `${p.id}: ±${accuracy}m`);
+    }
+  }
 });

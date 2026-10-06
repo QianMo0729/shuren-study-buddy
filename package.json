@@ -20,6 +20,7 @@
   "dependencies": {
     "@chinese-fonts/dymh": "^3.0.0",
     "@fontsource/source-sans-3": "^5.3.0",
+    "ahocorasick": "1.0.2",
     "bcryptjs": "^3.0.3",
     "express": "^5.2.1",
     "jpeg-js": "^0.4.4",

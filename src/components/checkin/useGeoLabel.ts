@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { placeLabelFor, type GeoInput } from '../../../shared/campusPlaces';
+import { resolveLocation, type GeoInput } from '../../../shared/campusPlaces';
 
 export type GeoState =
   | { status: 'off' }
@@ -54,6 +54,7 @@ export function useGeoLabel(enabled: boolean) {
     };
   }, [enabled]);
 
-  const fresh = state.status === 'ok' && Date.now() - state.at < STALE_MS ? state.loc : null;
-  return { state, location: fresh, label: placeLabelFor(fresh) };
+  const fresh = enabled && state.status === 'ok' && Date.now() - state.at < STALE_MS ? state.loc : null;
+  const resolution = resolveLocation(fresh);
+  return { state, location: fresh, label: resolution.label, resolution };
 }

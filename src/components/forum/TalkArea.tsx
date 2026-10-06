@@ -14,8 +14,8 @@ import { CardSkeleton, ProfileCard } from '../ProfileCard';
 import { ProfileOverlay } from '../ProfileOverlay';
 import { Illustration } from '../brand';
 import { ForumPostCard, PostSkeleton } from './ForumPostCard';
-import { PostComposer } from './PostComposer';
-import { onAccountChanged } from '../../lib/auth';
+import { PostComposerDialog } from './PostComposerDialog';
+import { onAccountChanged, useAuth } from '../../lib/auth';
 
 type Target = 'posts' | 'people';
 type Mode =
@@ -36,6 +36,7 @@ onAccountChanged(() => { feedCache = null; });
 /** 聊天区：发帖、帖子流、关键词检索与高级检索（帖子 / 同学） */
 export function TalkArea() {
   const nav = useNavigate();
+  const { user } = useAuth();
   const mobile = useIsMobile(1024);
   const [mode, setMode] = useState<Mode>({ kind: 'feed' });
   const [input, setInput] = useState('');
@@ -228,7 +229,7 @@ export function TalkArea() {
             : `找到 ${people.length} 位同学 · ${mode.query.matchMode === 'fuzzy' ? '模糊匹配' : '精确匹配'} · 按符合条件数排序`;
 
   return (
-    <div>
+    <div className="pb-10">
       <div className="flex gap-2">
         <label className="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-md border border-line-strong bg-surface px-3.5 transition-[border-color,box-shadow] focus-within:border-brand focus-within:shadow-[0_0_0_3px_var(--brand-soft)]">
           <Search size={17} className="shrink-0 text-ink-3" aria-hidden />
@@ -305,8 +306,6 @@ export function TalkArea() {
         </div>
       )}
 
-      {mode.kind === 'feed' && <div className="mb-4"><PostComposer collapsible onDone={onCreated} /></div>}
-
       {mode.kind === 'people' ? (
         loading ? (
           <div className={CARD_GRID}>{Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}</div>
@@ -357,6 +356,8 @@ export function TalkArea() {
           {error && <p className="text-center text-[13px] text-danger" role="alert">{error}</p>}
         </div>
       )}
+
+      <PostComposerDialog key={user?.id ?? 'anon'} onDone={onCreated} />
 
       <AnimatePresence>
         {openCard && (

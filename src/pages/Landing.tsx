@@ -40,6 +40,8 @@ export function Landing() {
   }, []);
 
   const go = () => nav(user ? '/match' : '/login');
+  // 第一次来的同学没有密码：入口直接通向「用学号激活」，而不是邮箱密码登录
+  const activate = () => nav('/login?mode=activate');
   const counts = meta?.breakdown?.species ?? {};
   const published = meta?.stats.profiles ?? 0;
   const kinds = Object.keys(counts).length;
@@ -61,9 +63,14 @@ export function Landing() {
               </Link>
             </>
           )}
-          <Button size="sm" variant={user ? 'primary' : 'secondary'} onClick={go}>
-            {user ? '开始匹配' : '登录'}
-          </Button>
+          {user ? (
+            <Button size="sm" variant="primary" onClick={go}>开始匹配</Button>
+          ) : (
+            <span className="flex items-center gap-2">
+              <Button size="sm" variant="primary" onClick={activate}>激活账号</Button>
+              <Button size="sm" variant="secondary" onClick={go}>登录</Button>
+            </span>
+          )}
         </nav>
       </header>
 
@@ -106,9 +113,14 @@ export function Landing() {
               这是树仁书院同学的学习搭子平台。填写学习问卷后，系统会根据双方的时间、学习内容和学习性格推荐合拍的同学；互相感兴趣就能私聊。你也可以在校园社区分享生活、拍照打卡，或发起一场招募。
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
-              <Button variant="primary" size="lg" onClick={go}>
-                {user ? '查看为我推荐的搭子' : '邮箱与密码登录'}
+              <Button variant="primary" size="lg" onClick={user ? go : activate}>
+                {user ? '查看为我推荐的搭子' : '用学号激活账号'}
               </Button>
+              {!user && (
+                <Link to="/login" className="text-[15px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
+                  已有账号，登录
+                </Link>
+              )}
               <a href="#notes" className="text-[15px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
                 先读凡例
               </a>
@@ -180,8 +192,8 @@ export function Landing() {
         </figure>
         <div className="flex flex-wrap items-center justify-between gap-5 py-12 sm:py-16">
           <p className="font-display text-[26px] tracking-[-0.03em] text-ink sm:text-[32px]">轮到你写自己的那一页了。</p>
-          <Button variant="primary" size="lg" onClick={() => nav(user ? '/me/edit' : '/login')}>
-            {user ? '编辑我的问卷' : '登录并填写'}
+          <Button variant="primary" size="lg" onClick={() => (user ? nav('/me/edit') : activate())}>
+            {user ? '编辑我的问卷' : '激活账号并填写'}
           </Button>
         </div>
       </section>

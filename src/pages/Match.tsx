@@ -1,9 +1,10 @@
 import { AnimatePresence, LayoutGroup } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useMatch, useNavigate, useSearchParams } from 'react-router';
+import { Link, useLocation, useMatch, useNavigate, useSearchParams } from 'react-router';
 import { ChevronRight, Info, RefreshCw, Sparkles } from 'lucide-react';
 import type { DeckCard, DeckResponse, PublicProfile } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { useToast } from '../lib/toast';
 import { Button, Empty, Segmented } from '../components/ui';
 import { CardSkeleton, ProfileCard } from '../components/ProfileCard';
@@ -19,6 +20,43 @@ const CARD_GRID = 'grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-4
 const errorText = (cause: unknown) => (cause instanceof ApiError ? cause.message : '网络连接失败，请稍后重试');
 
 export function Match() {
+  const { user } = useAuth();
+  // 未提交问卷时留在匹配页；推荐组件尚未挂载，不会请求卡组、列表或个人主页。
+  return user?.questionnaireComplete ? <MatchResults /> : <QuestionnaireRequired />;
+}
+
+function QuestionnaireRequired() {
+  return (
+    <>
+      <header className="mb-5 border-b border-ink pt-5 pb-4 sm:mb-6 sm:pt-10 sm:pb-5">
+        <h1 className="font-display text-[30px] leading-[1.1] tracking-[-0.02em] text-ink sm:text-[46px]">匹配推荐</h1>
+        <p className="mt-2 text-[13.5px] text-ink-2 sm:text-[15px]">让小树仁先了解你的学习习惯，再帮你找到合拍的搭子。</p>
+      </header>
+      <section aria-labelledby="questionnaire-required-title" className="mx-auto flex max-w-xl flex-col items-center py-7 text-center sm:py-10">
+        <img
+          src="/assets/mascot-questionnaire.png"
+          alt="小树仁拿着问卷和铅笔，微笑着等你一起填写"
+          width={1254}
+          height={1254}
+          className="mb-6 size-52 object-contain sm:size-64"
+        />
+        <p className="mb-2 text-[13px] font-semibold tracking-[0.12em] text-brand-text">小树仁的小提醒</p>
+        <h2 id="questionnaire-required-title" className="font-display text-[27px] leading-snug text-ink sm:text-[32px]">请先完成问卷，才能看见匹配结果</h2>
+        <p className="mt-3 max-w-sm text-[14px] leading-7 text-ink-2 sm:text-[15px]">告诉我你的学习时间、目标和偏好，我会帮你寻找更合拍的学习搭子。</p>
+        <Link
+          to="/me/edit?onboarding=1"
+          className="mt-6 inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand px-6 text-[15px] font-semibold text-white transition-colors hover:bg-brand-2"
+        >
+          去完成我的问卷
+          <ChevronRight size={17} aria-hidden />
+        </Link>
+        <p className="mt-3 text-[12.5px] leading-relaxed text-ink-3">问卷会自动保存，可以随时回来继续填写。</p>
+      </section>
+    </>
+  );
+}
+
+function MatchResults() {
   const nav = useNavigate();
   const [params] = useSearchParams();
   const view: View = params.get('view') === 'list' ? 'list' : 'cards';
@@ -27,12 +65,28 @@ export function Match() {
   const toast = useToast();
   const [celebration, setCelebration] = useState<{ matchId: number; nickname: string; cover: string | null } | null>(null);
   const [selected, setSelected] = useState<DeckCard | null>(null);
-  const [profileHint, setProfileHint] = useState(false);
+  const [profileHint, setProfileHint] = useState<{ text: string; to: string } | null>(null);
+  const location = useLocation();
+
+  // 刚提交完问卷：这是唯一会把主页公开出去的一步，给一个明确的回执（只显示一次）
+  const announced = useRef(false);
+  useEffect(() => {
+    if (announced.current || !(location.state as { justMatched?: boolean } | null)?.justMatched) return;
+    announced.current = true;
+    toast.success('问卷已提交，主页已发布', '下面是为你推荐的同学。之后修改问卷，要重新提交才会更新主页。');
+    nav({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
+  }, [location.state]);
   const changed = useRef<number | null>(null);
 
+  const explained = useRef(false);
   const deck = useDeckQueue({
     limit: 20,
     onMatched: (card, result) => setCelebration({ matchId: result.matchId!, nickname: card.nickname, cover: card.cover }),
+    // 与主页上的提示一致；规则只在第一次说明，之后每次只确认这一下生效了
+    onLiked: (card) => {
+      toast.success(`已对 ${card.nickname} 表示感兴趣`, explained.current ? undefined : '对方也感兴趣时，你们就可以私聊；在那之前对方不会知道。可以在「我的 → 推荐偏好」里查看和撤回。');
+      explained.current = true;
+    },
     onError: (title, desc) => toast.error(title, desc),
   });
 
@@ -42,7 +96,11 @@ export function Match() {
     api.myProfile().then(({ profile }) => {
       if (!alive) return;
       const noPersonality = !Object.values(profile.personality ?? {}).some((value) => value >= 1);
-      setProfileHint(noPersonality || !profile.subjects?.length);
+      const noSubjects = !profile.subjects?.length;
+      // 只提示真正没填的那一项
+      setProfileHint(noPersonality && noSubjects ? { text: '补充学习性格与具体科目，推荐更准', to: '/me/edit#personality' }
+        : noPersonality ? { text: '补充 7 道学习性格小题，推荐更准', to: '/me/edit#personality' }
+        : noSubjects ? { text: '补充想一起学的具体科目，推荐更准', to: '/me/edit#goals' } : null);
     }).catch(() => undefined);
     return () => { alive = false; };
   }, []);
@@ -83,9 +141,9 @@ export function Match() {
       </header>
 
       {profileHint && (
-        <Link to="/me/edit#personality" className="mb-4 flex items-center gap-3 rounded-md border border-brand/20 bg-brand-softer px-4 py-3 text-[14px] text-ink transition-colors hover:border-brand/40">
+        <Link to={profileHint.to} className="mb-4 flex items-center gap-3 rounded-md border border-brand/20 bg-brand-softer px-4 py-3 text-[14px] text-ink transition-colors hover:border-brand/40">
           <Sparkles size={17} className="shrink-0 text-brand-text" aria-hidden />
-          <span className="min-w-0 flex-1">补充学习性格与具体科目，推荐更准</span>
+          <span className="min-w-0 flex-1">{profileHint.text}</span>
           <ChevronRight size={16} className="shrink-0 text-ink-3" aria-hidden />
         </Link>
       )}

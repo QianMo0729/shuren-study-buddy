@@ -2,6 +2,12 @@
 
 export type Role = 'user' | 'admin';
 
+/** 仅极高风险内容暂缓公开，等待管理员复核；其余内容直接发布。 */
+export interface ContentReviewState {
+  reviewPending: boolean;
+  reviewReasons: string[];
+}
+
 export interface SessionUser {
   id: number;
   email: string;
@@ -44,6 +50,7 @@ export interface ProfileInput {
   realName: string;
   studentId: string;
   gender: string;
+  genderVisibility: 'public' | 'private';
   grade: string;
   major: string; // 专业/院系 id，见 shared/majors.ts
   buddyGender: string;
@@ -84,12 +91,23 @@ export interface ProfileInput {
   interestsOther: string;
   photoVisibility: 'private' | 'public';
   privacyConsent: PrivacyConsent;
-  /** 具体科目 / 课程 / 考试，如「线性代数」「雅思」「CS231n」，最多 8 项 */
+  /** 本学期课表课程，仅本人可见，不参与匹配评分，最多 30 门标准课程。 */
+  semesterCourses: string[];
+  /** 本次学习目标的科目（标准课程或考试），最多 3 项。 */
   subjects: string[];
   /** 目标截止日期（考试日等），'' 或 YYYY-MM-DD */
   goalDeadline: string;
   studyFormat: StudyFormat;
   personality: Personality;
+}
+
+export type QuestionnaireSection = 'identity' | 'demographics' | 'goals' | 'study' | 'personality' | 'expectations' | 'privacy' | 'review';
+
+/** 自动保存的未提交答案，与已经发布的资料独立存储。 */
+export interface ProfileDraft {
+  form: ProfileInput;
+  section: QuestionnaireSection;
+  updatedAt: string;
 }
 
 export interface PrivacyConsent {
@@ -99,7 +117,7 @@ export interface PrivacyConsent {
   withdrawal: boolean;
 }
 
-export interface MyProfile extends ProfileInput {
+export interface MyProfile extends ProfileInput, ContentReviewState {
   userId: number;
   nickname: string;
   email: string;
@@ -201,6 +219,8 @@ export interface FeedbackItem {
   nickname: string;
   action: FeedbackAction;
   createdAt: string;
+  /** 这条「不感兴趣」是解除配对时自动记下的 */
+  closedMatch?: boolean;
 }
 
 // ---------- 私聊 ----------
@@ -239,7 +259,7 @@ export interface ForumAuthor {
   profileVisible: boolean;
 }
 
-export interface ForumPost {
+export interface ForumPost extends ContentReviewState {
   id: number;
   title: string;
   body: string;
@@ -256,7 +276,7 @@ export interface ForumPost {
   match?: MatchInfo;
 }
 
-export interface ForumComment {
+export interface ForumComment extends ContentReviewState {
   id: number;
   targetType: ForumTargetType;
   targetId: number;
@@ -268,7 +288,7 @@ export interface ForumComment {
 
 export type CheckinVisibility = 'all' | 'buddies';
 
-export interface Checkin {
+export interface Checkin extends ContentReviewState {
   id: number;
   image: string;
   caption: string;
@@ -319,7 +339,7 @@ export interface MatchInfo {
 }
 
 /** 他人主页（公开字段，不含姓名、学号） */
-export interface PublicProfile {
+export interface PublicProfile extends ContentReviewState {
   id: number;
   nickname: string;
   gender: string;
@@ -397,7 +417,7 @@ export interface ContactRequest {
   direction: 'incoming' | 'outgoing';
 }
 
-export interface Post {
+export interface Post extends ContentReviewState {
   id: number;
   title: string;
   category: string;

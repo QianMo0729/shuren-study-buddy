@@ -11,9 +11,11 @@ const message = (cause: unknown) => (cause instanceof ApiError ? cause.message :
  * 滑卡队列：首次加载、乐观提交反馈、撤销上一步，以及卡片快用完时自动拉取下一批。
  * 本轮已经处理过的同学不会因为请求尚未完成而再次出现。
  */
-export function useDeckQueue({ limit = 20, onMatched, onError }: {
+export function useDeckQueue({ limit = 20, onMatched, onLiked, onError }: {
   limit?: number;
   onMatched?: (card: DeckCard, result: FeedbackResult) => void;
+  /** 表示了感兴趣、对方还没有回应 */
+  onLiked?: (card: DeckCard) => void;
   onError?: (title: string, desc?: string) => void;
 } = {}) {
   const [queue, setQueue] = useState<DeckCard[]>([]);
@@ -28,8 +30,8 @@ export function useDeckQueue({ limit = 20, onMatched, onError }: {
   const generation = useRef(0);
   const queueRef = useRef<DeckCard[]>([]);
   queueRef.current = queue;
-  const callbacks = useRef({ onMatched, onError });
-  callbacks.current = { onMatched, onError };
+  const callbacks = useRef({ onMatched, onLiked, onError });
+  callbacks.current = { onMatched, onLiked, onError };
 
   const reload = useCallback(async () => {
     const gen = ++generation.current;
@@ -89,8 +91,12 @@ export function useDeckQueue({ limit = 20, onMatched, onError }: {
     setLast(null);
     try {
       const result = await api.match.feedback(card.id, action);
-      if (action !== 'like') setLast({ card, action });
+      // 每一种选择都能撤销上一步；只有已经互相感兴趣（配对已建立）时不能，那要到私聊里解除
       if (result.matched && result.matchId) callbacks.current.onMatched?.(card, result);
+      else {
+        setLast({ card, action });
+        if (action === 'like') callbacks.current.onLiked?.(card);
+      }
     } catch (cause) {
       decided.current.delete(card.id);
       // 放回最前面，方便重试；对方已不可见时（404）直接移除

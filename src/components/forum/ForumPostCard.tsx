@@ -1,3 +1,4 @@
+import { PendingReviewBadge } from '../ReviewStatus';
 import { motion } from 'motion/react';
 import { useState } from 'react';
 import { MessageSquare } from 'lucide-react';
@@ -32,13 +33,13 @@ export function ForumPostCard({ post, onOpen, onChange, matchLabel, index = 0 }:
       onClick={onOpen}
       className={cx(
         'cursor-pointer rounded-md border bg-surface p-4 transition-colors duration-150 hover:border-line-strong sm:p-5',
-        post.takenDown ? 'border-danger/40' : 'border-line',
+        post.reviewPending ? 'border-accent/40' : post.takenDown ? 'border-danger/40' : 'border-line',
       )}
       aria-labelledby={`post-${post.id}-text`}
     >
       <div className="flex items-start justify-between gap-3">
         <AuthorLine author={post.author} time={post.createdAt} />
-        {post.takenDown && <span className="shrink-0 rounded-[4px] bg-danger-soft px-2 py-0.5 text-[12px] text-danger">已被撤下，仅你可见</span>}
+        {post.reviewPending ? <PendingReviewBadge /> : post.takenDown && <span className="shrink-0 rounded-[4px] bg-danger-soft px-2 py-0.5 text-[12px] text-danger">已被撤下，仅你可见</span>}
         {post.match && post.match.total > 0 && (
           <span className="shrink-0 rounded-sm px-1.5 py-0.5 font-display text-seal" title={`符合 ${post.match.score} 项，共 ${post.match.total} 项`}>
             <span className="text-[17px] leading-none">{post.match.score}</span>
@@ -72,7 +73,7 @@ export function ForumPostCard({ post, onOpen, onChange, matchLabel, index = 0 }:
 
       <div className="mt-3 -mb-1 flex items-center gap-1 border-t border-line pt-2">
         {/* 被撤下的帖子（只有作者自己看得到）不能点赞，与详情页一致 */}
-        {!post.takenDown && <LikeButton type="post" id={post.id} liked={post.liked} count={post.likeCount} onChange={(r) => onChange?.({ liked: r.liked, likeCount: r.likeCount })} />}
+        {!post.takenDown && !post.reviewPending && <LikeButton type="post" id={post.id} liked={post.liked} count={post.likeCount} onChange={(r) => onChange?.({ liked: r.liked, likeCount: r.likeCount })} />}
         <span className="inline-flex h-8 items-center gap-1.5 px-2 text-[13px] text-ink-3">
           <MessageSquare size={16} aria-hidden />
           <span className="tabular">{post.commentCount > 0 ? post.commentCount : '评论'}</span>

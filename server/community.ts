@@ -3,6 +3,7 @@
 // 所有可被管理员撤下的内容表都包含：user_id, created_at, deleted, taken_down, taken_down_at, takedown_reason, reviewed_at。
 import { db, q } from './db.ts';
 import { registerAccountCleanup } from './social.ts';
+import { initializeAutoModeration } from './autoModeration.ts';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS forum_posts (
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS forum_posts (
   reviewed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_forum_posts_created ON forum_posts(created_at);
+CREATE INDEX IF NOT EXISTS idx_forum_posts_user ON forum_posts(user_id);
 
 CREATE TABLE IF NOT EXISTS forum_comments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +76,8 @@ CREATE TABLE IF NOT EXISTS checkin_sessions (
   used INTEGER NOT NULL DEFAULT 0
 );
 `);
+
+initializeAutoModeration();
 
 // 举报时留存的内容快照单独存一列，举报人填写的说明永远不会被当作“被举报内容”展示
 if (!q.all<{ name: string }>('PRAGMA table_info(reports)').some((c) => c.name === 'snapshot')) {

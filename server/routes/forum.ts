@@ -1,7 +1,8 @@
 import { Router, type Request } from 'express';
 import type { ForumTargetType, MatchInfo } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
-import { q } from '../db.ts';
+import { q, tx } from '../db.ts';
+import { applyAutoModeration } from '../autoModeration.ts';
 import {
   FORUM_LIMITS, type ForumPostRow, type ForumCommentRow, type Viewer, authorResolver, excerpt, getCommentRow, getPostRow,
   notExcludedSql, postVisibleTo, toForumComment, toForumPost, toForumPosts,
@@ -148,9 +149,11 @@ forumRouter.post('/posts', (req, res) => {
   const recent = q.get<{ n: number }>("SELECT COUNT(*) n FROM forum_posts WHERE user_id = ? AND created_at > datetime('now', '-1 day')", uid)!.n;
   if (recent >= FORUM_LIMITS.postsPerDay) throw new HttpError(429, '今天发的帖子有点多啦，明天再来吧');
   ensureProfile(uid); // 作者以系统昵称展示
-  const id = Number(
-    q.run('INSERT INTO forum_posts (user_id, title, body, images) VALUES (?, ?, ?, ?)', uid, p.title, p.body, JSON.stringify(p.images)).lastInsertRowid,
-  );
+  const id = tx(() => {
+    const id = Number(q.run('INSERT INTO forum_posts (user_id, title, body, images) VALUES (?, ?, ?, ?)', uid, p.title, p.body, JSON.stringify(p.images)).lastInsertRowid);
+    applyAutoModeration('forum_posts', id, `${p.title}\n${p.body}`);
+    return id;
+  });
   res.json({ post: toForumPost(getPostRow(id)!, viewerOf(req)) });
 });
 
@@ -173,11 +176,10 @@ forumRouter.put('/posts/:id', (req, res) => {
   rateLimit(`forum-edit:${uid}`, 30, 3600_000);
   const row = ownPost(parseId(req.params.id), uid);
   const p = sanitizePost(req.body, uid);
-  // 修改后重新进入待审核
-  q.run(
-    "UPDATE forum_posts SET title = ?, body = ?, images = ?, updated_at = datetime('now'), reviewed_at = NULL WHERE id = ?",
-    p.title, p.body, JSON.stringify(p.images), row.id,
-  );
+  tx(() => {
+    q.run("UPDATE forum_posts SET title = ?, body = ?, images = ?, updated_at = datetime('now') WHERE id = ?", p.title, p.body, JSON.stringify(p.images), row.id);
+    applyAutoModeration('forum_posts', row.id, `${p.title}\n${p.body}`);
+  });
   res.json({ post: toForumPost(getPostRow(row.id)!, viewerOf(req)) });
 });
 
@@ -256,9 +258,9 @@ forumRouter.get('/:type/:id/comments', (req, res) => {
   const rows = q
     .all<ForumCommentRow>(
       `SELECT c.* FROM forum_comments c
-       WHERE c.target_type = ? AND c.target_id = ? AND c.deleted = 0 AND c.taken_down = 0 AND (c.user_id = ? OR ${notExcludedSql('c.user_id')})
+       WHERE c.target_type = ? AND c.target_id = ? AND c.deleted = 0 AND (c.taken_down = 0 OR (c.auto_held = 1 AND c.user_id = ?)) AND (c.user_id = ? OR ${notExcludedSql('c.user_id')})
        ORDER BY c.id DESC LIMIT 300`,
-      type, id, uid, uid, uid,
+      type, id, uid, uid, uid, uid,
     )
     .reverse();
   const resolve = authorResolver(uid);
@@ -274,14 +276,17 @@ forumRouter.post('/:type/:id/comments', (req, res) => {
   const recent = q.get<{ n: number }>("SELECT COUNT(*) n FROM forum_comments WHERE user_id = ? AND created_at > datetime('now', '-1 day')", uid)!.n;
   if (recent >= FORUM_LIMITS.commentsPerDay) throw new HttpError(429, '今天的评论有点多啦，明天再来吧');
   const me = ensureProfile(uid);
-  const commentId = Number(
-    q.run('INSERT INTO forum_comments (target_type, target_id, user_id, body) VALUES (?, ?, ?, ?)', type, id, uid, body).lastInsertRowid,
-  );
+  const commentId = tx(() => {
+    const newId = Number(q.run('INSERT INTO forum_comments (target_type, target_id, user_id, body) VALUES (?, ?, ?, ?)', type, id, uid, body).lastInsertRowid);
+    applyAutoModeration('forum_comments', newId, body);
+    return newId;
+  });
+  const comment = getCommentRow(commentId)!;
   const owner = t.ownerOf(id);
-  if (owner !== null && owner !== uid) {
+  if (!comment.auto_held && owner !== null && owner !== uid) {
     notify(owner, `${me.nickname} 评论了你的${type === 'post' ? '帖子' : '打卡'}`, excerpt(body, 60), t.link(id));
   }
-  res.json({ comment: toForumComment(getCommentRow(commentId)!, uid) });
+  res.json({ comment: toForumComment(comment, uid) });
 });
 
 // ---------- 点赞 ----------

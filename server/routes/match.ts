@@ -94,9 +94,10 @@ matchRouter.get('/feedback', (req, res) => {
   const uid = req.user!.id;
   const action = req.query.action;
   if (!isAction(action)) throw new HttpError(400, '请选择要查看的反馈类型');
-  const rows = q.all<{ target_id: number; nickname: string; action: FeedbackAction; created_at: string; data: string }>(
-    `SELECT f.target_id, p.nickname, f.action, f.updated_at AS created_at, p.data
+  const rows = q.all<{ target_id: number; nickname: string; action: FeedbackAction; created_at: string; data: string; match_status: string | null; closed_by: number | null }>(
+    `SELECT f.target_id, p.nickname, f.action, f.updated_at AS created_at, p.data, m.status AS match_status, m.closed_by
      FROM match_feedback f
+     LEFT JOIN matches m ON m.user_a = min(f.user_id, f.target_id) AND m.user_b = max(f.user_id, f.target_id)
      JOIN profiles p ON p.user_id = f.target_id
      JOIN users u ON u.id = f.target_id
      WHERE f.user_id = ? AND f.action = ? AND p.published = 1 AND p.taken_down = 0
@@ -107,6 +108,12 @@ matchRouter.get('/feedback', (req, res) => {
   );
   const items: FeedbackItem[] = rows
     .filter((row) => consented(row.data))
-    .map((row) => ({ targetId: row.target_id, nickname: row.nickname, action: row.action, createdAt: iso(row.created_at)! }));
+    // 已经互相感兴趣的同学在私聊里，不属于“等待对方回应”
+    .filter((row) => !(action === 'like' && row.match_status === 'active'))
+    .map((row) => ({
+      targetId: row.target_id, nickname: row.nickname, action: row.action, createdAt: iso(row.created_at)!,
+      // 这条「不感兴趣」来自我解除配对，而不是在卡片上的选择
+      closedMatch: action === 'dislike' && row.match_status === 'closed' && row.closed_by === uid,
+    }));
   res.json({ items });
 });

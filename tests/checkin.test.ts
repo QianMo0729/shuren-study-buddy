@@ -105,7 +105,7 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare("INSERT INTO users (email, activated, password_hash, role) VALUES (?, 1, 'x', ?)").run(email, opts.role ?? 'user').lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `私密姓名${id}`, studentId,
+      ...emptyProfile(), realName: `私密姓名${id}`, studentId, gender: 'male', grade: 'y1',
       contacts: { showEmail: true, wechat: `private-wechat-${id}`, qq: '', phone: '', other: '' },
       privacyConsent: consent, ...opts.profile,
     };
@@ -210,6 +210,9 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
       [{ image: 'abc.jpg' }, /JPEG/],
       [{ image: dataUrl(photo(200, 480)) }, /尺寸/],
       [{ image: dataUrl(photo(640, 200)) }, /尺寸/],
+      // 网页相机最长边 1600；超过 2560 或 400 万像素的图片不解码
+      [{ image: dataUrl(photo(2600, 480)) }, /尺寸/],
+      [{ image: dataUrl(photo(2400, 1800)) }, /尺寸/],
       [{ image: dataUrl(withCameraExif(photo())) }, /相册/],
       [{ image: dataUrl(Buffer.concat([photo().subarray(0, 200)])) }, /JPEG|无法识别/],
       [{ caption: 'x'.repeat(201) }, /200/],
@@ -232,6 +235,28 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     assert.equal((await api(`/checkins/${r.body.checkin.id}`, other.cookie, 'DELETE')).status, 200);
   });
 
+  await t.test('photos are stamped off the request thread: one at a time per account, registered with their size', async () => {
+    const snapper = createUser();
+    const [first, second] = [await session(snapper, false), await session(snapper)];
+    const big = dataUrl(photo(1600, 1200));
+    // 两个不同的凭证同时提交：第一张还在盖章时，第二张被拒绝，且它的凭证没有被消耗
+    const pair = await Promise.all([submit(snapper, { token: first.token, image: big }), submit(snapper, { token: second.token, image: big })]);
+    assert.deepEqual(pair.map((r) => r.status).sort(), [200, 429], pair.map((r) => r.text).join(' | '));
+    const refused = pair.find((r) => r.status === 429)!;
+    assert.match(refused.body.error, /还在处理/);
+    const retry = await submit(snapper, { token: pair[0].status === 429 ? first.token : second.token });
+    assert.equal(retry.status, 200, 'the refused attempt kept its capture token');
+    // 盖章期间其他请求照常得到响应
+    const third = await session(snapper);
+    const [slow, ping] = await Promise.all([submit(snapper, { token: third.token, image: big }), api('/checkins/stats', other.cookie)]);
+    assert.equal(slow.status, 200, slow.text);
+    assert.equal(ping.status, 200);
+    const stored = db.prepare("SELECT name, bytes FROM uploads WHERE user_id = ? AND kind = 'checkin'").all(snapper.id) as { name: string; bytes: number }[];
+    assert.equal(stored.length, 3);
+    for (const file of stored) assert.equal(file.bytes, (await fs.stat(path.join(app.dir, 'uploads', file.name))).size);
+    db.prepare('UPDATE checkins SET deleted = 1 WHERE user_id = ?').run(snapper.id);
+  });
+
   await t.test('/api/uploads cannot produce check-in photos', async () => {
     const r = await api('/uploads', author.cookie, 'POST', { dataUrl: dataUrl(photo()), kind: 'checkin' });
     if (r.status === 200) {
@@ -251,7 +276,7 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     const before = Date.now();
     const r = await submit(author, {
       token: s.token, caption: '  图书馆三楼，线代第三章  ', visibility: 'all',
-      location: { lat: lynn.lat, lng: lynn.lng, accuracy: 12 },
+      location: { lat: lynn.lat, lng: lynn.lng, accuracy: 5 },
       stampedAt: '2001-01-01T00:00:00.000Z', stampText: '2001-01-01 08:00:00 北京时间', serverTime: '2001-01-01T00:00:00.000Z', time: 978307200000,
     });
     const after = Date.now();
@@ -304,6 +329,25 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     buddiesImage = r2.body.checkin.image;
     assert.equal(r2.body.checkin.placeLabel, NO_LOCATION_LABEL);
     assert.equal(r2.body.stats.total, 2);
+  });
+
+  await t.test('manual building selection is validated before consuming the token and stamped as manual', async () => {
+    const visitor = createUser();
+    const s = await session(visitor);
+    for (const placeId of ['<script>fake building</script>', 'unknown-dorm', 12, { id: 'yidan-library' }]) {
+      const bad = await submit(visitor, { token: s.token, placeId });
+      assert.equal(bad.status, 400, bad.text);
+      assert.match(bad.body.error, /楼栋/);
+    }
+    const r = await submit(visitor, { token: s.token, placeId: 'yidan-library', location: null });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.checkin.placeLabel, `${CAMPUS.short}·一丹图书馆（手选）`);
+    const row = db.prepare('SELECT * FROM checkins WHERE id = ?').get(r.body.checkin.id) as Record<string, unknown>;
+    assert.equal(row.place_label, r.body.checkin.placeLabel);
+    assert.ok(!Object.keys(row).some((key) => /lat|lng|lon|accuracy/.test(key)));
+    const stored = await fs.readFile(path.join(app.dir, 'uploads', r.body.checkin.image));
+    assert.notDeepEqual(stored, photo(), 'the manual label must go through server watermarking');
+    db.prepare('UPDATE checkins SET deleted = 1 WHERE user_id = ?').run(visitor.id);
   });
 
   await t.test('visibility: all → everyone except excluded; buddies → active matches only; author and admin always', async () => {

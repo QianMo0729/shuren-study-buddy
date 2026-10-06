@@ -78,7 +78,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId,
+      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId, gender: 'male', grade: 'y1',
       planTags: ['期末复习备考'], subjects: ['线性代数'], places: ['library'], schedule: DAY_SLOTS.slice(0, 12), studyType: 'quiet',
       personality: PERSONALITY, interests: ['reading'],
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
@@ -150,6 +150,60 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     const ready = await deck(viewer);
     assert.equal(ready.state, 'ready');
     assert.deepEqual(ready.personalization, { samples: 0, active: false, emphasis: [] });
+  });
+
+  await t.test('legacy published profiles with missing gender or grade require completion without mutating their publication record', async () => {
+    reset();
+    const viewer = createUser();
+    const legacy = createUser({ gender: '', grade: '' });
+    const session = await api('/auth/me', legacy.cookie);
+    assert.equal(session.body.user.questionnaireComplete, false);
+    const incomplete = await deck(legacy);
+    assert.equal(incomplete.state, 'incomplete');
+    assert.deepEqual(incomplete.missing, [{ key: 'gender', label: '性别' }, { key: 'grade', label: '年级' }]);
+    assert.ok(!ids((await deck(viewer)).items).includes(legacy.id));
+    const publish = await api('/profiles/me/publish', legacy.cookie, 'POST', {});
+    assert.equal(publish.status, 400);
+    assert.ok(publish.body.missing.some((item: { key: string }) => item.key === 'gender'));
+    assert.ok(publish.body.missing.some((item: { key: string }) => item.key === 'grade'));
+    assert.equal(db.prepare('SELECT published FROM profiles WHERE user_id = ?').get(legacy.id)!.published, 1);
+    storeProfile(legacy, { gender: 'female', grade: 'y1' });
+    assert.equal((await api('/auth/me', legacy.cookie)).body.user.questionnaireComplete, true);
+    assert.ok(ids((await deck(viewer)).items).includes(legacy.id));
+  });
+
+  await t.test('hidden gender is redacted from every public card and profile while matching uses the actual answer', async () => {
+    reset();
+    const viewer = createUser({ gender: 'male', buddyGender: 'female' });
+    const hidden = createUser({ gender: 'female', genderVisibility: 'private' });
+    const shown = createUser({ gender: 'female', genderVisibility: 'public' });
+    const saved = await api('/profiles/me', hidden.cookie, 'PUT', { profile: hidden.data });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.body.missing, []);
+    assert.equal(saved.body.profile.gender, 'female');
+    assert.equal(saved.body.profile.genderVisibility, 'private');
+    assert.equal((await api('/profiles/me', hidden.cookie)).body.profile.gender, 'female');
+    assert.equal((await api('/auth/me', hidden.cookie)).body.user.questionnaireComplete, true);
+    for (const endpoint of ['/profiles', '/profiles/recommendations', '/match/deck', '/match/ranked']) {
+      const response = await api(endpoint, viewer.cookie);
+      assert.equal(response.status, 200);
+      const card = response.body.items.find((item: { id: number }) => item.id === hidden.id);
+      assert.ok(card, `${endpoint} must keep compatible hidden-gender candidates`);
+      assert.equal(card.gender, '', endpoint);
+      assert.equal(response.body.items.find((item: { id: number }) => item.id === shown.id).gender, 'female', endpoint);
+    }
+    for (const cookie of [viewer.cookie, hidden.cookie]) {
+      assert.equal((await api(`/profiles/${hidden.id}`, cookie)).body.profile.gender, '');
+    }
+    const searched = await api('/profiles/search', viewer.cookie, 'POST', {
+      criteria: [{ field: 'gender', mode: 'must', values: ['female'] }],
+    });
+    assert.equal(searched.status, 200);
+    assert.ok(!searched.body.items.some((item: { id: number }) => item.id === hidden.id));
+    assert.ok(searched.body.items.some((item: { id: number }) => item.id === shown.id));
+    storeProfile(hidden, { gender: 'male', genderVisibility: 'private' });
+    assert.ok(!ids((await deck(viewer)).items).includes(hidden.id), 'visibility must not bypass actual buddy-gender compatibility');
+    assert.equal((await api(`/profiles/${hidden.id}`, viewer.cookie)).body.profile.gender, '');
   });
 
   await t.test('mutual likes create a match and notify both people; a one-way like does not', async () => {
@@ -355,27 +409,79 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.deepEqual(order(await ranked(viewer)), [x.id, y.id]);
   });
 
-  await t.test('a pending like only decides who makes the batch, never the order; login activity changes the order', async () => {
+  await t.test('other people’s private state never changes what a viewer sees: one-way likes, login activity, pending likes', async () => {
     reset();
     const viewer = createUser();
     const best = createUser();
     const admirer = createUser({ interests: ['music'] });
+    // Everything a viewer can observe, for every batch size they may ask for.
+    const observe = async () => JSON.stringify([
+      await deck(viewer), await deck(viewer, 1), await deck(viewer, 2), await deck(viewer, 3), await ranked(viewer), await ranked(viewer, 1),
+    ]);
+    const before = await observe();
     assert.deepEqual(ids((await deck(viewer)).items), [best.id, admirer.id]);
     assert.deepEqual(ids((await deck(viewer, 1)).items), [best.id]);
-    await feedback(admirer, viewer, 'like');
-    const boosted = await deck(viewer);
-    // 批内顺序与展示的分数一致，不能从顺序推断谁对我感兴趣
-    assert.deepEqual(ids(boosted.items), [best.id, admirer.id]);
-    for (const item of boosted.items) assert.equal(item.rankScore, item.recommendation.score, 'rankScore never includes hidden boosts');
-    assert.equal(JSON.stringify(boosted).includes('liked'), false);
-    // 只有一个名额时，对我感兴趣的同学更容易进入这一批
-    assert.deepEqual(ids((await deck(viewer, 1)).items), [admirer.id]);
-    assert.deepEqual(ids((await ranked(viewer)).items), [best.id, admirer.id]);
-    db.exec('DELETE FROM match_feedback');
-    db.prepare("UPDATE users SET last_login_at = datetime('now', '-40 days') WHERE id = ?").run(best.id);
-    assert.deepEqual(ids((await deck(viewer)).items), [admirer.id, best.id], 'long-inactive people move down');
-    db.prepare("UPDATE users SET last_login_at = datetime('now', '-1 days') WHERE id = ?").run(best.id);
-    assert.deepEqual(ids((await deck(viewer)).items), [best.id, admirer.id]);
+
+    // 单向的「感兴趣」：对方回应之前，被喜欢的人看到的任何结果都不变（包括只要一张卡片时）
+    assert.equal((await feedback(admirer, viewer, 'like')).status, 200);
+    assert.equal(await observe(), before, 'a one-way like is unobservable to its recipient');
+    assert.deepEqual(ids((await deck(viewer, 1)).items), [best.id]);
+
+    // 登录时间：最近登录或长期未登录都不改变排序
+    for (const age of ['-40 days', '-1 days', '-8 days']) {
+      db.prepare("UPDATE users SET last_login_at = datetime('now', ?) WHERE id = ?").run(age, best.id);
+      assert.equal(await observe(), before, `last login ${age} is unobservable`);
+    }
+    db.prepare('UPDATE users SET last_login_at = NULL WHERE id = ?').run(best.id);
+    assert.equal(await observe(), before);
+
+    // 别人收到了多少尚未回应的「感兴趣」也不改变排序
+    const crowd = Array.from({ length: 20 }, () => createUser({}, { published: false }));
+    for (const fan of crowd) {
+      db.prepare("INSERT INTO match_feedback (user_id, target_id, action, features) VALUES (?, ?, 'like', '{}')").run(fan.id, best.id);
+    }
+    assert.equal(await observe(), before, 'pending likes received by a candidate are unobservable');
+
+    // 展示的分数与顺序一致：没有任何不出现在返回值里的加成
+    const shown = await deck(viewer);
+    for (const item of shown.items) assert.equal(item.rankScore, item.recommendation.score);
+    const scores = shown.items.map((item) => item.rankScore);
+    assert.deepEqual(scores, [...scores].sort((a, b) => b - a));
+    assert.equal(JSON.stringify(shown).includes('liked'), false);
+  });
+
+  await t.test('my own choices can be reviewed: likes still waiting for an answer, and people moved to "not interested" by closing a chat', async () => {
+    reset();
+    const viewer = createUser();
+    const waiting = createUser();
+    const matched = createUser();
+    const closed = createUser();
+    const liked = async () => (await api('/match/feedback?action=like', viewer.cookie)).body.items as any[];
+    assert.deepEqual(await liked(), []);
+    for (const target of [waiting, matched, closed]) assert.equal((await feedback(viewer, target, 'like')).status, 200);
+    assert.deepEqual((await liked()).map((item) => item.targetId).sort(), [waiting.id, matched.id, closed.id].sort());
+
+    // 对方也感兴趣之后进入私聊，不再属于“等待回应”
+    const first = await feedback(matched, viewer, 'like');
+    const second = await feedback(closed, viewer, 'like');
+    assert.equal(first.body.matched, true);
+    assert.deepEqual((await liked()).map((item) => [item.targetId, item.nickname, item.action]), [[waiting.id, waiting.nickname, 'like']]);
+    assert.equal(JSON.stringify(await liked()).includes('SECRET'), false);
+    // 名单只属于自己：对方看不到谁在等自己回应
+    assert.deepEqual((await api('/match/feedback?action=like', waiting.cookie)).body.items, []);
+
+    // 撤回之后回到推荐里
+    assert.equal((await api(`/match/feedback/${waiting.id}`, viewer.cookie, 'DELETE')).status, 200);
+    assert.deepEqual(await liked(), []);
+    assert.ok(ids((await deck(viewer)).items).includes(waiting.id));
+
+    // 解除配对的同学出现在「不感兴趣」名单里，并标明来由；卡片上标记的没有这个标记
+    assert.equal((await api(`/chat/${second.body.matchId}/close`, viewer.cookie, 'POST', {})).status, 200);
+    assert.equal((await feedback(viewer, waiting, 'dislike')).status, 200);
+    const disliked = (await api('/match/feedback?action=dislike', viewer.cookie)).body.items as any[];
+    assert.deepEqual(disliked.map((item) => [item.targetId, item.closedMatch]).sort(), [[closed.id, true], [waiting.id, false]].sort());
+    // 被解除的一方没有做过这个选择，名单里不会出现
+    assert.deepEqual((await api('/match/feedback?action=dislike', closed.cookie)).body.items, []);
   });
 
   await t.test('exploration fills about 20% of the deck deterministically from ranks limit+1 to 3×limit', async () => {

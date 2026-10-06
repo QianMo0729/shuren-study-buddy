@@ -2,7 +2,7 @@ import {
   DURATIONS, FREQUENCIES, INTERESTS, PERIODS, PERSONALITY_ITEMS, PLACES, PLAN_PRESETS, SLOT_COUNT, STUDY_TYPES,
   optionLabel, slotPeriod, slotsHours,
 } from '../shared/options.ts';
-import { type SubjectForm, sameSubject, subjectForm } from '../shared/subjects.ts';
+import { type SubjectForm, sameSubject, subjectForm, sameCourseNameDifferentCode } from '../shared/subjects.ts';
 import { effectiveSchedule } from '../shared/profileRules.ts';
 import type {
   DimensionKey, Personality, PersonalityKey, ProfileCard, ProfileInput, RecommendationDimension, RecommendationInfo,
@@ -311,7 +311,11 @@ function contentPart(a: ProfileInput, b: ProfileInput): Part {
     } else {
       value = 0.5 * (goalOverlap ?? 0);
       detail = `双方都填写了具体科目但没有相同科目，按同类目标的一半计分${goalText ? `（${goalText}）` : ''}。`;
-      cautions.push({ text: `具体科目不同：TA 在学 ${subjectsB.slice(0, 2).map((s) => s.label).join('、')}`, weight: 5 });
+      // 同名课程但编号不同（如线性代数 A 与线性代数）仍按不同科目计分，但提醒要说清楚不是“学的东西不同”
+      const sameName = subjectsB.find((y) => subjectsA.some((x) => sameCourseNameDifferentCode(x, y)));
+      cautions.push(sameName
+        ? { text: `同名课程、编号不同：TA 选的是 ${sameName.catalogLabel ?? sameName.label}，没有按同一门课计分`, weight: 5 }
+        : { text: `具体科目不同：TA 在学 ${subjectsB.slice(0, 2).map((s) => s.label).join('、')}`, weight: 5 });
     }
   } else if (goalOverlap === null) {
     value = null;

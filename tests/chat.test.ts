@@ -77,7 +77,7 @@ test('private chat between mutually interested students', { timeout: 120_000 }, 
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId,
+      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId, gender: 'male', grade: 'y1',
       planTags: ['期末复习备考'], places: ['library'], schedule: [0, 1, 2], studyType: 'quiet',
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
       contacts: { showEmail: false, wechat: `SECRET-WECHAT-${id}`, qq: '', phone: '', other: '' },
@@ -403,6 +403,44 @@ test('private chat between mutually interested students', { timeout: 120_000 }, 
     assert.equal((await api(`/connections/${b.id}`, a.cookie)).body.contacts, null);
     assert.equal((await api(`/profiles/${b.id}/contact`, a.cookie, 'POST', {})).status, 403);
     assert.equal((await api(`/connections/${b.id}`, a.cookie, 'POST', {})).status, 403);
+  });
+
+  await t.test('contacts can be filled in from the chat without resubmitting the questionnaire', async () => {
+    const a = createUser({ contacts: NO_CONTACTS, bio: '已发布的自我介绍' });
+    const b = createUser();
+    matchUsers(a, b);
+    const profileOf = (member: Member) => JSON.parse((db.prepare('SELECT data FROM profiles WHERE user_id = ?').get(member.id) as { data: string }).data);
+    const stamps = () => db.prepare('SELECT saved_at, published, reviewed_at FROM profiles WHERE user_id = ?').get(a.id);
+    // 草稿里有尚未提交的其他修改：保存联系方式不能把它冲掉，也不能替用户提交
+    db.prepare("INSERT INTO profile_drafts (user_id, data, section) VALUES (?, ?, 'expectations')")
+      .run(a.id, JSON.stringify({ ...profileOf(a), bio: '草稿里改过、还没提交的自我介绍' }));
+    assert.equal((await api(`/connections/${b.id}`, a.cookie, 'POST', {})).body.needContacts, true);
+    const before = stamps();
+
+    assert.equal((await api('/profiles/me/contacts', '', 'PUT', { wechat: 'x' })).status, 401);
+    const empty = await api('/profiles/me/contacts', a.cookie, 'PUT', { wechat: '   ', qq: 'abc' });
+    assert.equal(empty.status, 400);
+    const saved = await api('/profiles/me/contacts', a.cookie, 'PUT', { wechat: '  my_wechat  ', qq: '12 34-56' });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.body.contacts, { wechat: 'my_wechat', qq: '123456' });
+
+    const published = profileOf(a);
+    assert.deepEqual(published.contacts, { ...NO_CONTACTS, wechat: 'my_wechat', qq: '123456' });
+    assert.equal(published.bio, '已发布的自我介绍', 'nothing else in the published profile changes');
+    assert.deepEqual(stamps(), before, 'the profile is not resubmitted, republished or sent back to review');
+    const draft = JSON.parse((db.prepare('SELECT data FROM profile_drafts WHERE user_id = ?').get(a.id) as { data: string }).data);
+    assert.equal(draft.contacts.wechat, 'my_wechat', 'the draft carries the contact too, so a later submit keeps it');
+    assert.equal(draft.bio, '草稿里改过、还没提交的自我介绍', 'unsubmitted draft answers survive');
+
+    // 现在可以申请，对方同意后看到的就是刚填的联系方式
+    const requested = await api(`/connections/${b.id}`, a.cookie, 'POST', {});
+    assert.equal(requested.status, 200, JSON.stringify(requested.body));
+    assert.equal((await api(`/connections/${requested.body.request.id}/respond`, b.cookie, 'POST', { action: 'accept' })).status, 200);
+    const seen = await api(`/connections/${a.id}`, b.cookie);
+    assert.equal(seen.body.contacts.wechat, 'my_wechat');
+    assert.equal(seen.body.contacts.qq, '123456');
+    // 只传一项时另一项保持不变
+    assert.deepEqual((await api('/profiles/me/contacts', a.cookie, 'PUT', { qq: '987' })).body.contacts, { wechat: 'my_wechat', qq: '987' });
   });
 
   await t.test('a rejected request can be renewed after seven days by reusing the same row', async () => {

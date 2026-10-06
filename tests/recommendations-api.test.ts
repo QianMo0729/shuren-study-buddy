@@ -76,7 +76,7 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId,
+      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId, gender: 'male', grade: 'y1',
       planTags: ['期末复习备考'], places: ['library'], schedule: [0, 1, 2], studyType: 'quiet',
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
       contacts: { showEmail: true, wechat: `SECRET-WECHAT-${id}`, qq: '90000123', phone: '18800001234', other: 'SECRET-CONTACT' },
