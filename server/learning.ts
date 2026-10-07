@@ -34,7 +34,7 @@ export const EMPHASIS_RATIO = 1.25;
 export const EMPHASIS_MIN_SAMPLES = 5;
 
 const LABEL: Record<FeedbackAction, number> = { like: 1, dislike: 0, skip: 0 };
-const SAMPLE_WEIGHT: Record<FeedbackAction, number> = { like: 1, dislike: 1, skip: 0.3 };
+const SAMPLE_WEIGHT: Record<FeedbackAction, number> = { like: 1, dislike: 1, skip: 0 };
 
 const INTENSITY: Record<string, number> = { daily: 1, weekly3: 0.75, weekly1: 0.4, irregular: 0.3 };
 const STUDY_TYPES = ['quiet', 'discuss', 'checkin', 'flexible'] as const;
@@ -108,6 +108,7 @@ export function predict(model: PreferenceModel, x: Features): number {
  * direction = −1 时朝反方向走一步，用于撤销或改写此前的一次反馈（近似抵消）。
  */
 export function onlineUpdate(model: PreferenceModel, prior: PreferenceModel, x: Features, action: FeedbackAction, direction: 1 | -1 = 1): PreferenceModel {
+  if (action === 'skip') return cloneModel(model);
   const p = predict(model, x);
   const g = (p - LABEL[action]) * SAMPLE_WEIGHT[action] * direction;
   const next = cloneModel(model);

@@ -15,7 +15,8 @@ import { Me } from './pages/Me';
 import { NotFound } from './pages/NotFound';
 import { ProfilePage } from './pages/ProfilePage';
 import { Privacy } from './pages/Privacy';
-import { Match } from './pages/Match';
+import { Match, MatchLater } from './pages/Match';
+import { PeopleSearch } from './pages/PeopleSearch';
 import { Community } from './pages/Community';
 import { ForumPostDetail } from './pages/ForumPostDetail';
 import { CheckinCamera } from './pages/CheckinCamera';
@@ -91,6 +92,8 @@ export function App() {
         <Route path="/privacy" element={<Page><Privacy /></Page>} />
         <Route path="/credits" element={<Page><Credits /></Page>} />
         <Route path="/square/*" element={<LegacySquare />} />
+        <Route path="/match/search/*" element={<RequireAuth><Page><PeopleSearch /></Page></RequireAuth>} />
+        <Route path="/match/later/*" element={<RequireAuth><Page><MatchLater /></Page></RequireAuth>} />
         <Route path="/match/*" element={<RequireAuth><Page><Match /></Page></RequireAuth>} />
         <Route path="/community" element={<RequireAuth><Page><Community /></Page></RequireAuth>} />
         <Route path="/community/posts/:id" element={<RequireAuth><Page><ForumPostDetail /></Page></RequireAuth>} />

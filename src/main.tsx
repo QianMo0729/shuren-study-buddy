@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router';
+import { createBrowserRouter } from 'react-router';
+import { RouterProvider } from 'react-router/dom';
 import { MotionConfig, MotionGlobalConfig } from 'motion/react';
 import './styles.css';
 
@@ -20,16 +21,19 @@ if (import.meta.env.DEV) {
   } catch {}
 }
 
+// Keep the existing page routes/providers; a data router enables reliable SPA
+// navigation blocking for an imported timetable awaiting explicit confirmation.
+const router = createBrowserRouter([{
+  path: '*',
+  element: <MotionConfig reducedMotion="user">
+    <ToastProvider>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </ToastProvider>
+  </MotionConfig>,
+}]);
+
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <MotionConfig reducedMotion="user">
-        <ToastProvider>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
-        </ToastProvider>
-      </MotionConfig>
-    </BrowserRouter>
-  </StrictMode>,
+  <StrictMode><RouterProvider router={router} /></StrictMode>,
 );

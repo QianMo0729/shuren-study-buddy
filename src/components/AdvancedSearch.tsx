@@ -1,7 +1,7 @@
-import { useId, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Minus, Plus, RotateCcw, Search, X } from 'lucide-react';
-import { ALL_MAJORS, COLLEGES } from '../../shared/majors';
+import { COLLEGES } from '../../shared/majors';
 import {
   DURATIONS, FREQUENCIES, GENDERS, GRADES, INTERESTS, PLACES, PLAN_PRESETS, STATUSES, STUDY_METHODS, STUDY_TYPES, optionLabel,
 } from '../../shared/options';
@@ -10,6 +10,7 @@ import { cx } from '../lib/format';
 import { spring } from '../lib/motion';
 import { Button, ChipGroup, Input, Segmented } from './ui';
 import { TimeGrid } from './TimeGrid';
+import { MajorSelect } from './profileForm';
 
 type Kind = 'major' | 'gender' | 'multi' | 'overlap' | 'text' | 'schedule';
 
@@ -228,10 +229,9 @@ export function AdvancedSearch({ query, onChange, onSearch, onReset, busy, field
 }
 
 function ValueControl({ def, values, onChange }: { def: FieldDef; values: string[]; onChange: (v: string[]) => void }) {
-  const listId = useId();
   const { kind, options } = def;
   if (kind === 'schedule') return <div className="overflow-x-auto"><TimeGrid compact value={values.map(Number)} onChange={(slots) => onChange(slots.map(String))} /><p className="mt-2 text-[12px] text-ink-3">对方在任一选中时段有空即符合此条件。</p></div>;
-  if (kind === 'major') return <><Input value={values[0] ?? ''} onChange={(e) => onChange(e.target.value.trim() ? [e.target.value] : [])} list={listId} placeholder="输入专业或院系完整名称" aria-label={`${def.label}：专业或院系名称`} /><datalist id={listId}>{ALL_MAJORS.map((major) => <option key={major} value={major} />)}</datalist><p className="mt-2 text-[12px] text-ink-3">可选择建议项，也可输入同学自填的专业或院系。</p></>;
+  if (kind === 'major') return <MajorSelect value={values[0] ?? ''} onChange={(value) => onChange(value ? [value] : [])} allowClear />;
   if (kind === 'gender')
     return (
       <div className="flex flex-wrap items-center gap-3">

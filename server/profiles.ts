@@ -5,13 +5,15 @@ import {
   PERSONALITY_ITEMS, STUDY_FORMATS, SUBJECT_LIMIT, SEMESTER_COURSE_LIMIT,
 } from '../shared/options.ts';
 import { SPECIES } from '../shared/species.ts';
+import { canonicalMajor } from '../shared/majors.ts';
 import { emptyProfile, missingFields, pickProfileInput, hasPrivacyConsent, publicGender } from '../shared/profileRules.ts';
 export { emptyProfile, missingFields };
-import type { MyProfile, Personality, ProfileCard, ProfileInput, PublicProfile, StudyFormat } from '../shared/types.ts';
+import type { MyProfile, Personality, PrivateNote, ProfileCard, ProfileInput, PublicProfile, StudyFormat } from '../shared/types.ts';
 import { iso, q } from './db.ts';
 import { reviewState } from './autoModeration.ts';
 import { HttpError } from './auth.ts';
 import { matchStateFor } from './matches.ts';
+import { noteForOwner } from './notes.ts';
 import { invalidSelectedSemesterCourses, invalidSelectedSubjects, normalizeSelectedSemesterCourses, normalizeSelectedSubjects } from '../shared/courseCatalog.ts';
 
 // ---------- 系统随机昵称 ----------
@@ -49,6 +51,11 @@ export function sanitizeContacts(c: any): ProfileInput['contacts'] {
 
 export function sanitizeProfile(raw: any, legacySubjects: string[] = [], options: { draft?: boolean } = {}): ProfileInput {
   const r = raw ?? {};
+  const rawMajor = str(r.major, 60);
+  const major = canonicalMajor(rawMajor);
+  if (major === null && !options.draft) throw new HttpError(400, '请从专业目录选择；原有专业文字仍保留在草稿中', {
+    missing: [{ key: 'major', label: '专业 / 院系（请从目录重新选择或留空）' }],
+  });
   const subjects = normalizeSelectedSubjects(r.subjects, legacySubjects);
   const newUnknown = invalidSelectedSubjects(r.subjects).filter((subject) => !normalizeSelectedSubjects([subject], legacySubjects).length);
   if (newUnknown.length) throw new HttpError(400, '请从课程或考试列表中选择，不能直接填写', {
@@ -89,7 +96,7 @@ export function sanitizeProfile(raw: any, legacySubjects: string[] = [], options
     gender: pick(r.gender, GENDERS),
     genderVisibility: r.genderVisibility === 'private' ? 'private' : 'public',
     grade: pick(r.grade, GRADES),
-    major: str(r.major, 60),
+    major: major ?? rawMajor,
     buddyGender: pick(r.buddyGender, BUDDY_GENDERS) || 'any',
     photos: (Array.isArray(r.photos) ? r.photos : []).map(fileName).filter(Boolean).slice(0, 4) as string[],
     schedule: Array.isArray(r.schedule)
@@ -198,10 +205,11 @@ export function toMyProfile(row: ProfileRow): MyProfile {
   };
 }
 
-export function toCard(row: ProfileRow, d: ProfileInput, me: { id: number; schedule: number[] }): ProfileCard {
+export function toCard(row: ProfileRow, d: ProfileInput, me: { id: number; schedule: number[]; notes?: Map<number, PrivateNote> }): ProfileCard {
   return {
     id: row.user_id,
     nickname: row.nickname,
+    remarkName: me.notes?.get(row.user_id)?.remarkName || undefined,
     major: d.major,
     gender: publicGender(d),
     grade: d.grade,
@@ -228,6 +236,7 @@ export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, myS
   return {
     id: row.user_id,
     nickname: row.nickname,
+    privateNote: row.user_id === viewerId ? null : noteForOwner(viewerId, row.user_id),
     gender: publicGender(d),
     grade: d.grade,
     major: d.major,
@@ -299,7 +308,9 @@ export function profileSnapshot(row: ProfileRow, d: ProfileInput): string {
 
 /** 广场上所有已发布的主页 */
 export function publishedRows() {
-  return q.all<ProfileRow>('SELECT * FROM profiles WHERE published = 1 AND taken_down = 0 ORDER BY published_at DESC');
+  return q.all<ProfileRow>(`SELECT p.* FROM profiles p JOIN users u ON u.id = p.user_id
+    WHERE p.published = 1 AND p.taken_down = 0 AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> ''
+    ORDER BY p.published_at DESC`).filter((row) => hasPrivacyConsent(parseData(row)));
 }
 
 export function mySchedule(userId: number): number[] {

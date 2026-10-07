@@ -41,6 +41,21 @@ export const COLLEGES = MAJOR_GROUPS.filter((g) => g.college !== '其他').map((
 export const isKnownMajor = (v: unknown): v is string => typeof v === 'string' && MAJOR_TO_COLLEGE.has(v);
 export const collegeOf = (major: string) => MAJOR_TO_COLLEGE.get(major) ?? '';
 
+const majorKey = (value: string) => value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+const STANDARD_MAJORS = new Map(ALL_MAJORS.map((major) => [majorKey(major), major]));
+const MAJOR_ALIASES: Record<string, string> = {
+  '计科': '计算机科学与技术', '计算机专业': '计算机科学与技术', 'cs': '计算机科学与技术',
+  '未分专业': '未分专业（大类培养）', '暂未确定': UNDECIDED, '未定': UNDECIDED,
+};
+
+/** Only unambiguous aliases migrate; department names must not guess a degree. */
+export function canonicalMajor(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const key = majorKey(value);
+  if (!key) return '';
+  return STANDARD_MAJORS.get(key) ?? (Object.hasOwn(MAJOR_ALIASES, key) ? MAJOR_ALIASES[key] : null);
+}
+
 /** 南科大学号：8 位，首位 1 表示学生，第 2–3 位为入学年份，第 4 位 1 = 本科、3 = 研究生 */
 export const STUDENT_ID_RE = /^1\d{7}$/;
 

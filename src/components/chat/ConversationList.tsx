@@ -61,9 +61,10 @@ export function ConversationList({ items, activeId, error, onRetry }: {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline justify-between gap-2">
-                    <span className={cx('truncate font-display text-[16px]', closed ? 'text-ink-3' : 'text-ink')}>{item.other.nickname}</span>
+                    <span className={cx('truncate font-display text-[16px]', closed ? 'text-ink-3' : 'text-ink')}>{item.other.privateNote?.remarkName || item.other.nickname}</span>
                     <span className="shrink-0 text-[11.5px] text-ink-4 tabular">{time}</span>
                   </span>
+                  {item.other.privateNote?.remarkName && <span className="block truncate text-[11.5px] text-ink-3">原昵称：{item.other.nickname}</span>}
                   <span className="mt-0.5 flex items-center gap-1.5">
                     {closed ? (
                       <span className="shrink-0 rounded-[4px] bg-paper-2 px-1.5 text-[11px] text-ink-3">已解除</span>

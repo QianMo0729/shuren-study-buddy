@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { canonicalMajor } from '../../shared/majors.ts';
 import type { ContactReveal, ProfileCard, ProfileDraft, QuestionnaireSection, RecommendationResponse } from '../../shared/types.ts';
 import { HttpError, requireUser } from '../auth.ts';
 import { iso, q, tx } from '../db.ts';
@@ -8,6 +9,7 @@ import { invalidSelectedSemesterCourses, invalidSelectedSubjects } from '../../s
 import { SEMESTER_COURSE_LIMIT, SUBJECT_LIMIT } from '../../shared/options.ts';
 import { preserveDraftGoalDate } from '../../shared/goalDate.ts';
 import { buildRanked } from '../matching.ts';
+import { notesForOwner } from '../notes.ts';
 import {
   assertOwnFile, ensureProfile, getProfileRow, missingFields, parseData, profileSnapshot, publishedRows, sanitizeContacts, sanitizeProfile,
   toCard, toMyProfile, toPublic,
@@ -120,6 +122,7 @@ profileRouter.post('/me/publish', (req, res) => {
   if (row.taken_down && !row.auto_held) throw new HttpError(409, '主页已被管理员撤下，可修改资料后联系管理员复核');
   const data = parseData(row);
   const missing = missingFields(data);
+  if (canonicalMajor(data.major) === null) missing.push({ key: 'major', label: '专业 / 院系（请从目录重新选择或留空）' });
   if (invalidSelectedSubjects(data.subjects).length) {
     missing.push({ key: 'subjects', label: '具体课程 / 考试（请从列表重新选择）' });
   }
@@ -164,7 +167,7 @@ profileRouter.get('/recommendations', (req, res) => {
 function viewer(userId: number) {
   const row = getProfileRow(userId);
   const d = row ? parseData(row) : null;
-  return { id: userId, schedule: d ? effectiveSchedule(d) : [], gender: d?.gender ?? '' };
+  return { id: userId, schedule: d ? effectiveSchedule(d) : [], gender: d?.gender ?? '', notes: notesForOwner(userId) };
 }
 
 type Scored = ProfileCard & { _w: number };
@@ -200,8 +203,7 @@ profileRouter.get('/', (req, res) => {
     }
     out.push(card);
   }
-  const total = q.get<{ n: number }>('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0')!.n;
-  res.json({ items: strip(sortCards(out, sort)), total });
+  res.json({ items: strip(sortCards(out, sort)), total: out.length });
 });
 
 profileRouter.post('/search', (req, res) => {
@@ -232,11 +234,12 @@ profileRouter.post('/search', (req, res) => {
 profileRouter.get('/favorites', (req, res) => {
   const me = viewer(req.user!.id);
   const rows = q.all<any>(
-    `SELECT p.* FROM favorites f JOIN profiles p ON p.user_id = f.target_id
-     WHERE f.user_id = ? AND p.published = 1 AND p.taken_down = 0 ORDER BY f.created_at DESC`,
+    `SELECT p.* FROM favorites f JOIN profiles p ON p.user_id = f.target_id JOIN users u ON u.id = p.user_id
+     WHERE f.user_id = ? AND p.published = 1 AND p.taken_down = 0
+       AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> '' ORDER BY f.created_at DESC`,
     me.id,
   );
-  res.json({ items: rows.filter((r) => !isExcluded(me.id, r.user_id)).map((r) => toCard(r, parseData(r), me)) });
+  res.json({ items: rows.filter((r) => !isExcluded(me.id, r.user_id) && hasPrivacyConsent(parseData(r))).map((r) => toCard(r, parseData(r), me)) });
 });
 
 // ---------- 他人主页 ----------

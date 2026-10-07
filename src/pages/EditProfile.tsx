@@ -1,13 +1,14 @@
 import { PendingReviewNotice } from '../components/ReviewStatus';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { Link, useBlocker, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRight, Check, ChevronDown, CloudCheck, Info, ShieldAlert } from 'lucide-react';
 import {
   BUDDY_GENDERS, GENDERS, GRADES, STUDY_TYPES, PLACES, PLAN_PRESETS, STUDY_METHODS, FREQUENCIES, DURATIONS, INTERESTS, DISLIKE_OPTIONS,
-  PERSONALITY_ITEMS, STATUSES, STUDY_FORMATS, SUBJECT_LIMIT, SEMESTER_COURSE_LIMIT, slotsHours,
+  PERSONALITY_ITEMS, STATUSES, STUDY_FORMATS, SUBJECT_LIMIT, SEMESTER_COURSE_LIMIT, MBTIS, slotsHours,
 } from '../../shared/options';
 import { effectiveSchedule, missingFields, pickProfileInput } from '../../shared/profileRules';
 import { invalidSelectedSubjects, invalidSelectedSemesterCourses } from '../../shared/courseCatalog';
+import { canonicalMajor } from '../../shared/majors';
 import { beijingToday, goalDateError, goalDateInput, goalDateToIso } from '../../shared/goalDate';
 import type { ProfileInput, PrivacyConsent, QuestionnaireSection, StudyFormat } from '../../shared/types';
 import { api } from '../lib/api';
@@ -15,8 +16,10 @@ import { useAuth } from '../lib/auth';
 import { useQuestionnaireDraft } from '../lib/useQuestionnaireDraft';
 import { dateTime } from '../lib/format';
 import { useToast } from '../lib/toast';
-import { Button, ChipGroup, Field, Input, PageHeader, Skeleton, Tag, Textarea, Toggle } from '../components/ui';
-import { PhotoUploader, OptionCards, PersonalityScales, SubjectsInput } from '../components/profileForm';
+import { Button, ChipGroup, ConfirmDialog, Field, Input, PageHeader, Skeleton, Tag, Textarea, Toggle } from '../components/ui';
+import { PhotoUploader, OptionCards, PersonalityScales, SubjectsInput, MajorSelect } from '../components/profileForm';
+import { ChoiceAnswer } from '../components/ChoiceAnswer';
+import { TimetableEditor } from '../components/TimetableEditor';
 import { TimeGrid } from '../components/TimeGrid';
 import { Nickname, ProfileCard } from '../components/ProfileCard';
 import { Illustration, Plate } from '../components/brand';
@@ -50,6 +53,8 @@ export function EditProfile() {
   const { form, profile, section, loading, loadError, setField: set } = draft;
   const [publishing, setPublishing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [timetableDirty, setTimetableDirty] = useState(false);
+  const leaveBlocker = useBlocker(({ currentLocation, nextLocation }) => timetableDirty && currentLocation.pathname !== nextLocation.pathname);
   const [showErrors, setShowErrors] = useState(false);
   const [focusTarget, setFocusTarget] = useState('');
   // 选填的大块内容默认收起，必填题之间不再隔着几屏选填项；填过的、或用户点开过的保持展开
@@ -66,7 +71,8 @@ export function EditProfile() {
   );
   const subjectsOverLimit = form.subjects.length > SUBJECT_LIMIT;
   const semesterCoursesOverLimit = form.semesterCourses.length > SEMESTER_COURSE_LIMIT;
-  const courseAnswersInvalid = !!invalidSubjects.length || !!invalidSemesterCourses.length || subjectsOverLimit || semesterCoursesOverLimit;
+  const invalidMajor = canonicalMajor(form.major) === null;
+  const courseAnswersInvalid = !!invalidSubjects.length || !!invalidSemesterCourses.length || subjectsOverLimit || semesterCoursesOverLimit || invalidMajor;
   const earliestGoalDate = beijingToday();
   const deadlineError = goalDateError(form.goalDeadline, earliestGoalDate);
   const step = SECTIONS.findIndex((s) => s.id === section);
@@ -74,6 +80,7 @@ export function EditProfile() {
   const error = (key: keyof ProfileInput) => showErrors && missing.some((m) => m.key === key) ? '请完成此项' : undefined;
   const go = (next: QuestionnaireSection, field?: string) => {
     if (publishing || uploading) return;
+    if (timetableDirty) { toast.error('请先保存或撤销课表修改', '课表单独保存，保存后即可继续问卷。'); return; }
     draft.setSection(next);
     setFocusTarget(field || next);
     ownHash.current = hash !== `#${next}` ? `#${next}` : null;
@@ -85,6 +92,12 @@ export function EditProfile() {
     if (ownHash.current === hash) { ownHash.current = null; return; }
     const id = hash.slice(1);
     if (id === 'review' || SECTIONS.some((s) => s.id === id)) {
+      if (id !== section && (timetableDirty || publishing || uploading)) {
+        if (timetableDirty) toast.error('请先保存或撤销课表修改', '课表单独保存，保存后即可继续问卷。');
+        ownHash.current = `#${section}`;
+        nav({ pathname: '/me/edit', search: params.toString() ? `?${params}` : '', hash: `#${section}` }, { replace: true });
+        return;
+      }
       if (id !== section) draft.setSection(id as QuestionnaireSection);
       setFocusTarget((current) => current || id);
     }
@@ -103,7 +116,7 @@ export function EditProfile() {
   }, [section, focusTarget, loading]);
   const checkAnswers = () => { setShowErrors(true); go('review'); };
   const publish = async () => {
-    if (publishing || uploading || missing.length || courseAnswersInvalid) return;
+    if (publishing || uploading || timetableDirty || missing.length || courseAnswersInvalid) return;
     if (goalDateError(form.goalDeadline)) { setShowErrors(true); go('review'); return; }
     setPublishing(true);
     await draft.pause();
@@ -150,9 +163,20 @@ export function EditProfile() {
   if (invalidSemesterCourses.length) missingQuestions.push({ section: SECTIONS[2], target: 'f-semesterCourses', label: '本学期课表课程', detail: `请从课程目录重新选择或移除：${invalidSemesterCourses.join('、')}` });
   if (semesterCoursesOverLimit) missingQuestions.push({ section: SECTIONS[2], target: 'f-semesterCourses', label: '本学期课表课程', detail: `最多选择 ${SEMESTER_COURSE_LIMIT} 门课程。` });
   if (deadlineError) missingQuestions.push({ section: SECTIONS[2], target: 'f-goalDeadline', label: 'Q8. 目标日期', detail: deadlineError });
+  if (invalidMajor) missingQuestions.push({ section: SECTIONS[1], target: 'f-major', label: 'Q5. 专业 / 院系', detail: '原有专业文字已保留，请从目录重新选择或清空这一选填项。' });
   const saveText = { idle: '填写时会自动保存草稿', saving: '正在自动保存…', saved: unpublishedChanges ? profile.reviewPending ? '修改已存为草稿；提交后会重新检查待审主页' : profile.takenDown ? '修改已存为草稿；恢复展示需由管理员处理' : '修改已存为草稿；提交后才会更新已发布的主页' : '草稿已自动保存', local: '已保存在此设备，联网后自动同步', error: '草稿暂未保存，请检查网络并重试' }[draft.saveState];
   return (
     <div className="pb-16">
+      <ConfirmDialog
+        open={leaveBlocker.state === 'blocked'}
+        title="课表还有未保存的修改"
+        desc="离开会放弃本次课表修改和待确认的导入内容。已经保存的课表和问卷草稿会保留。"
+        cancelText="继续编辑"
+        confirmText="放弃修改并离开"
+        tone="danger"
+        onCancel={() => { if (leaveBlocker.state === 'blocked') leaveBlocker.reset(); }}
+        onConfirm={() => { if (leaveBlocker.state === 'blocked') leaveBlocker.proceed(); }}
+      />
       <PageHeader title={onboarding ? '填写你的搭子问卷' : '我的搭子问卷'} desc="分 7 个部分，慢慢认识你。草稿会自动保存，带 * 的项目为必填，其余可以跳过。" actions={<Tag tone={profile.takenDown ? 'danger' : profile.published && !profile.reviewPending ? 'brand' : undefined}>{profile.reviewPending ? '主页等待审核' : profile.takenDown ? '主页已撤下' : profile.published ? '主页已发布' : '尚未发布'}</Tag>} />
       {onboarding && <ol aria-label="开始匹配的步骤" className="mb-6 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-line bg-surface px-5 py-4 text-sm"><li className="flex items-center gap-2 text-brand-text"><Check size={16} />账号已激活</li><li aria-current="step" className="font-semibold text-ink">2 · 填写问卷</li><li className="text-ink-3">3 · 查看搭子推荐</li></ol>}
       {profile.reviewPending ? <PendingReviewNotice /> : profile.takenDown && <div className="mb-5 flex gap-3 rounded-lg bg-danger-soft p-4 text-sm"><ShieldAlert className="shrink-0 text-danger" size={20} /><p>主页已于 {dateTime(profile.takenDownAt)} 被撤下：{profile.takedownReason}。可修改内容，恢复展示需由管理员处理。</p></div>}
@@ -196,7 +220,7 @@ export function EditProfile() {
               <div className="mt-4 rounded-lg bg-paper p-4"><Toggle checked={form.genderVisibility === 'public'} onChange={(show) => set('genderVisibility', show ? 'public' : 'private')} label="展示我的性别" /><p className="mt-2 text-xs leading-relaxed text-ink-3">关闭并提交问卷后，其他同学在主页和卡片上看不到你的性别；性别仍用于匹配双方的搭子偏好。</p></div>
             </Field>
             <Field id="f-grade" label="Q4. 年级" required error={error('grade')}><ChipGroup options={GRADES} value={form.grade ? [form.grade] : []} onChange={(v) => set('grade', v[0] ?? '')} /></Field>
-            <Field label="Q5. 专业 / 院系" optional><Input aria-label="专业或院系" value={form.major} onChange={(e) => set('major', e.target.value)} maxLength={60} placeholder="如：计算机科学与技术 / 计算机系" /></Field>
+            <Field id="f-major" label="Q5. 专业 / 院系" optional hint="搜索专业或按院系选择；尚未分专业可以选择大类培养。" error={invalidMajor ? '原有专业尚未对应目录，请重新选择或清空；草稿会保留原内容。' : undefined}><MajorSelect value={form.major} onChange={(value) => set('major', value)} invalid={invalidMajor} allowClear /></Field>
           </Section>
           <Section active={step === 2} index={2} desc="写下近期想完成的事，让有共同目标的同学更容易找到你。">
             <Field label="照片 · 展示生活" optional hint="最多 4 张。照片默认仅自己可见，公开展示须在模块 G 中主动选择。"><PhotoUploader onBusyChange={setUploading} value={form.photos} onChange={(v) => set('photos', v)} /></Field>
@@ -221,12 +245,15 @@ export function EditProfile() {
                 {form.goalDeadline && <Button size="sm" variant="ghost" onClick={() => set('goalDeadline', '')}>清除</Button>}
               </div>
             </Field>
-            {form.planTags.includes('科研/竞赛项目') && <Field label="科研 / 备赛内容" optional><Textarea aria-label="科研或备赛内容" value={form.goalResearch} maxLength={200} onChange={(e) => set('goalResearch', e.target.value)} placeholder="能否具体描述你的科研 / 备赛内容，如备战大学生电子设计大赛" /></Field>}
-            {form.planTags.includes('技能自学') && <Field label="自学技能内容" optional><Textarea aria-label="自学技能内容" value={form.goalSkills} maxLength={200} onChange={(e) => set('goalSkills', e.target.value)} placeholder="描述一下正在自学的技能" /></Field>}
+            {form.planTags.includes('科研/竞赛项目') && <Field label="科研 / 备赛内容" optional hint="可多选，也可补充具体项目。"><ChoiceAnswer label="科研或备赛内容" options={['数学建模', '程序设计竞赛', '电子设计竞赛', '实验室科研', '论文阅读', '创新创业项目']} value={form.goalResearch} maxLength={200} onChange={(value) => set('goalResearch', value)} /></Field>}
+            {form.planTags.includes('技能自学') && <Field label="自学技能内容" optional hint="可多选，也可补充学习进度。"><ChoiceAnswer label="自学技能内容" options={['Python', 'Java', 'C / C++', '数据分析', '机器学习', '网页开发', '英语口语', '设计与剪辑']} value={form.goalSkills} maxLength={200} onChange={(value) => set('goalSkills', value)} /></Field>}
             {form.planTags.includes('其他') && <Field label="其他学习目标" optional><Input aria-label="其他学习目标" value={form.goalOther} maxLength={200} onChange={(e) => set('goalOther', e.target.value)} /></Field>}
             <Field label="补充描述" optional hint="用一句话补充，将展示在推荐卡片上。"><Textarea aria-label="目标补充描述" value={form.studyPlan} maxLength={200} onChange={(e) => set('studyPlan', e.target.value)} placeholder="如：每周练两次口语，希望找到一起坚持的伙伴" /></Field>
             <Field label="目前状态" optional><OptionCards options={STATUSES} value={[form.status]} onChange={(v) => set('status', v[0] || 'seeking')} cols={1} /></Field>
           </Section>
+          <div hidden={step !== 2} className="mt-6 rounded-xl border border-line bg-surface p-5 sm:p-6">
+            <TimetableEditor semesterCourses={form.semesterCourses} onCoursesChange={(courses) => set('semesterCourses', courses)} schedule={form.schedule} onScheduleChange={(slots) => set('schedule', slots)} onDirtyChange={setTimetableDirty} />
+          </div>
           <Section active={step === 3} index={3} desc="填写你的实际安排，也可以补充希望对方的地点与时间。">
             <Field id="f-places" label="Q9. 我的学习地点" required error={error('places')}><ChipGroup options={PLACES} value={form.places} onChange={(v) => set('places', v)} multi /></Field>
             {opened.expectedPlaces || form.expectedPlaces.length > 0 || !!form.expectedPlacesOther ? (
@@ -254,12 +281,12 @@ export function EditProfile() {
           </Section>
           <Section active={step === 4} index={4} desc="7 道小题，每题 1–5 分，用来找学习习惯合得来的搭子。会参与推荐评分：相似的题越接近越合拍，「被督促 / 督促」看双方能否互补。拿不准的题可以先跳过。">
             <Field id="f-personality" label="Q16. 学习性格" optional><PersonalityScales value={form.personality} onChange={(v) => set('personality', v)} /></Field>
-            <Field label="Q17. MBTI" optional hint={form.mbti.trim() && !isMbti(form.mbti) ? '没有识别为 4 个字母的 MBTI 类型，这一项不会参与匹配。' : '会参与学习性格匹配，但权重很小：有上面的量表时只占学习性格的 20%。'}><Input aria-label="MBTI" value={form.mbti} maxLength={30} onChange={(e) => set('mbti', e.target.value)} placeholder="4 个字母，如 INFP" /></Field>
+            <Field label="Q17. MBTI" optional hint="不了解自己的类型可以选不清楚；这一项在学习性格中的权重很小。"><ChipGroup options={[{ value: '', label: '不清楚 / 不填写' }, ...MBTIS.map((value) => ({ value, label: value }))]} value={[isMbti(form.mbti) ? form.mbti.trim().toUpperCase().slice(0, 4) : '']} onChange={(values) => set('mbti', values[0] ?? '')} />{form.mbti && !isMbti(form.mbti) && <p className="mt-2 text-xs text-ink-3">旧答案「{form.mbti}」已保留；重新选择后更新。</p>}</Field>
             <Field label="Q18. 你的雷区" optional hint="「迟到爽约」「全程沉默」「过度社交」会用于匹配：可能触及雷区的同学会排得靠后，推荐时也会提醒你。其他选项只在主页展示。"><ChipGroup options={DISLIKE_OPTIONS} value={form.dislikeTags} onChange={(v) => set('dislikeTags', v)} multi />{(form.dislikeTags.includes('other') || form.dislikes) && <Input aria-label="其他雷区" className="mt-3" value={form.dislikes} maxLength={120} onChange={(e) => set('dislikes', e.target.value)} placeholder="补充不希望发生的行为" />}</Field>
           </Section>
           <Section active={step === 5} index={5} desc="自由描述展示给同学，也可通过高级检索查找；推荐评分依据前面的结构化答案，不猜测文字中的偏好。">
-            <Field label="Q19. 你对学习搭子的期待" optional><Textarea aria-label="对学习搭子的期待" value={form.expectations} onChange={(e) => set('expectations', e.target.value)} maxLength={500} placeholder="可描述性别、年级、专业、学习方式、频率、目标、性格或学科互补等方面的期待" /></Field>
-            <Field label="Q20. 自我介绍" optional hint="社区高级检索中的「自我介绍」条件只检索这一部分。"><Textarea aria-label="自我介绍" value={form.bio} onChange={(e) => set('bio', e.target.value)} maxLength={300} className="min-h-36" placeholder="介绍你的学习习惯、擅长的学科，或者其他想让搭子了解的事" /></Field>
+            <Field label="Q19. 你对学习搭子的期待" optional hint="可多选并补充；性别、时间和学习频率沿用前面的设置。这些描述用于展示与检索。"><ChoiceAnswer label="对学习搭子的期待" options={['一起梳理知识点', '互相讲解难题', '交流学习资料', '共同完成项目', '分享学习方法', '及时沟通安排']} value={form.expectations} onChange={(value) => set('expectations', value)} maxLength={500} /></Field>
+            <Field label="Q20. 自我介绍" optional hint="「找同学」中的自我介绍关键词会检索这一部分。"><Textarea aria-label="自我介绍" value={form.bio} onChange={(e) => set('bio', e.target.value)} maxLength={300} className="min-h-36" placeholder="介绍你的学习习惯、擅长的学科，或者其他想让搭子了解的事" /></Field>
           </Section>
           <Section active={step === 6} index={6} desc="你可以自行决定展示范围，发布前请逐项确认隐私说明。">
             <Field label="Q21. 兴趣爱好" optional hint="有共同兴趣会略微加分。"><ChipGroup options={INTERESTS} value={form.interests} onChange={(v) => set('interests', v)} multi />{form.interests.includes('other') && <Input aria-label="其他兴趣爱好" className="mt-3" maxLength={120} value={form.interestsOther} onChange={(e) => set('interestsOther', e.target.value)} placeholder="其他兴趣爱好" />}</Field>

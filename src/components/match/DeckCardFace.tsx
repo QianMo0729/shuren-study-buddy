@@ -36,7 +36,8 @@ export function DeckCardFace({ card, onOpen }: { card: DeckCard; onOpen?: () => 
         </div>
         <div className="flex min-w-0 max-w-[46%] items-center gap-2.5">
           <div className="min-w-0 text-right">
-            <Nickname name={card.nickname} size={15} className="max-w-full justify-end" />
+            {card.remarkName ? <span className="block truncate font-display text-[15px] text-ink">{card.remarkName}</span> : <Nickname name={card.nickname} size={15} className="max-w-full justify-end" />}
+            {card.remarkName && <p className="truncate text-[11px] text-ink-3">原昵称：{card.nickname}</p>}
             <p className="mt-0.5 truncate text-[12px] text-ink-3">{[card.major, optionLabel(GRADES, card.grade)].filter(Boolean).join(' · ') || '专业未填'}</p>
           </div>
           <Plate nickname={card.nickname} photo={card.cover} className="size-12 shrink-0 rounded-[5px] border border-line" pad="8%" />

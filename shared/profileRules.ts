@@ -1,5 +1,6 @@
 import { GRADES, PLAN_PRESETS, SPORTS, TRAITS, optionLabel, overlapSlots } from './options.ts';
 import type { Contacts, Personality, PrivacyConsent, ProfileInput } from './types.ts';
+import { canonicalMajor } from './majors.ts';
 
 export const emptyContacts = (): Contacts => ({ showEmail: false, wechat: '', qq: '', phone: '', other: '' });
 export const emptyPersonality = (): Personality => ({ talk: 0, noise: 0, punctual: 0, plan: 0, needSupervision: 0, giveSupervision: 0, social: 0 });
@@ -47,6 +48,7 @@ export function pickProfileInput(src: Partial<ProfileInput>): ProfileInput {
   const out = {} as Record<string, unknown>;
   for (const k of PROFILE_KEYS) out[k] = src[k] ?? base[k];
   const p = out as unknown as ProfileInput;
+  p.major = canonicalMajor(p.major) ?? p.major;
   p.genderVisibility = src.genderVisibility === 'private' ? 'private' : 'public';
   p.contacts = { ...emptyContacts(), ...src.contacts };
   p.privacyConsent = { ...emptyConsent(), ...src.privacyConsent };

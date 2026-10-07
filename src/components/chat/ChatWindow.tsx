@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ArrowDown, ChevronLeft, Copy, Flag, HeartOff, UserRound, UserRoundX } from 'lucide-react';
+import { ArrowDown, ChevronLeft, Copy, Flag, HeartOff, NotebookPen, UserRound, UserRoundX } from 'lucide-react';
 import type { ChatMessage, ChatSummary } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -9,6 +9,7 @@ import { useToast } from '../../lib/toast';
 import { Button, ConfirmDialog, Modal, Skeleton } from '../ui';
 import { ReportDialog } from '../moderation';
 import { ProfileOverlay } from '../ProfileOverlay';
+import { PrivateNoteDialog } from '../PrivateNote';
 import { ChatAvatar } from './ChatAvatar';
 import { ChatMenu, type ChatMenuItem } from './ChatMenu';
 import { Composer } from './Composer';
@@ -53,6 +54,7 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
   const [olderBusy, setOlderBusy] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   const [report, setReport] = useState<{ type: 'message' | 'profile'; id: number }>({ type: 'profile', id: 0 });
   const [reportOpen, setReportOpen] = useState(false);
   const [sheet, setSheet] = useState<ChatMessage | null>(null);
@@ -342,6 +344,7 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
   const closed = summary.status === 'closed';
   const menu: ChatMenuItem[] = [
     { label: '查看主页', icon: UserRound, onSelect: () => setProfileOpen(true) },
+    { label: '私人备注', icon: NotebookPen, onSelect: () => setNoteOpen(true) },
     ...(closed ? [] : [{ label: '解除配对', icon: HeartOff, onSelect: () => setConfirm('close') }]),
     { label: '排除这位同学', icon: UserRoundX, onSelect: () => setConfirm('exclude'), danger: true },
     { label: '举报这位同学', icon: Flag, onSelect: () => openReport('profile', other.id), danger: true },
@@ -386,8 +389,8 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
         >
           <ChatAvatar nickname={other.nickname} cover={other.cover} className="size-9" />
           <span className="min-w-0">
-            <span className="block truncate font-display text-[17px] leading-tight text-ink">{other.nickname}</span>
-            <span className="block text-[12px] text-ink-3">{closed ? '配对已解除' : '你们互相感兴趣'}</span>
+            <span className="block truncate font-display text-[17px] leading-tight text-ink">{other.privateNote?.remarkName || other.nickname}</span>
+            <span className="block truncate text-[12px] text-ink-3">{other.privateNote?.remarkName ? `原昵称：${other.nickname} · ` : ''}{closed ? '配对已解除' : '你们互相感兴趣'}</span>
           </span>
         </button>
         <ChatMenu items={menu} />
@@ -466,6 +469,11 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
         onCancel={() => { if (!confirmBusy) setConfirm(null); }}
         onConfirm={() => void exclude()}
       />
+
+      {noteOpen && <PrivateNoteDialog key={other.id} targetId={other.id} nickname={other.nickname} value={other.privateNote ?? null} onClose={() => setNoteOpen(false)} onSaved={(privateNote) => {
+        setSummary((current) => current?.other.id === other.id ? { ...current, other: { ...current.other, privateNote } } : current);
+        onActivityRef.current();
+      }} />}
 
       <AnimatePresence>
         {profileOpen && (
