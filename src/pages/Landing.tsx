@@ -21,9 +21,9 @@ const NOTES = [
   '输入学号验证校园邮箱并设置密码，接着填写搭子问卷：学习目标与具体科目、空闲时间、地点、学习方式，以及一组「学习性格」小题。以后用邮箱和密码登录。',
   '每位同学的昵称，由系统从校园里常见的二十四种动植物中随机选取，后附编号，例如「白鹭 KLM23」。姓名与学号不公开，只有管理员可见。',
   '「匹配推荐」一次弹出一张卡片。契合度同时看两边：TA 是否符合你的期待，你是否也符合 TA 的期待；时间、学习内容和学习性格占比最高。',
-  '你可以选「感兴趣」「不感兴趣」或「稍后再看」。系统会根据你的选择调整排序，多推荐你感兴趣的类型；不感兴趣的同学不会再出现，也不会收到任何提示。',
+  '你可以选「感兴趣」「不感兴趣」或「稍后再看」。每天最多推荐 5 位，系统根据感兴趣与不感兴趣调整次日排序；稍后再看会保存在独立清单中，不感兴趣的同学不会再出现，也不会收到任何提示。',
   '只有双方都选了「感兴趣」，才会出现在「私聊」里。先聊聊学习安排，觉得合适再在聊天中申请交换联系方式，双方确认后才会显示。',
-  '「校园社区」里有聊天区、打卡区和招募。聊天区可以发帖分享生活；搜索帖子时可以切换到高级检索，按条件找帖子或找同学。',
+  '「校园社区」里有聊天区、打卡区和招募。聊天区可以发帖分享生活；社区搜索只查帖子；在匹配页的「找同学」中，可按专业、课程、时间等条件主动检索。',
   '打卡只能用网页实时拍照，不能上传相册图片。服务器收到照片后，在右下角逐像素盖上位置与北京时间，水印颜色随背景深浅自动取黑或白。',
   '学发定期查看新发布和修改过的内容。违规的主页、帖子或打卡会被撤下，当事人会收到写明时间与原因的邮件。',
   '图版取自公有领域的博物学著作，照片取自维基共享资源，出处列在文末。',
@@ -40,6 +40,8 @@ export function Landing() {
   }, []);
 
   const go = () => nav(user ? '/match' : '/login');
+  // 第一次来的同学没有密码：入口直接通向「用学号激活」，而不是邮箱密码登录
+  const activate = () => nav('/login?mode=activate');
   const counts = meta?.breakdown?.species ?? {};
   const published = meta?.stats.profiles ?? 0;
   const kinds = Object.keys(counts).length;
@@ -61,9 +63,14 @@ export function Landing() {
               </Link>
             </>
           )}
-          <Button size="sm" variant={user ? 'primary' : 'secondary'} onClick={go}>
-            {user ? '开始匹配' : '登录'}
-          </Button>
+          {user ? (
+            <Button size="sm" variant="primary" onClick={go}>开始匹配</Button>
+          ) : (
+            <span className="flex items-center gap-2">
+              <Button size="sm" variant="primary" onClick={activate}>激活账号</Button>
+              <Button size="sm" variant="secondary" onClick={go}>登录</Button>
+            </span>
+          )}
         </nav>
       </header>
 
@@ -106,9 +113,14 @@ export function Landing() {
               这是树仁书院同学的学习搭子平台。填写学习问卷后，系统会根据双方的时间、学习内容和学习性格推荐合拍的同学；互相感兴趣就能私聊。你也可以在校园社区分享生活、拍照打卡，或发起一场招募。
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
-              <Button variant="primary" size="lg" onClick={go}>
-                {user ? '查看为我推荐的搭子' : '邮箱与密码登录'}
+              <Button variant="primary" size="lg" onClick={user ? go : activate}>
+                {user ? '查看为我推荐的搭子' : '用学号激活账号'}
               </Button>
+              {!user && (
+                <Link to="/login" className="text-[15px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
+                  已有账号，登录
+                </Link>
+              )}
               <a href="#notes" className="text-[15px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
                 先读凡例
               </a>
@@ -180,8 +192,8 @@ export function Landing() {
         </figure>
         <div className="flex flex-wrap items-center justify-between gap-5 py-12 sm:py-16">
           <p className="font-display text-[26px] tracking-[-0.03em] text-ink sm:text-[32px]">轮到你写自己的那一页了。</p>
-          <Button variant="primary" size="lg" onClick={() => nav(user ? '/me/edit' : '/login')}>
-            {user ? '编辑我的问卷' : '登录并填写'}
+          <Button variant="primary" size="lg" onClick={() => (user ? nav('/me/edit') : activate())}>
+            {user ? '编辑我的问卷' : '激活账号并填写'}
           </Button>
         </div>
       </section>

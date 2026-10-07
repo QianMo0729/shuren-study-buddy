@@ -98,11 +98,11 @@ export function MatchButtons({ actions, compact, className }: { actions: MatchAc
   }
   return (
     <div className={cx('flex items-center gap-2', className)}>
-      <Button variant="secondary" size={size} icon={<X size={16} />} loading={busy === 'dislike'} disabled={!!busy} onClick={() => void send('dislike')} className={compact ? 'flex-1' : undefined}>
-        不感兴趣
-      </Button>
       <Button variant="primary" size={size} icon={<Heart size={16} />} loading={busy === 'like'} disabled={!!busy} onClick={() => void send('like')} className={compact ? 'flex-1' : undefined}>
         感兴趣
+      </Button>
+      <Button variant="secondary" size={size} icon={<X size={16} />} loading={busy === 'dislike'} disabled={!!busy} onClick={() => void send('dislike')} className={compact ? 'flex-1' : undefined}>
+        不感兴趣
       </Button>
     </div>
   );

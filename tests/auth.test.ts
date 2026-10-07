@@ -12,6 +12,10 @@ import bcrypt from 'bcryptjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const hash = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+// Verification codes are stored as HMACs keyed by a server secret that never enters the database.
+const CODE_PEPPER = 'test-only-code-pepper';
+const codeHash = (email: string, purpose: string, code: string) =>
+  crypto.createHmac('sha256', CODE_PEPPER).update(`${email}:${purpose}:${code}`).digest('hex');
 const password = 'StudyBuddy2026!';
 const nextPassword = 'AnotherPassword2026!';
 const emailOf = (studentId: string) => `${studentId}@mail.sustech.edu.cn`;
@@ -40,7 +44,7 @@ globalThis.fetch = async (url, options) => {
     cwd: root,
     env: {
       ...process.env, NODE_ENV: production ? 'production' : 'test', HOST: '127.0.0.1', PORT: String(port),
-      DATA_DIR: dir, APP_URL: url, ADMIN_EMAILS: '', DEV_SHOW_CODES: 'true',
+      DATA_DIR: dir, APP_URL: url, ADMIN_EMAILS: '', DEV_SHOW_CODES: 'true', CODE_PEPPER,
       RESEND_API_KEY: resendStatus === undefined ? '' : 're_fake_test_key', SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '',
       MAIL_FROM: resendStatus === undefined ? '' : 'noreply@example.test',
     },
@@ -51,10 +55,11 @@ globalThis.fetch = async (url, options) => {
   child.stderr?.on('data', (chunk) => { output += String(chunk); });
   let startupError: Error | undefined;
   child.on('error', (error) => { startupError = error; });
-  const api = async (endpoint: string, body?: unknown, cookie?: string) => {
+  // `headers` replaces the default same-origin Origin, so a test can act as a script or a proxied remote client.
+  const api = async (endpoint: string, body?: unknown, cookie?: string, headers?: Record<string, string>) => {
     const response = await fetch(`${url}/api${endpoint}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json', Origin: url }), ...(cookie ? { Cookie: cookie } : {}) },
+      headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json', ...(headers ?? { Origin: url }) }), ...(cookie ? { Cookie: cookie } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
@@ -74,7 +79,7 @@ globalThis.fetch = async (url, options) => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert.ok(ready, `Test API did not start: ${output}`);
-    return { api, dir, mailLog, stop, db: new DatabaseSync(path.join(dir, 'app.db')) };
+    return { api, dir, mailLog, stop, url, db: new DatabaseSync(path.join(dir, 'app.db')) };
   } catch (error) {
     await stop();
     throw error;
@@ -144,7 +149,54 @@ test('account activation, password login and recovery use isolated one-use crede
     assert.notEqual(row.password_hash, password);
     assert.ok(await bcrypt.compare(password, String(row.password_hash)));
     assert.equal((await api('/auth/me', undefined, firstSession)).body.user.id, userId);
-    assert.equal((await api('/auth/request-activation-code', { studentId })).status, 409);
+    // An activated account answers exactly like any other student ID; only the mailbox owner learns the state.
+    db.prepare("UPDATE email_codes SET created_at = datetime('now', '-2 minutes') WHERE email = ?").run(email);
+    const again = await api('/auth/request-activation-code', { studentId });
+    assert.equal(again.status, 200);
+    assert.deepEqual(again.body, { ok: true, email });
+    const decoy = db.prepare("SELECT used, attempts FROM email_codes WHERE email = ? AND purpose = 'activation' ORDER BY id DESC LIMIT 1").get(email)!;
+    assert.equal(decoy.used, 0, 'the placeholder behaves like a live code that no guess can match');
+    assert.equal((await api('/auth/request-activation-code', { studentId })).status, 429, 'the same resend cooldown applies');
+    const guess = await api('/auth/verify-activation-code', { studentId, code: '123456' });
+    assert.equal(guess.status, 400);
+    assert.equal(guess.body.error, '验证码不正确');
+    assert.equal(db.prepare("SELECT attempts FROM email_codes WHERE email = ? AND purpose = 'activation' ORDER BY id DESC LIMIT 1").get(email)?.attempts, 1);
+  });
+
+  await t.test('codes are stored as keyed verifiers that a database copy alone cannot brute-force', async () => {
+    const studentId = '12619910';
+    const requested = await api('/auth/request-activation-code', { studentId });
+    const code = requested.body.devCode as string;
+    const stored = String(db.prepare("SELECT code_hash FROM email_codes WHERE email = ? AND purpose = 'activation'").get(emailOf(studentId))!.code_hash);
+    assert.notEqual(stored, hash(`${emailOf(studentId)}:activation:${code}`), 'no unkeyed hash of the code is stored');
+    assert.equal(stored, codeHash(emailOf(studentId), 'activation', code));
+    // Every value an attacker could derive from the database alone fails to reproduce the verifier.
+    for (const candidate of [code, `${emailOf(studentId)}:${code}`, `${emailOf(studentId)}:activation:${code}`, `activation:${code}`]) {
+      assert.notEqual(stored, hash(candidate));
+    }
+  });
+
+  await t.test('code echo is limited to a browser on this machine: no echo for scripts or clients behind the dev proxy', async () => {
+    // A script that omits browser headers gets no code, even from loopback.
+    const script = await api('/auth/request-activation-code', { studentId: '12619911' }, undefined, {});
+    assert.equal(script.status, 200);
+    assert.equal(script.body.devCode, undefined);
+    // The dev proxy forwards the real client address; a LAN client is not the local developer.
+    const proxied = await api('/auth/request-activation-code', { studentId: '12619912' }, undefined, { Origin: app.url, 'X-Forwarded-For': '192.168.1.23' });
+    assert.equal(proxied.status, 200);
+    assert.equal(proxied.body.devCode, undefined);
+    // A forged loopback hop in front of the real address does not help.
+    const forged = await api('/auth/request-activation-code', { studentId: '12619913' }, undefined, { Origin: app.url, 'X-Forwarded-For': '127.0.0.1, 192.168.1.24' });
+    assert.equal(forged.body.devCode, undefined);
+    const reset = await api('/auth/request-reset-code', { email }, undefined, { Origin: app.url, 'X-Forwarded-For': '192.168.1.25' });
+    assert.equal(reset.status, 200);
+    assert.equal(reset.body.devCode, undefined);
+    db.prepare("UPDATE email_codes SET created_at = datetime('now', '-2 minutes') WHERE email = ? AND purpose = 'password_reset'").run(email);
+    assert.equal((await fetch(`${app.url}/api/meta`, { headers: { 'X-Forwarded-For': '192.168.1.26' } }).then((r) => r.json()) as any).devMode, false);
+    assert.equal((await api('/meta')).body.devMode, true);
+    // The developer's own browser still sees it.
+    const local = await api('/auth/request-activation-code', { studentId: '12619914' });
+    assert.match(local.body.devCode, /^\d{6}$/);
   });
 
   await t.test('password login accepts the email; logout invalidates its own session', async () => {
@@ -168,7 +220,7 @@ test('account activation, password login and recovery use isolated one-use crede
     assert.equal((await api('/auth/request-reset-code', { email })).status, 429);
     const activationOnly = code === '123456' ? '654321' : '123456';
     db.prepare('INSERT INTO email_codes (email, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?)')
-      .run(email, 'activation', hash(`${email}:activation:${activationOnly}`), new Date(Date.now() + 600_000).toISOString());
+      .run(email, 'activation', codeHash(email, 'activation', activationOnly), new Date(Date.now() + 600_000).toISOString());
     assert.equal((await api('/auth/reset-password', { email, code: activationOnly, password: nextPassword })).status, 400);
     assert.equal(db.prepare("SELECT attempts FROM email_codes WHERE email = ? AND purpose = 'password_reset' ORDER BY id DESC LIMIT 1").get(email)?.attempts, 1);
     assert.equal((await api('/auth/reset-password', { email, code, password: 'short' })).status, 400);
@@ -185,6 +237,12 @@ test('account activation, password login and recovery use isolated one-use crede
     assert.equal(unknown.status, 200);
     assert.equal(unknown.body.ok, true);
     assert.equal(unknown.body.devCode, undefined);
+    // An address without an account is indistinguishable afterwards too: same cooldown, same wrong-code answer.
+    assert.equal((await api('/auth/request-reset-code', { email: emailOf('12619999') })).status, 429);
+    const guess = await api('/auth/reset-password', { email: emailOf('12619999'), code: '123456', password: nextPassword });
+    assert.equal(guess.status, 400);
+    assert.equal(guess.body.error, '验证码不正确');
+    assert.equal(db.prepare('SELECT id FROM users WHERE email = ?').get(emailOf('12619999')), undefined);
   });
 
   await t.test('legacy accounts must set a password and retain their identity and profile', async () => {
@@ -278,4 +336,60 @@ test('failed Resend delivery invalidates the generated code and does not create 
   assert.equal(deliveries.length, 2);
   const code = JSON.parse(deliveries[0].body).text.match(/验证码：(\d{6})/)[1];
   assert.equal((await app.api('/auth/verify-activation-code', { studentId, code })).status, 400);
+});
+
+test('activation and recovery answer identically whether or not the account exists', { timeout: 60_000 }, async (t) => {
+  const app = await startServer(true, 200);
+  t.after(async () => { app.db.close(); await app.stop(); });
+  const { api, db } = app;
+  const [activeId, freshId] = ['12619920', '12619921'];
+  db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(emailOf(activeId), await bcrypt.hash(password, 4));
+  const mails = async () => (await fs.readFile(app.mailLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(JSON.parse(line).body));
+  const same = (a: { status: number; body: any }, b: { status: number; body: any }, label: string) => {
+    assert.equal(a.status, b.status, label);
+    assert.deepEqual(Object.keys(a.body).sort(), Object.keys(b.body).sort(), label);
+    assert.equal(a.body.error, b.body.error, label);
+  };
+
+  // Activation: an activated account and a fresh student ID.
+  const [activeCode, freshCode] = [await api('/auth/request-activation-code', { studentId: activeId }), await api('/auth/request-activation-code', { studentId: freshId })];
+  same(activeCode, freshCode, 'request-activation-code');
+  assert.equal(activeCode.status, 200);
+  same(await api('/auth/request-activation-code', { studentId: activeId }), await api('/auth/request-activation-code', { studentId: freshId }), 'activation resend cooldown');
+  same(await api('/auth/verify-activation-code', { studentId: activeId, code: '000000' }), await api('/auth/verify-activation-code', { studentId: freshId, code: '000000' }), 'verify-activation-code');
+
+  // Recovery: an activated account and an address without one.
+  const [knownReset, unknownReset] = [await api('/auth/request-reset-code', { email: emailOf(activeId) }), await api('/auth/request-reset-code', { email: emailOf(freshId) })];
+  same(knownReset, unknownReset, 'request-reset-code');
+  assert.equal(knownReset.status, 200);
+  same(await api('/auth/request-reset-code', { email: emailOf(activeId) }), await api('/auth/request-reset-code', { email: emailOf(freshId) }), 'reset resend cooldown');
+  same(await api('/auth/reset-password', { email: emailOf(activeId), code: '000000', password: nextPassword }),
+    await api('/auth/reset-password', { email: emailOf(freshId), code: '000000', password: nextPassword }), 'reset-password');
+
+  // Each request sent exactly one mail; only the owner of the mailbox learns the account state, and no code leaks into a notice.
+  const sent = await mails();
+  assert.equal(sent.length, 4);
+  const to = (address: string, subject: RegExp) => sent.find((mail) => mail.to[0] === address && subject.test(mail.subject));
+  assert.match(to(emailOf(freshId), /激活/)!.text, /验证码：\d{6}/);
+  assert.match(to(emailOf(activeId), /重置|重设/)!.text, /验证码：\d{6}/);
+  for (const notice of [to(emailOf(activeId), /已经激活/)!, to(emailOf(freshId), /还没有激活/)!]) {
+    assert.doesNotMatch(notice.text, /\d{6}/);
+    assert.doesNotMatch(notice.html, /\d{6}/);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM users').get()?.n, 1, 'no account is created by any of these requests');
+});
+
+test('one source cannot mint unlimited rate-limit keys by rotating student IDs', { timeout: 60_000 }, async (t) => {
+  const app = await startServer();
+  t.after(async () => { app.db.close(); await app.stop(); });
+  const verify = (n: number, source: string) =>
+    app.api('/auth/verify-activation-code', { studentId: String(12700000 + n), code: '000000' }, undefined, { Origin: app.url, 'X-Forwarded-For': source });
+  // 60 different student IDs from one address are answered; the 61st hits the per-source budget before any new key is created.
+  for (let i = 0; i < 60; i++) assert.equal((await verify(i, '198.51.100.7')).status, 400);
+  assert.equal((await verify(60, '198.51.100.7')).status, 429);
+  assert.equal((await verify(61, '198.51.100.8')).status, 400, 'another source has its own budget');
+  // Rotating addresses inside one IPv6 /64 does not create new budgets either.
+  for (let i = 0; i < 60; i++) assert.equal((await verify(100 + i, `2001:db8:5:6::${(i + 1).toString(16)}`)).status, 400);
+  assert.equal((await verify(160, '2001:db8:5:6:ffff::1')).status, 429);
+  assert.equal((await verify(161, '2001:db8:5:7::1')).status, 400);
 });

@@ -1,3 +1,4 @@
+import { PendingReviewBadge } from '../ReviewStatus';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Flag, MessageSquare, Send, Trash2 } from 'lucide-react';
@@ -50,7 +51,7 @@ export function Comments({ type, id, onCountChange, readOnly = false }: {
 
   const update = (next: ForumComment[]) => {
     setItems(next);
-    countCb.current?.(next.length);
+    countCb.current?.(next.filter((comment) => !comment.reviewPending).length);
   };
 
   const submit = async () => {
@@ -61,6 +62,7 @@ export function Comments({ type, id, onCountChange, readOnly = false }: {
       const r = await api.forum.comment(type, id, body);
       update([...(items ?? []), r.comment]);
       setText('');
+      toast.success(r.comment.reviewPending ? '已提交，等待审核' : '已发布');
     } catch (e) {
       toast.error('评论失败', e instanceof ApiError ? e.message : undefined);
     } finally {
@@ -163,6 +165,7 @@ export function Comments({ type, id, onCountChange, readOnly = false }: {
                       )}
                     </div>
                   </div>
+                  {c.reviewPending && <div className="mt-1 pl-[46px]"><PendingReviewBadge /></div>}
                   <p className="mt-2 pl-[46px] text-[15px] leading-relaxed whitespace-pre-wrap break-words text-ink">{c.body}</p>
                 </motion.li>
               ))}

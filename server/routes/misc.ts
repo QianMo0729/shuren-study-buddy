@@ -1,21 +1,20 @@
 import { Router } from 'express';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { REPORT_REASONS } from '../../shared/options.ts';
 import { speciesOfNickname } from '../../shared/species.ts';
-import { HttpError, canShowDevCodes, rateLimit, requireUser } from '../auth.ts';
+import { HttpError, isLocalDevRequest, rateLimit, requireUser } from '../auth.ts';
 import { config } from '../config.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
 import { hasPrivacyConsent } from '../../shared/profileRules.ts';
 import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
-import { fileAccessFor, reportTargetFor } from '../social.ts';
+import { boundSnapshot, fileAccessFor, reportTargetFor } from '../social.ts';
+import { UPLOAD_DIR, UPLOAD_NAME, assertStorageAvailable, assertUploadQuota, storeUpload } from '../uploads.ts';
 import type { ReportTargetType } from '../../shared/types.ts';
 
 export const miscRouter = Router();
 
-const UPLOAD_DIR = path.join(config.dataDir, 'uploads');
 const MAX_BYTES = 5 * 1024 * 1024;
 
 function sniff(buf: Buffer): 'jpg' | 'png' | 'webp' | null {
@@ -27,6 +26,7 @@ function sniff(buf: Buffer): 'jpg' | 'png' | 'webp' | null {
 
 // 图片以 dataURL 上传（前端已压缩），落盘后仅登录用户可访问。
 // 打卡照片（kind = checkin）不能走这里，只能通过实时拍照的打卡接口由服务器盖章后保存。
+// 除了单张大小与每小时次数，每人还有合计配额；不再被引用的图片由 server/uploads.ts 定期清理。
 miscRouter.post('/uploads', requireUser, (req, res) => {
   rateLimit(`upload:${req.user!.id}`, 60, 60 * 60_000);
   if (req.body?.kind === 'checkin') throw new HttpError(400, '打卡照片只能在打卡页面用相机实时拍摄');
@@ -37,15 +37,14 @@ miscRouter.post('/uploads', requireUser, (req, res) => {
   if (buf.length > MAX_BYTES) throw new HttpError(400, '图片过大，请选择 5MB 以内的图片');
   const ext = sniff(buf);
   if (!ext) throw new HttpError(400, '仅支持 JPG / PNG / WebP 图片');
-  const name = `${crypto.randomBytes(12).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
-  q.run('INSERT INTO uploads (name, user_id, kind) VALUES (?, ?, ?)', name, req.user!.id, kind);
-  res.json({ name });
+  assertStorageAvailable();
+  assertUploadQuota(req.user!.id, buf.length);
+  res.json({ name: storeUpload(req.user!.id, kind, ext, buf) });
 });
 
 miscRouter.get('/files/:name', requireUser, (req, res) => {
   const name = String(req.params.name);
-  if (!/^[a-f0-9]{24}\.(jpg|png|webp)$/.test(name)) throw new HttpError(404, '文件不存在');
+  if (!UPLOAD_NAME.test(name)) throw new HttpError(404, '文件不存在');
   const owner = q.get<{ user_id: number; kind: string }>('SELECT user_id, kind FROM uploads WHERE name = ?', name);
   if (!owner) throw new HttpError(404, '文件不存在');
   const uid = req.user!.id;
@@ -91,17 +90,12 @@ miscRouter.post('/reports', requireUser, (req, res) => {
   const targetId = Number(req.body?.targetId);
   const reason = String(req.body?.reason ?? '');
   if (!Number.isInteger(targetId) || !REPORT_REASONS.includes(reason)) throw new HttpError(400, '请选择举报原因');
+  // 每种对象都由所属模块判断“举报人此刻能否看到它”；看不到的与不存在的返回同样的结果
   const registered = reportTargetFor(targetType);
-  const exists =
-    targetType === 'post'
-      ? q.get('SELECT 1 FROM posts WHERE id = ? AND deleted = 0', targetId)
-      : targetType === 'profile'
-        ? q.get('SELECT 1 FROM profiles WHERE user_id = ?', targetId)
-        : registered?.canReport(req.user!.id, targetId);
-  if (!exists) throw new HttpError(404, '举报对象不存在');
+  if (!registered?.canReport(req.user!.id, targetId)) throw new HttpError(404, '举报对象不存在');
   const detail = String(req.body?.detail ?? '').slice(0, 200);
   // 被举报内容的原文快照存在独立的 snapshot 列，举报人填写的说明无法伪造它
-  const snapshot = (registered?.snapshot?.(targetId) ?? '').slice(0, 1000);
+  const snapshot = boundSnapshot(registered.snapshot(targetId));
   const dup = q.get(
     "SELECT 1 FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? AND status = 'open'",
     req.user!.id, targetType, targetId,
@@ -145,7 +139,7 @@ miscRouter.get('/meta', (req, res) => {
   res.json({
     breakdown: landingStats(),
     allowedDomains: config.allowedDomains,
-    devMode: canShowDevCodes(req),
+    devMode: isLocalDevRequest(req),
     stats: {
       profiles: q.get<{ n: number }>('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0')!.n,
       posts: q.get<{ n: number }>("SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND status = 'open'")!.n,

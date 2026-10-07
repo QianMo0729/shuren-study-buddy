@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { CalendarClock, ChevronLeft, ChevronRight, Clock3, Flag, Link2, Pencil, ShieldX, Star, UserRoundX, X } from 'lucide-react';
 import { collegeOf } from '../../shared/majors';
@@ -24,6 +24,7 @@ import { ReportDialog, TakedownDialog } from './moderation';
 import { MatchBar, MatchButtons, MatchCelebrationFor, useMatchActions } from './match/MatchActions';
 import { MoreMenu } from './match/MoreMenu';
 import { PersonalityScale } from './match/PersonalityScale';
+import { PrivateNote } from './PrivateNote';
 
 export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, searchQuery, keyword, recommendation }: { profile: PublicProfile; onClose?: () => void; onChanged?: () => void; inOverlay?: boolean; match?: MatchInfo; searchQuery?: AdvancedQuery; keyword?: string; recommendation?: RecommendationInfo }) {
   const { user } = useAuth();
@@ -35,6 +36,8 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
   const [takedown, setTakedown] = useState(false);
   const [excluding, setExcluding] = useState(false);
   const [excludeBusy, setExcludeBusy] = useState(false);
+  const [privateNote, setPrivateNote] = useState(profile.privateNote ?? null);
+  useEffect(() => { setPrivateNote(profile.privateNote ?? null); }, [profile.id, profile.privateNote]);
   const actions = useMatchActions(profile, onChanged);
   const leave = () => { onChanged?.(); onClose ? onClose() : nav('/match'); };
   const publicPhotos = profile.isMe || profile.photoVisibility === 'public' ? profile.photos : [];
@@ -62,6 +65,25 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
   const format = optionLabel(STUDY_FORMATS, profile.studyFormat);
   const deadline = deadlineText(profile.goalDeadline);
 
+  const plateCaption = !publicPhotos.length && sp ? (
+    <>
+      <p>
+        <span className="font-display text-[15px] text-ink-2">{sp.zh}</span> <span className="latin">{sp.latin}</span>
+      </p>
+      <p className="mt-0.5 text-ink-2">{sp.note}</p>
+      {plateCredit && (
+        <p className="mt-1">
+          图版：
+          <a href={plateCredit.sourceUrl} target="_blank" rel="noreferrer" className="underline decoration-line-strong underline-offset-2 hover:text-ink">
+            {plateCredit.author || plateCredit.title}
+            {plateCredit.date ? `，${plateCredit.date}` : ''}
+          </a>
+          ，公有领域
+        </p>
+      )}
+    </>
+  ) : null;
+
   return (
     <div className="grid md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] md:gap-8">
       {/* 照片 */}
@@ -69,24 +91,8 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
         <motion.div layoutId={inOverlay ? `cover-${profile.id}` : undefined} transition={spring} className="relative aspect-[4/3] overflow-hidden bg-mat md:aspect-[4/5] md:rounded-md">
           {publicPhotos.length ? <Photos photos={publicPhotos} /> : <Plate nickname={profile.nickname} className="h-full w-full" pad="8%" />}
         </motion.div>
-        {!publicPhotos.length && sp && (
-          <figcaption className="px-5 pt-3 text-[13px] leading-relaxed text-ink-3 md:px-0">
-            <p>
-              <span className="font-display text-[15px] text-ink-2">{sp.zh}</span> <span className="latin">{sp.latin}</span>
-            </p>
-            <p className="mt-0.5 text-ink-2">{sp.note}</p>
-            {plateCredit && (
-              <p className="mt-1">
-                图版：
-                <a href={plateCredit.sourceUrl} target="_blank" rel="noreferrer" className="underline decoration-line-strong underline-offset-2 hover:text-ink">
-                  {plateCredit.author || plateCredit.title}
-                  {plateCredit.date ? `，${plateCredit.date}` : ''}
-                </a>
-                ，公有领域
-              </p>
-            )}
-          </figcaption>
-        )}
+        {/* 手机上从推荐卡片点进来时，先让推荐理由进入首屏：物种说明与图版出处移到页尾（见下方） */}
+        {plateCaption && <figcaption className={cx('px-5 pt-3 text-[13px] leading-relaxed text-ink-3 md:px-0', recommendation && 'max-md:hidden')}>{plateCaption}</figcaption>}
         {onClose && (
           <IconButton label="关闭" onClick={onClose} className="absolute top-3 left-3 bg-surface/90 shadow-sm md:hidden">
             <X size={18} />
@@ -104,8 +110,9 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               {profile.publishedAt && <span>· {timeAgo(profile.publishedAt)}上传</span>}
             </p>
             <motion.h2 layoutId={inOverlay ? `nick-${profile.id}` : undefined} transition={spring} className="mt-1.5">
-              <Nickname name={profile.nickname} size={32} />
+              {privateNote?.remarkName ? <span className="font-display text-[32px] break-words">{privateNote.remarkName}</span> : <Nickname name={profile.nickname} size={32} />}
             </motion.h2>
+            {privateNote?.remarkName && <p className="mt-1 text-[13px] text-ink-3">原昵称：{profile.nickname}</p>}
             <p className="mt-1 text-[15px] text-ink-2">{[profile.major, optionLabel(GRADES, profile.grade)].filter(Boolean).join('，')}</p>
           </div>
           {onClose && (
@@ -172,6 +179,8 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
           )}
         </div>
 
+        {!profile.isMe && <PrivateNote key={profile.id} targetId={profile.id} nickname={profile.nickname} value={privateNote} onChanged={(note) => { setPrivateNote(note); onChanged?.(); }} />}
+
         {!profile.isMe && !recommendation && overlapH > 0 && (
           <p className="mt-5 flex items-center gap-2 text-[14px] text-ink-2">
             <Clock3 size={16} className="shrink-0 text-accent" />
@@ -221,11 +230,11 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               ))}
             </dl>
           </Block>}
-          <Block label="我的学习地点" matched={matched('places')}>
+          <Block label={profile.isMe ? '我的学习地点' : 'TA 的学习地点'} matched={matched('places')}>
             <Chips items={[...profile.places.map((p) => optionLabel(PLACES, p)), profile.placesOther].filter(Boolean)} />
           </Block>
           {(profile.dislikeTags?.length > 0 || profile.dislikes) && (
-            <Block label="不希望搭子这样">
+            <Block label={profile.isMe ? '不希望搭子这样' : 'TA 不希望搭子这样'}>
               <Chips items={[...(profile.dislikeTags ?? []).map((value) => optionLabel(DISLIKE_OPTIONS, value)), ...profile.dislikes.split(/[、，,]/).map((value) => value.trim())].filter(Boolean)} tone="danger" />
             </Block>
           )}
@@ -259,6 +268,7 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               <Chips items={[...(profile.interests ?? []).map((value) => optionLabel(INTERESTS, value)), profile.interestsOther].filter(Boolean)} />
             </Block>
           )}
+          {recommendation && plateCaption && <figcaption className="mt-10 border-t border-line pt-4 text-[13px] leading-relaxed text-ink-3 md:hidden">{plateCaption}</figcaption>}
         </div>
         {!profile.isMe && <MatchBar actions={actions} inOverlay={!!onClose} />}
       </div>

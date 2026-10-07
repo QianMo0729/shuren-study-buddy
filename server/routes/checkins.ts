@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import {
-  CHECKIN_LIMITS, checkSession, checkinVisibleTo, consumeSession, createCheckin, getCheckinRow, issueSession, listCheckins,
-  parseCaption, parseLiveJpeg, parseLocation, parseVisibility, recentCount, statsFor, toCheckin, toCheckins, type FeedScope,
+  CHECKIN_LIMITS, assertCanStamp, checkSession, checkinVisibleTo, consumeSession, createCheckin, getCheckinRow, issueSession, listCheckins,
+  parseCaption, parseLiveJpeg, parseLocation, parsePlaceId, parseVisibility, recentCount, statsFor, toCheckin, toCheckins, type FeedScope,
 } from '../checkins.ts';
 import { q } from '../db.ts';
 import { ensureProfile } from '../profiles.ts';
@@ -26,8 +26,11 @@ checkinRouter.post('/session', (req, res) => {
   res.json(issueSession(uid));
 });
 
+/** 正在盖章的账号：每人同时只处理一张照片，避免一个账号占满盖章线程，也保证每日次数不会被并发提交绕过 */
+const stamping = new Set<number>();
+
 /** 提交打卡：校验凭证 → 校验照片与参数 → 原子地消耗凭证 → 服务器盖章并保存 */
-checkinRouter.post('/', (req, res) => {
+checkinRouter.post('/', async (req, res) => {
   const uid = req.user!.id;
   // 每次提交都要解码与重新编码照片，限制尝试次数（含失败的）
   rateLimit(`checkin-create:${uid}`, 30, 60 * 60_000);
@@ -36,13 +39,22 @@ checkinRouter.post('/', (req, res) => {
   const caption = parseCaption(body.caption);
   const visibility = parseVisibility(body.visibility);
   const location = parseLocation(body.location);
+  const placeId = parsePlaceId(body.placeId);
   const jpeg = parseLiveJpeg(body.image);
   if (recentCount(uid) >= CHECKIN_LIMITS.perDay) throw new HttpError(429, `每天最多打卡 ${CHECKIN_LIMITS.perDay} 次，明天再来吧`);
+  if (stamping.has(uid)) throw new HttpError(429, '上一张照片还在处理，请稍等片刻');
+  // 以下几步都是同步的：确认还有处理能力之后再消耗凭证，凭证不会因为排队已满而白白作废
+  assertCanStamp();
   consumeSession(uid, hash);
   ensureProfile(uid);
-  // 客户端传来的任何时间字段都被忽略：时间取服务器此刻
-  const row = createCheckin(uid, { jpeg, caption, visibility, location }, new Date());
-  res.json({ checkin: toCheckin(row, viewerOf(req)), stats: statsFor(uid) });
+  stamping.add(uid);
+  try {
+    // 客户端传来的任何时间字段都被忽略：时间取服务器此刻
+    const row = await createCheckin(uid, { jpeg, caption, visibility, location, placeId }, new Date());
+    res.json({ checkin: toCheckin(row, viewerOf(req)), stats: statsFor(uid) });
+  } finally {
+    stamping.delete(uid);
+  }
 });
 
 checkinRouter.get('/', (req, res) => {

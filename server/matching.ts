@@ -1,26 +1,24 @@
-// 匹配推荐：候选集、资格状态、排序（问卷契合度 + 个人偏好 + 少量加成）与确定性探索。
+// 匹配推荐：候选集、资格状态、排序（问卷契合度 + 个人偏好）与确定性探索。
 // 评分规则见 server/recommendations.ts；偏好模型的数学部分见 server/learning.ts。
 import crypto from 'node:crypto';
 import { effectiveSchedule, emptyProfile, hasPrivacyConsent, missingFields } from '../shared/profileRules.ts';
-import type { DeckCard, DeckResponse, FeedbackAction, ProfileInput, RecommendationInfo } from '../shared/types.ts';
+import type { DeckCard, DeckResponse, FeedbackAction, ProfileInput, PrivateNote, RecommendationInfo } from '../shared/types.ts';
 import { getSetting, q, setSetting } from './db.ts';
+import { beijingDate, DAILY_RECOMMENDATION_LIMIT, dailyBatch, nextBeijingMidnight, previousExposureDays } from './dailyRecommendations.ts';
+export { beijingDate } from './dailyRecommendations.ts';
 import {
   type Features, type PreferenceModel, type TrainingSample,
   cloneModel, defaultPrior, emphasis, extractFeatures, fitGlobalPrior, onlineUpdate, parseFeatures, parseModel,
   personalizedScore, predict, serializeModel,
 } from './learning.ts';
 import { getProfileRow, parseData, toCard } from './profiles.ts';
+import { notesForOwner } from './notes.ts';
 import { compareRecommendationCards, hardFilter, recommendationFor } from './recommendations.ts';
 
 export type ViewerState = 'ready' | 'incomplete' | 'unavailable' | 'unpublished';
 
 /** 已登录且主页可参与推荐的状态集合 */
 const ACTIVE_STATUSES = ['seeking', 'open'];
-/** 稍后再看的冷却期 */
-export const SKIP_COOLDOWN_DAYS = 3;
-/** 排序加成：对方已对我感兴趣（不向用户透露）、对方近期活跃、对方长期未登录、对方积压了很多未回应的感兴趣 */
-export const BOOST = { likedMe: 6, recentLogin: 2, staleLogin: -10, crowded: -4 } as const;
-const CROWDED_PENDING_LIKES = 15;
 /** 全站先验：至少多少条反馈才拟合、之后每新增多少条重算 */
 export const GLOBAL_MIN_FEEDBACK = 200;
 export const GLOBAL_REFIT_EVERY = 50;
@@ -41,13 +39,12 @@ interface ProfileRowLike {
   reviewed_at: string | null;
   views: number;
 }
-type CandidateRow = ProfileRowLike & { last_login_at: string | null };
-
 export interface ViewerContext {
   uid: number;
   state: ViewerState;
   missing: { key: string; label: string }[];
   data: ProfileInput;
+  notes: Map<number, PrivateNote>;
 }
 
 /** 观看者能否获得推荐：问卷已保存且必填完整 → 未被撤下且状态可约 → 已发布 */
@@ -59,7 +56,7 @@ export function viewerContext(uid: number): ViewerContext {
   if (missing.length || !row?.saved_at) state = 'incomplete';
   else if (row.taken_down || !ACTIVE_STATUSES.includes(data.status)) state = 'unavailable';
   else if (!row.published) state = 'unpublished';
-  return { uid, state, missing, data };
+  return { uid, state, missing, data, notes: notesForOwner(uid) };
 }
 
 // ---------- 偏好模型的存取 ----------
@@ -97,7 +94,7 @@ export function userModel(uid: number): UserModel {
   const rows = q.all<{ features: string; action: FeedbackAction }>(
     `SELECT features, action FROM (
        SELECT features, action, updated_at, target_id FROM match_feedback
-       WHERE user_id = ? AND features <> '{}' ORDER BY updated_at DESC, target_id DESC LIMIT ?
+       WHERE user_id = ? AND features <> '{}' AND action IN ('like', 'dislike') ORDER BY updated_at DESC, target_id DESC LIMIT ?
      ) ORDER BY updated_at, target_id`,
     uid, USER_MAX_ROWS,
   );
@@ -105,7 +102,7 @@ export function userModel(uid: number): UserModel {
   let samples = 0;
   for (const row of rows) {
     const features = parseFeatures(row.features);
-    if (!features || (row.action !== 'like' && row.action !== 'dislike' && row.action !== 'skip')) continue;
+    if (!features || (row.action !== 'like' && row.action !== 'dislike')) continue;
     model = onlineUpdate(model, prior, features, row.action);
     samples += 1;
   }
@@ -127,10 +124,10 @@ function saveUserModel(uid: number, model: PreferenceModel, samples: number) {
  */
 export function learnFromFeedback(uid: number, features: Features | null, _action: FeedbackAction, previous?: { features: Features | null; action: FeedbackAction }) {
   if (!features && !previous?.features) return;
-  if (features) setSetting(EVENTS_KEY, String(Number(getSetting(EVENTS_KEY, '0')) + 1));
+  if (features && _action !== 'skip') setSetting(EVENTS_KEY, String(Number(getSetting(EVENTS_KEY, '0')) + 1));
   const { model, samples } = userModel(uid);
   saveUserModel(uid, model, samples);
-  if (features) scheduleGlobalRefit();
+  if (features && _action !== 'skip') scheduleGlobalRefit();
 }
 
 /** 反馈被删除之后调用（如“撤销上一步”“放回推荐”）：重建并缓存个人模型（解除配对时清空过特征快照，所以总是重建） */
@@ -155,15 +152,15 @@ export function maybeRefitGlobalPrior(force = false): boolean {
   const events = Number(getSetting(EVENTS_KEY, '0'));
   const current = loadGlobal();
   if (!force && current && events - current.events < GLOBAL_REFIT_EVERY) return false;
-  const count = q.get<{ n: number }>("SELECT COUNT(*) n FROM match_feedback WHERE features <> '{}'")!.n;
+  const count = q.get<{ n: number }>("SELECT COUNT(*) n FROM match_feedback WHERE features <> '{}' AND action IN ('like', 'dislike')")!.n;
   if (!force && count < GLOBAL_MIN_FEEDBACK) return false;
   const rows = q.all<{ features: string; action: FeedbackAction }>(
-    "SELECT features, action FROM match_feedback WHERE features <> '{}' ORDER BY updated_at DESC, user_id, target_id LIMIT ?", GLOBAL_MAX_ROWS,
+    "SELECT features, action FROM match_feedback WHERE features <> '{}' AND action IN ('like', 'dislike') ORDER BY updated_at DESC, user_id, target_id LIMIT ?", GLOBAL_MAX_ROWS,
   );
   const samples: TrainingSample[] = [];
   for (const row of rows) {
     const features = parseFeatures(row.features);
-    if (features && (row.action === 'like' || row.action === 'dislike' || row.action === 'skip')) samples.push({ features, action: row.action });
+    if (features && (row.action === 'like' || row.action === 'dislike')) samples.push({ features, action: row.action });
   }
   if (!samples.length) return false;
   const model = fitGlobalPrior(samples, defaultPrior());
@@ -174,7 +171,7 @@ export function maybeRefitGlobalPrior(force = false): boolean {
 // ---------- 候选集 ----------
 
 interface Candidate {
-  row: CandidateRow;
+  row: ProfileRowLike;
   data: ProfileInput;
   rec: RecommendationInfo;
   features: Features;
@@ -190,8 +187,8 @@ const idSet = (rows: { id: number }[]) => new Set(rows.map((r) => r.id));
 /** 资格过滤（含反馈、排除、配对等）后，再经硬条件过滤得到候选人 */
 export function candidatePool(viewer: ViewerContext): CandidatePool {
   const uid = viewer.uid;
-  const rows = q.all<CandidateRow>(
-    `SELECT p.*, u.last_login_at FROM profiles p JOIN users u ON u.id = p.user_id
+  const rows = q.all<ProfileRowLike>(
+    `SELECT p.* FROM profiles p JOIN users u ON u.id = p.user_id
      WHERE p.published = 1 AND p.taken_down = 0 AND p.saved_at IS NOT NULL AND p.saved_at <> '' AND p.user_id <> ?
        AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> ''
      ORDER BY p.user_id`,
@@ -207,10 +204,9 @@ export function candidatePool(viewer: ViewerContext): CandidatePool {
          AND NOT EXISTS (SELECT 1 FROM matches m WHERE (m.user_a = c.requester_id AND m.user_b = c.recipient_id)
                                                   OR (m.user_a = c.recipient_id AND m.user_b = c.requester_id))`, uid, uid, uid,
     )),
-    // 我已感兴趣 / 不感兴趣；稍后再看未满冷却期
+    // 我做过的选择；稍后再看一直保留在待办列表，直到明确处理或移除
     ...idSet(q.all<{ id: number }>(
-      `SELECT target_id AS id FROM match_feedback
-       WHERE user_id = ? AND (action <> 'skip' OR updated_at > datetime('now', ?))`, uid, `-${SKIP_COOLDOWN_DAYS} days`,
+      'SELECT target_id AS id FROM match_feedback WHERE user_id = ?', uid,
     )),
     // 对方已对我不感兴趣（静默）
     ...idSet(q.all<{ id: number }>("SELECT user_id AS id FROM match_feedback WHERE target_id = ? AND action = 'dislike'", uid)),
@@ -235,7 +231,7 @@ export function candidatePool(viewer: ViewerContext): CandidatePool {
 }
 
 function cardOf(viewer: ViewerContext, c: Candidate, rankScore: number, explore: boolean): DeckCard {
-  const me = { id: viewer.uid, schedule: effectiveSchedule(viewer.data) };
+  const me = { id: viewer.uid, schedule: effectiveSchedule(viewer.data), notes: viewer.notes };
   return {
     ...toCard(c.row, c.data, me),
     overlapHours: c.rec.overlapHours,
@@ -246,9 +242,6 @@ function cardOf(viewer: ViewerContext, c: Candidate, rankScore: number, explore:
   };
 }
 
-/** 北京时间日期 YYYY-MM-DD */
-export const beijingDate = (d = new Date()) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-
 /** 探索位的确定性抽签：同一用户同一天结果相同 */
 export function exploreHash(viewerId: number, date: string, candidateId: number): number {
   return crypto.createHash('sha256').update(`${viewerId}:${date}:${candidateId}`).digest().readUInt32BE(0);
@@ -257,86 +250,63 @@ export function exploreHash(viewerId: number, date: string, candidateId: number)
 /** 第 k 个探索位放在第 5k+5 张（下标 5k+4），约占 20% */
 export const explorePositions = (limit: number) => Array.from({ length: Math.floor(limit * 0.2) }, (_, k) => 5 * k + 4);
 
-const msAgo = (sqlTime: string | null) => (sqlTime ? Date.now() - new Date(`${sqlTime.replace(' ', 'T')}Z`).getTime() : null);
-const DAY = 86_400_000;
-
-function emptyDeck(viewer: ViewerContext, samples: number, personalization: DeckResponse['personalization']): DeckResponse {
-  return { items: [], state: viewer.state, missing: viewer.missing, eligibleCount: 0, total: 0, personalization: { ...personalization, samples } };
-}
-
 function personalizationOf(m: UserModel): DeckResponse['personalization'] {
   return { samples: m.samples, active: m.samples >= 5, emphasis: emphasis(m.model, m.prior, m.samples) };
 }
 
-/** 滑卡：契合度与个人偏好混合排序，加上少量加成和约 20% 的确定性探索位 */
+/** 固定每日名单，实时过滤已处理、撤回、拉黑、停用或不再符合硬条件的对象，不补位。 */
 export function buildDeck(uid: number, limit: number, now = new Date()): DeckResponse {
   const viewer = viewerContext(uid);
   const m = userModel(uid);
   const personalization = personalizationOf(m);
-  if (viewer.state !== 'ready') return emptyDeck(viewer, m.samples, personalization);
-  const { eligibleCount, candidates } = candidatePool(viewer);
-  const likedMe = idSet(q.all<{ id: number }>("SELECT user_id AS id FROM match_feedback WHERE target_id = ? AND action = 'like'", uid));
-  // 对方收到但尚未回应（对方没有给出任何反馈、也没有配对）的“感兴趣”
-  const pending = new Map(q.all<{ id: number; n: number }>(
-    `SELECT f.target_id AS id, COUNT(*) AS n FROM match_feedback f
-     LEFT JOIN match_feedback r ON r.user_id = f.target_id AND r.target_id = f.user_id
-     WHERE f.action = 'like' AND r.user_id IS NULL GROUP BY f.target_id`,
-  ).map((r) => [r.id, r.n]));
-  const scored = candidates.map((c) => {
-    const personal = personalizedScore(c.rec.score, predict(m.model, c.features), m.samples);
-    // 公开加成：登录活跃度、被大量请求的人后移——这些不涉及隐私，可以影响展示顺序
-    let boost = 0;
-    const since = msAgo(c.row.last_login_at);
-    if (since !== null && since <= 7 * DAY) boost += BOOST.recentLogin;
-    else if (since !== null && since > 30 * DAY) boost += BOOST.staleLogin;
-    if ((pending.get(c.row.user_id) ?? 0) > CROWDED_PENDING_LIKES) boost += BOOST.crowded;
-    // “对方已对我感兴趣”只影响谁能进入这一批（selectKey），不影响批内顺序（sortKey），
-    // 否则卡片顺序与展示的分数对不上，就能推断出谁对我感兴趣
-    const secret = likedMe.has(c.row.user_id) ? BOOST.likedMe : 0;
-    return { c, personal, sortKey: personal + boost, selectKey: personal + boost + secret };
-  });
-  const cards = (list: typeof scored) => list.map((s) => ({ s, card: cardOf(viewer, s.c, s.personal, false) }));
-  const byKey = (key: 'sortKey' | 'selectKey') => (a: { s: (typeof scored)[number]; card: DeckCard }, b: { s: (typeof scored)[number]; card: DeckCard }) =>
-    b.s[key] - a.s[key] || compareRecommendationCards(a.card, b.card);
-  const ranked = cards(scored).sort(byKey('selectKey'));
-
-  const positions = explorePositions(limit);
   const date = beijingDate(now);
-  const pool = ranked.slice(limit, 3 * limit)
-    .map((entry) => ({ entry, h: exploreHash(uid, date, entry.card.id) }))
-    .sort((a, b) => a.h - b.h || a.entry.card.id - b.entry.card.id)
-    .slice(0, positions.length)
-    .map(({ entry }) => ({ ...entry.card, explore: true }));
-  const main = ranked.slice(0, limit - pool.length).sort(byKey('sortKey')).map((entry) => entry.card);
-  const items: DeckCard[] = [...main];
-  pool.forEach((card, k) => items.splice(Math.min(positions[k], items.length), 0, card));
-
-  return {
-    items,
-    state: candidates.length ? 'ready' : eligibleCount ? 'no_overlap' : 'empty',
-    missing: viewer.missing,
-    eligibleCount,
-    total: candidates.length,
-    personalization,
-  };
-}
-
-/** 列表：只按双向契合度排序（compareRecommendationCards），没有个性化与探索 */
-export function buildRanked(uid: number, limit: number): DeckResponse {
-  const viewer = viewerContext(uid);
-  const m = userModel(uid);
-  const personalization = personalizationOf(m);
-  if (viewer.state !== 'ready') return emptyDeck(viewer, m.samples, personalization);
+  const daily = { date, limit: DAILY_RECOMMENDATION_LIMIT, assigned: 0, remaining: 0, resetsAt: nextBeijingMidnight(date) };
+  if (viewer.state !== 'ready') {
+    return { items: [], state: viewer.state, missing: viewer.missing, eligibleCount: 0, total: 0, personalization, daily };
+  }
   const { eligibleCount, candidates } = candidatePool(viewer);
-  const items = candidates.map((c) => cardOf(viewer, c, c.rec.score, false)).sort(compareRecommendationCards);
+  const batch = dailyBatch(uid, date, () => {
+    const exposures = previousExposureDays(uid, date);
+    const recentSince = beijingDate(new Date(now.getTime() - 7 * 86_400_000));
+    const ranked = candidates.map((candidate) => {
+      const personal = personalizedScore(candidate.rec.score, predict(m.model, candidate.features), m.samples);
+      return { card: cardOf(viewer, candidate, personal, false), personal, recent: (exposures.get(candidate.row.user_id) ?? '') >= recentSince };
+    }).sort((a, b) => Number(a.recent) - Number(b.recent) || b.personal - a.personal || compareRecommendationCards(a.card, b.card));
+    const max = DAILY_RECOMMENDATION_LIMIT;
+    const items = ranked.slice(0, max).map((entry) => entry.card);
+    // 探索只在同一曝光组内抽签，不挤掉尚未曝光的合适同学。
+    const explorationPool = ranked.slice(max, max * 3).filter((entry) => entry.recent === ranked[max - 1]?.recent)
+      .sort((a, b) => exploreHash(uid, date, a.card.id) - exploreHash(uid, date, b.card.id) || a.card.id - b.card.id);
+    if (items.length === max && explorationPool.length) items[max - 1] = { ...explorationPool[0].card, explore: true };
+    return { items, emptyState: eligibleCount ? 'no_overlap' : 'empty' };
+  });
+  const candidatesById = new Map(candidates.map((candidate) => [candidate.row.user_id, candidate]));
+  const items = batch.items.flatMap((assignment) => {
+    const candidate = candidatesById.get(assignment.id);
+    return candidate ? [cardOf(viewer, candidate, assignment.rankScore, assignment.explore)] : [];
+  });
   return {
-    items: items.slice(0, limit),
-    state: items.length ? 'ready' : eligibleCount ? 'no_overlap' : 'empty',
+    items: items.slice(0, Math.max(1, Math.min(DAILY_RECOMMENDATION_LIMIT, Math.floor(limit) || DAILY_RECOMMENDATION_LIMIT))),
+    state: items.length ? 'ready' : batch.assigned_count ? 'daily_done' : batch.empty_state,
     missing: viewer.missing,
     eligibleCount,
     total: items.length,
     personalization,
+    daily: { ...daily, assigned: batch.assigned_count, remaining: items.length },
   };
+}
+
+/** 列表与卡片共用同一份名单和顺序，切换入口不增加名额。 */
+export function buildRanked(uid: number, limit: number, now = new Date()): DeckResponse {
+  return buildDeck(uid, limit, now);
+}
+
+// 旧版 skip 曾作为负样本参与全站先验；发布后一次性重算，个人模型本来就按当前反馈重建。
+if (!getSetting('pref_skip_neutral_v1', '')) {
+  q.run("DELETE FROM settings WHERE key = ?", GLOBAL_KEY);
+  maybeRefitGlobalPrior();
+  q.run('DELETE FROM preference_models');
+  setSetting('pref_skip_neutral_v1', '1');
 }
 
 // ---------- 反馈 ----------

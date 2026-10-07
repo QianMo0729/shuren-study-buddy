@@ -3,7 +3,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { placeLabelFor, type GeoInput } from '../shared/campusPlaces.ts';
+import { getCampusPlace, placeLabelFor, type GeoInput } from '../shared/campusPlaces.ts';
 import { hasPrivacyConsent } from '../shared/profileRules.ts';
 import type { Checkin, CheckinSession, CheckinStats, CheckinVisibility, ForumAuthor } from '../shared/types.ts';
 import { HttpError, sha256 } from './auth.ts';
@@ -14,7 +14,9 @@ import { iso, q, tx } from './db.ts';
 import { activeMatchBetween } from './matches.ts';
 import { getProfileRow, parseData } from './profiles.ts';
 import { registerContentTarget, registerFileAccess, registerReportTarget } from './social.ts';
-import { stampWatermark } from './watermark.ts';
+import { StampError, stampPool } from './stampPool.ts';
+import { assertStorageAvailable } from './uploads.ts';
+import { applyAutoModeration, reviewState } from './autoModeration.ts';
 
 export const CHECKIN_LIMITS = {
   /** 拍照凭证有效期 */
@@ -23,15 +25,20 @@ export const CHECKIN_LIMITS = {
   minSessionAgeMs: 500,
   caption: 200,
   maxImageBytes: 4 * 1024 * 1024,
+  /** 盖章后重新编码的照片上限。网页相机拍出的照片远小于此；只有刻意构造的高噪声图片才会超出 */
+  maxStampedBytes: 2 * 1024 * 1024,
   minSide: 240,
-  maxSide: 4096,
-  /** 与 jpeg-js 的 maxResolutionInMP: 16 一致 */
-  maxPixels: 16_000_000,
+  /** 网页相机输出的最长边是 1600（src/components/checkin/useLiveCamera.ts），留出余量 */
+  maxSide: 2560,
+  /** 与 watermark.ts 中 jpeg-js 的 maxResolutionInMP: 4 一致 */
+  maxPixels: 4_000_000,
   perDay: 10,
   pageSize: 20,
 } as const;
 
 export interface CheckinRow {
+  auto_held?: number;
+  risk_reasons?: string | null;
   id: number;
   user_id: number;
   image: string;
@@ -198,7 +205,7 @@ export function hasCameraExif(exif: Buffer | null): boolean {
 }
 
 /**
- * 校验实时拍摄的照片：只接受 data:image/jpeg;base64，≤ 4MB，结构完整，宽高 240–4096，
+ * 校验实时拍摄的照片：只接受 data:image/jpeg;base64，≤ 4MB，结构完整，宽高 240–2560、不超过 400 万像素，
  * 且不带相机/相册的 EXIF 拍摄信息。返回 JPEG 数据（尚未解码）。
  */
 export function parseLiveJpeg(image: unknown): Buffer {
@@ -253,42 +260,63 @@ export function parseVisibility(v: unknown): CheckinVisibility {
   throw new HttpError(400, '请选择谁可以看到这次打卡');
 }
 
+/** 手选地点只能来自校园楼栋目录，不能提交任意水印文字。 */
+export function parsePlaceId(v: unknown): string | null {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v === 'string' && getCampusPlace(v)) return v;
+  throw new HttpError(400, '请选择有效的校园楼栋');
+}
+
 // ---------- 创建 ----------
 
 /** 过去 24 小时内的打卡次数（含已删除的，删掉重拍不能绕过限制） */
 export const recentCount = (userId: number) =>
   q.get<{ n: number }>("SELECT COUNT(*) n FROM checkins WHERE user_id = ? AND created_at > datetime('now', '-1 day')", userId)!.n;
 
+/** 盖章的线程与排队都已占满，或磁盘空间不足：此时不要消耗拍照凭证，直接请用户稍后再试 */
+export function assertCanStamp() {
+  if (stampPool.saturated) throw new HttpError(503, '现在打卡的同学有点多，请稍等几秒再按快门');
+  assertStorageAvailable();
+}
+
 /**
  * 盖章并保存：时间取服务器收到照片的时刻，地点由服务器根据经纬度换算，只保存地点文字。
- * 调用前必须已经校验并消耗了拍照凭证。
+ * 调用前必须已经校验并消耗了拍照凭证。盖章在工作线程中进行，期间主线程照常处理其他请求。
  */
-export function createCheckin(
+export async function createCheckin(
   userId: number,
-  input: { jpeg: Buffer; caption: string; visibility: CheckinVisibility; location: GeoInput | null },
+  input: { jpeg: Buffer; caption: string; visibility: CheckinVisibility; location: GeoInput | null; placeId?: string | null },
   now = new Date(),
-): CheckinRow {
-  const placeLabel = placeLabelFor(input.location);
+): Promise<CheckinRow> {
+  const placeLabel = placeLabelFor(input.location, input.placeId);
   const stampText = stampTimeText(now);
   let stamped: Buffer;
   try {
-    stamped = stampWatermark(input.jpeg, [placeLabel, stampText]);
-  } catch {
+    stamped = await stampPool.stamp(input.jpeg, [placeLabel, stampText]);
+  } catch (error) {
+    const reason = error instanceof StampError ? error.reason : 'failed';
+    if (reason === 'busy') throw new HttpError(503, '现在打卡的同学有点多，请稍等几秒再按快门');
+    if (reason === 'timeout') throw new HttpError(503, '照片处理超时，请重新拍照');
     throw new HttpError(400, '照片无法识别，请重新拍照');
   }
+  if (stamped.length > CHECKIN_LIMITS.maxStampedBytes) throw new HttpError(400, '照片过大，请重新拍照');
   const name = `${crypto.randomBytes(12).toString('hex')}.jpg`;
   const file = path.join(UPLOAD_DIR, name);
-  fs.writeFileSync(file, stamped);
+  await fs.promises.writeFile(file, stamped);
   try {
     const id = tx(() => {
-      q.run("INSERT INTO uploads (name, user_id, kind) VALUES (?, ?, 'checkin')", name, userId);
-      return Number(
+      // 盖章期间账号可能已经注销：不能再为它保存照片
+      if (!q.get('SELECT 1 FROM users WHERE id = ? AND activated = 1 AND password_hash IS NOT NULL', userId)) throw new HttpError(401, '请先登录');
+      q.run("INSERT INTO uploads (name, user_id, kind, bytes) VALUES (?, ?, 'checkin', ?)", name, userId, stamped.length);
+      const id = Number(
         q.run(
           `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           userId, name, input.caption, placeLabel, sqliteTime(now), beijingDate(now), stampText, input.visibility,
         ).lastInsertRowid,
       );
+      applyAutoModeration('checkins', id, input.caption);
+      return id;
     });
     return getCheckinRow(id)!;
   } catch (e) {
@@ -434,8 +462,9 @@ export function toCheckins(rows: CheckinRow[], viewer: Viewer): Checkin[] {
       liked: e.liked,
       commentCount: e.commentCount,
       isMine: r.user_id === viewer.id,
-      takenDown: canSeeModeration && !!r.taken_down,
-      takedownReason: canSeeModeration && r.taken_down ? r.takedown_reason : null,
+      ...reviewState(r, canSeeModeration),
+      takenDown: canSeeModeration && !!r.taken_down && !r.auto_held,
+      takedownReason: canSeeModeration && r.taken_down && !r.auto_held ? r.takedown_reason : null,
     };
   });
 }

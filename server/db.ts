@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS profiles (
   views INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS profile_drafts (
+  user_id INTEGER PRIMARY KEY REFERENCES profiles(user_id) ON DELETE CASCADE,
+  data TEXT NOT NULL,
+  section TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -132,6 +139,8 @@ CREATE TABLE IF NOT EXISTS uploads (
   name TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
+  -- 文件大小，用于每人配额（见 server/uploads.ts）
+  bytes INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -139,6 +148,15 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+`);
+
+// 旧库的 uploads 表没有 bytes 列；已有文件的大小由 server/uploads.ts 在启动时补记
+if (!(db.prepare('PRAGMA table_info(uploads)').all() as { name: string }[]).some((c) => c.name === 'bytes')) {
+  db.exec('ALTER TABLE uploads ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0');
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
 `);
 
 type Row = Record<string, any>;

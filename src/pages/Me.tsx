@@ -1,3 +1,4 @@
+import { PendingReviewBadge, PendingReviewNotice } from '../components/ReviewStatus';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
@@ -77,7 +78,7 @@ export function Me() {
   // 旧的「匹配请求」已并入私聊
   if (raw === 'connections') return <Navigate to="/messages" replace />;
 
-  const status = !profile ? null : profile.takenDown ? 'down' : profile.published ? 'live' : 'draft';
+  const status = !profile ? null : profile.reviewPending ? 'pending' : profile.takenDown ? 'down' : profile.published ? 'live' : 'draft';
   const type = STUDY_TYPES.find((t) => t.value === profile?.studyType);
   const sparse = !!profile && (!profile.subjects.length || Object.values(profile.personality).every((v) => !v));
   const goTab = (id: string) => setParams({ tab: id }, { replace: true });
@@ -115,13 +116,15 @@ export function Me() {
                 <div className="mt-3">
                   {status === 'live' && <Tag tone="brand">已发布 · 正在参与匹配推荐</Tag>}
                   {status === 'draft' && <Tag>未发布{missing ? `，问卷还差 ${missing} 项必填` : ''}</Tag>}
+                  {status === 'pending' && <PendingReviewBadge />}
                   {status === 'down' && <Tag tone="danger">已被管理员撤下</Tag>}
                 </div>
+                {status === 'pending' && <div className="mt-3"><PendingReviewNotice /></div>}
                 {status === 'down' && (
                   <p className="mt-3 flex gap-2 text-[13.5px] leading-relaxed text-ink-2">
                     <ShieldAlert size={15} className="mt-1 shrink-0 text-danger" aria-hidden />
                     <span>
-                      {dateTime(profile.takenDownAt)} 撤下，原因：{profile.takedownReason}。修改后可以重新发布。
+                      {dateTime(profile.takenDownAt)} 撤下，原因：{profile.takedownReason}。可修改内容，恢复展示需由管理员处理。
                     </span>
                   </p>
                 )}
@@ -152,13 +155,13 @@ export function Me() {
                   <Button variant="primary" onClick={() => nav('/me/edit')}>
                     编辑问卷与资料
                   </Button>
-                  {status === 'live' ? (
+                  {status === 'live' || status === 'pending' ? (
                     <Button onClick={() => nav(`/u/${profile.userId}`)}>查看我的主页</Button>
                   ) : (
-                    <Button onClick={() => nav('/me/edit')}>{status === 'down' ? '修改后重新发布' : '去发布'}</Button>
+                    <Button onClick={() => nav('/me/edit')}>{status === 'down' ? '修改内容' : '去发布'}</Button>
                   )}
                 </div>
-                {status === 'live' && (
+                {(status === 'live' || status === 'pending') && (
                   <button type="button" onClick={() => setUnpub(true)} className="mt-3 w-full text-center text-[13px] text-ink-3 hover:text-danger">
                     暂时撤回主页
                   </button>
@@ -361,42 +364,69 @@ function Notifications({ onRead }: { onRead: () => void }) {
 function Preferences() {
   return (
     <div className="space-y-4">
-      <DislikedList />
+      <Link to="/match/later" className="block rounded-xl bg-surface p-5 text-brand-text hover:underline">查看稍后再看的同学 →</Link>
+      <FeedbackList action="like" />
+      <FeedbackList action="dislike" />
       <ExclusionList />
     </div>
   );
 }
 
-const DISLIKE_PAGE = 20;
+const FEEDBACK_PAGE = 20;
 
-function DislikedList() {
+const FEEDBACK_LISTS = {
+  like: {
+    id: 'pref-liked',
+    title: '我感兴趣、等待回应的同学',
+    desc: '你选了「感兴趣」、对方还没有回应的同学。对方看不到这份名单；等对方也选了「感兴趣」，TA 会出现在「私聊」里。',
+    empty: '没有正在等待回应的同学。',
+    note: (p: FeedbackItem) => `${timeAgo(p.createdAt)}表示感兴趣`,
+    button: '撤回',
+    label: (name: string) => `撤回对 ${name} 的感兴趣`,
+    done: ['已撤回', (name: string) => `${name} 之后可能会再次出现在你的推荐里`] as const,
+  },
+  dislike: {
+    id: 'pref-disliked',
+    title: '不感兴趣的同学',
+    desc: '标记为「不感兴趣」的同学和你解除配对的同学不会再推荐给你，对方也不会知道。放回推荐后，TA 可能会重新出现在你的推荐里；要重新私聊，需要双方再次选「感兴趣」。',
+    empty: '还没有标记过不感兴趣的同学。',
+    note: (p: FeedbackItem) => (p.closedMatch ? `${timeAgo(p.createdAt)}解除配对` : `${timeAgo(p.createdAt)}标记`),
+    button: '放回推荐',
+    label: (name: string) => `把 ${name} 放回推荐`,
+    done: ['已放回推荐', (name: string) => `${name} 之后可能会再次出现在你的推荐里`] as const,
+  },
+};
+
+/** 自己在匹配推荐里做过的选择：可以查看，也可以收回 */
+function FeedbackList({ action }: { action: 'like' | 'dislike' }) {
+  const copy = FEEDBACK_LISTS[action];
   const toast = useToast();
   const [items, setItems] = useState<FeedbackItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [shown, setShown] = useState(DISLIKE_PAGE);
+  const [shown, setShown] = useState(FEEDBACK_PAGE);
   const load = useCallback(() => {
     setError(null);
     api.match
-      .feedbackList('dislike')
+      .feedbackList(action)
       .then((r) => setItems(r.items))
       .catch((e) => setError(errorText(e)));
-  }, []);
+  }, [action]);
   useEffect(load, [load]);
 
   return (
-    <section className="rounded-xl bg-surface p-5" aria-labelledby="pref-disliked">
-      <h3 id="pref-disliked" className="text-[15px] font-semibold text-ink">
-        不感兴趣的同学{items?.length ? <span className="ml-1.5 font-normal text-ink-3 tabular">{items.length}</span> : null}
+    <section className="rounded-xl bg-surface p-5" aria-labelledby={copy.id}>
+      <h3 id={copy.id} className="text-[15px] font-semibold text-ink">
+        {copy.title}{items?.length ? <span className="ml-1.5 font-normal text-ink-3 tabular">{items.length}</span> : null}
       </h3>
-      <p className="mt-1 text-[13.5px] leading-relaxed text-ink-3">在匹配推荐中标记为「不感兴趣」的同学不会再推荐给你，对方也不会知道。放回推荐后，TA 可能会重新出现在你的推荐里。</p>
+      <p className="mt-1 text-[13.5px] leading-relaxed text-ink-3">{copy.desc}</p>
       <div className="mt-4">
         {error ? (
           <LoadError message={error} onRetry={load} />
         ) : !items ? (
           <Skeleton className="h-24 rounded-lg" />
         ) : !items.length ? (
-          <p className="rounded-lg bg-paper-2/60 px-4 py-3 text-[13.5px] text-ink-3">还没有标记过不感兴趣的同学。</p>
+          <p className="rounded-lg bg-paper-2/60 px-4 py-3 text-[13.5px] text-ink-3">{copy.empty}</p>
         ) : (
           <>
             <ul className="divide-y divide-line rounded-lg border border-line">
@@ -404,21 +434,21 @@ function DislikedList() {
                 <li key={p.targetId} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="min-w-0">
                     <Link to={`/u/${p.targetId}`} className="block truncate text-[14.5px] text-ink hover:underline">
-                      {p.nickname}
+                      {p.remarkName || p.nickname}{p.remarkName && <span className="ml-2 text-[12px] text-ink-3">{p.nickname}</span>}
                     </Link>
-                    <p className="text-[12px] text-ink-3">{timeAgo(p.createdAt)}标记</p>
+                    <p className="text-[12px] text-ink-3">{copy.note(p)}</p>
                   </div>
                   <Button
                     size="sm"
                     loading={busyId === p.targetId}
                     disabled={busyId !== null}
-                    aria-label={`把 ${p.nickname} 放回推荐`}
+                    aria-label={copy.label(p.nickname)}
                     onClick={async () => {
                       setBusyId(p.targetId);
                       try {
                         await api.match.undoFeedback(p.targetId);
                         setItems((xs) => xs?.filter((x) => x.targetId !== p.targetId) ?? null);
-                        toast.success('已放回推荐', `${p.nickname} 之后可能会再次出现在你的推荐里`);
+                        toast.success(copy.done[0], copy.done[1](p.nickname));
                       } catch (e) {
                         toast.error('操作失败', errorText(e));
                       } finally {
@@ -426,14 +456,14 @@ function DislikedList() {
                       }
                     }}
                   >
-                    放回推荐
+                    {copy.button}
                   </Button>
                 </li>
               ))}
             </ul>
             {items.length > shown && (
               <div className="mt-3 flex justify-center">
-                <Button size="sm" variant="ghost" onClick={() => setShown((n) => n + DISLIKE_PAGE)}>
+                <Button size="sm" variant="ghost" onClick={() => setShown((n) => n + FEEDBACK_PAGE)}>
                   显示更多（还有 {items.length - shown} 位）
                 </Button>
               </div>
@@ -533,7 +563,7 @@ function MyForumPosts() {
               <div className="min-w-0 flex-1">
                 {p.title && <p className="truncate text-[15px] font-semibold text-ink">{p.title}</p>}
                 <p className={cx('text-[14px] leading-relaxed break-words text-ink-2', p.title ? 'mt-0.5 line-clamp-2' : 'line-clamp-3')}>{preview(p.body, 120)}</p>
-                {p.takenDown && <TakenDownNote reason={p.takedownReason} what="帖子" />}
+                {p.reviewPending ? <PendingReviewBadge /> : p.takenDown && <TakenDownNote reason={p.takedownReason} what="帖子" />}
                 <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
                   <span>{timeAgo(p.createdAt)}</span>
                   <span className="inline-flex items-center gap-1">
@@ -615,9 +645,9 @@ function MyCheckins() {
                   <MapPin size={12} className="shrink-0" aria-hidden />
                   <span className="truncate">{c.placeLabel} · {c.stampText}</span>
                 </p>
-                {c.takenDown && <TakenDownNote reason={c.takedownReason} what="打卡" />}
+                {c.reviewPending ? <PendingReviewBadge /> : c.takenDown && <TakenDownNote reason={c.takedownReason} what="打卡" />}
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
-                  <span>{c.visibility === 'buddies' ? '仅搭子可见' : '所有同学可见'}</span>
+                  <span>{c.reviewPending ? '审核通过后展示' : c.takenDown ? '仅本人和管理员可见' : c.visibility === 'buddies' ? '仅搭子可见' : '所有同学可见'}</span>
                   <span className="inline-flex items-center gap-1">
                     <Heart size={12} aria-hidden /> <span className="sr-only">点赞</span>
                     {c.likeCount}
@@ -695,7 +725,7 @@ function MyPosts({ scope }: { scope: 'mine' | 'interested' }) {
     <div className="grid gap-3 md:grid-cols-2">
       {items.map((p) => (
         <div key={p.id}>
-          {p.takenDown && <p className="mb-1.5 text-[13px] text-danger">这条招募已被管理员撤下{p.takedownReason ? `：${p.takedownReason}` : ''}</p>}
+          {!p.reviewPending && p.takenDown && <p className="mb-1.5 text-[13px] text-danger">这条招募已被管理员撤下{p.takedownReason ? `：${p.takedownReason}` : ''}</p>}
           <PostCard post={p} onOpen={() => nav(`/events/${p.id}`)} onChange={(x) => setItems((xs) => xs!.map((i) => (i.id === p.id ? { ...i, ...x } : i)))} />
         </div>
       ))}

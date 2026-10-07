@@ -12,7 +12,6 @@ import bcrypt from 'bcryptjs';
 import { emptyPersonality, emptyProfile } from '../shared/profileRules.ts';
 import type { DeckCard, DeckResponse, ProfileInput } from '../shared/types.ts';
 import { FEATURE_KEYS } from '../server/learning.ts';
-import { compareRecommendationCards } from '../server/recommendations.ts';
 
 async function startServer() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'study-buddy-match-'));
@@ -78,7 +77,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId,
+      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId, gender: 'male', grade: 'y1',
       planTags: ['期末复习备考'], subjects: ['线性代数'], places: ['library'], schedule: DAY_SLOTS.slice(0, 12), studyType: 'quiet',
       personality: PERSONALITY, interests: ['reading'],
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
@@ -152,6 +151,60 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.deepEqual(ready.personalization, { samples: 0, active: false, emphasis: [] });
   });
 
+  await t.test('legacy published profiles with missing gender or grade require completion without mutating their publication record', async () => {
+    reset();
+    const viewer = createUser();
+    const legacy = createUser({ gender: '', grade: '' });
+    const session = await api('/auth/me', legacy.cookie);
+    assert.equal(session.body.user.questionnaireComplete, false);
+    const incomplete = await deck(legacy);
+    assert.equal(incomplete.state, 'incomplete');
+    assert.deepEqual(incomplete.missing, [{ key: 'gender', label: '性别' }, { key: 'grade', label: '年级' }]);
+    assert.ok(!ids((await deck(viewer)).items).includes(legacy.id));
+    const publish = await api('/profiles/me/publish', legacy.cookie, 'POST', {});
+    assert.equal(publish.status, 400);
+    assert.ok(publish.body.missing.some((item: { key: string }) => item.key === 'gender'));
+    assert.ok(publish.body.missing.some((item: { key: string }) => item.key === 'grade'));
+    assert.equal(db.prepare('SELECT published FROM profiles WHERE user_id = ?').get(legacy.id)!.published, 1);
+    storeProfile(legacy, { gender: 'female', grade: 'y1' });
+    assert.equal((await api('/auth/me', legacy.cookie)).body.user.questionnaireComplete, true);
+    assert.ok(!ids((await deck(viewer)).items).includes(legacy.id), 'completing another profile does not refill today');
+  });
+
+  await t.test('hidden gender is redacted from every public card and profile while matching uses the actual answer', async () => {
+    reset();
+    const viewer = createUser({ gender: 'male', buddyGender: 'female' });
+    const hidden = createUser({ gender: 'female', genderVisibility: 'private' });
+    const shown = createUser({ gender: 'female', genderVisibility: 'public' });
+    const saved = await api('/profiles/me', hidden.cookie, 'PUT', { profile: hidden.data });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.body.missing, []);
+    assert.equal(saved.body.profile.gender, 'female');
+    assert.equal(saved.body.profile.genderVisibility, 'private');
+    assert.equal((await api('/profiles/me', hidden.cookie)).body.profile.gender, 'female');
+    assert.equal((await api('/auth/me', hidden.cookie)).body.user.questionnaireComplete, true);
+    for (const endpoint of ['/profiles', '/profiles/recommendations', '/match/deck', '/match/ranked']) {
+      const response = await api(endpoint, viewer.cookie);
+      assert.equal(response.status, 200);
+      const card = response.body.items.find((item: { id: number }) => item.id === hidden.id);
+      assert.ok(card, `${endpoint} must keep compatible hidden-gender candidates`);
+      assert.equal(card.gender, '', endpoint);
+      assert.equal(response.body.items.find((item: { id: number }) => item.id === shown.id).gender, 'female', endpoint);
+    }
+    for (const cookie of [viewer.cookie, hidden.cookie]) {
+      assert.equal((await api(`/profiles/${hidden.id}`, cookie)).body.profile.gender, '');
+    }
+    const searched = await api('/profiles/search', viewer.cookie, 'POST', {
+      criteria: [{ field: 'gender', mode: 'must', values: ['female'] }],
+    });
+    assert.equal(searched.status, 200);
+    assert.ok(!searched.body.items.some((item: { id: number }) => item.id === hidden.id));
+    assert.ok(searched.body.items.some((item: { id: number }) => item.id === shown.id));
+    storeProfile(hidden, { gender: 'male', genderVisibility: 'private' });
+    assert.ok(!ids((await deck(viewer)).items).includes(hidden.id), 'visibility must not bypass actual buddy-gender compatibility');
+    assert.equal((await api(`/profiles/${hidden.id}`, viewer.cookie)).body.profile.gender, '');
+  });
+
   await t.test('mutual likes create a match and notify both people; a one-way like does not', async () => {
     reset();
     const a = createUser();
@@ -189,7 +242,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal(db.prepare("SELECT status FROM matches WHERE id = ?").get(matchId)!.status, 'active');
   });
 
-  await t.test('disliked, liked and recently skipped people leave the deck; undo brings them back', async () => {
+  await t.test('feedback hides assigned people; saved-for-later never expires and undo restores only their assigned slot', async () => {
     reset();
     const viewer = createUser();
     const [disliked, liked, skipped, other] = Array.from({ length: 4 }, () => createUser());
@@ -206,11 +259,16 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     for (const [target, state] of [[disliked, 'disliked'], [liked, 'liked'], [skipped, 'skipped'], [other, 'none']] as const) {
       assert.equal((await api(`/profiles/${target.id}`, viewer.cookie)).body.profile.matchState, state);
     }
-    // Skips cool down for three days.
+    // Saved-for-later does not expire, even after its old three-day cooldown.
     db.prepare("UPDATE match_feedback SET updated_at = datetime('now', '-2 days') WHERE user_id = ? AND target_id = ?").run(viewer.id, skipped.id);
     assert.ok(!ids((await deck(viewer)).items).includes(skipped.id));
     db.prepare("UPDATE match_feedback SET updated_at = datetime('now', '-4 days') WHERE user_id = ? AND target_id = ?").run(viewer.id, skipped.id);
-    assert.ok(ids((await deck(viewer)).items).includes(skipped.id));
+    assert.ok(!ids((await deck(viewer)).items).includes(skipped.id));
+    assert.deepEqual((await api('/match/feedback?action=skip', viewer.cookie)).body.items.map((item: any) => item.targetId), [skipped.id]);
+    assert.equal((await api('/match/feedback?action=skip', other.cookie)).body.items.length, 0);
+    assert.equal(model(viewer)!.samples, 2, 'skip is not a negative preference signal');
+    db.prepare('UPDATE match_feedback SET features = (SELECT features FROM match_feedback WHERE user_id = ? AND target_id = ?) WHERE user_id = ? AND target_id = ?').run(viewer.id, liked.id, viewer.id, skipped.id);
+    assert.equal((await deck(viewer)).personalization.samples, 2, 'legacy skip feature snapshots are ignored as well');
 
     const list = await api('/match/feedback?action=dislike', viewer.cookie);
     assert.equal(list.status, 200);
@@ -314,7 +372,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal((await api(`/profiles/${apart.id}`, viewer.cookie)).body.profile.matchState, 'disliked');
   });
 
-  await t.test('consistent likes for common time raise its weight and reorder the deck, while a few feedbacks do not', async () => {
+  await t.test('learning updates preferences while today’s assigned order remains stable', async () => {
     reset();
     const viewer = createUser({ schedule: DAY_SLOTS, frequency: 'daily', duration: 'long' });
     // X: the same subject, style and habits, but only one shared slot. Y: lots of shared time, a different subject and style.
@@ -345,77 +403,123 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.ok(learned.weights.time > 2.4, `time weight rose above the prior (${learned.weights.time})`);
     assert.ok('bias' in learned.weights);
     const late = await deck(viewer);
-    assert.deepEqual(order(late), [y.id, x.id], 'the deck now favours common time');
+    assert.deepEqual(order(late), [x.id, y.id], 'feedback only changes future assignments');
     assert.equal(late.personalization.samples, 27);
     assert.equal(late.personalization.active, true);
     assert.ok(late.personalization.emphasis.includes('共同时间'), JSON.stringify(late.personalization));
     const yCard = late.items.find((item) => item.id === y.id)!;
-    assert.notEqual(yCard.rankScore, yCard.recommendation.score, 'rankScore blends the personal model');
+    assert.equal(yCard.rankScore, initial.items.find((item) => item.id === y.id)!.rankScore, 'today’s ranking score remains stable');
     // The plain ranked list ignores personal preferences.
     assert.deepEqual(order(await ranked(viewer)), [x.id, y.id]);
   });
 
-  await t.test('a pending like only decides who makes the batch, never the order; login activity changes the order', async () => {
+  await t.test('other people’s private state never changes what a viewer sees: one-way likes, login activity, pending likes', async () => {
     reset();
     const viewer = createUser();
     const best = createUser();
     const admirer = createUser({ interests: ['music'] });
+    // Everything a viewer can observe, for every batch size they may ask for.
+    const observe = async () => JSON.stringify([
+      await deck(viewer), await deck(viewer, 1), await deck(viewer, 2), await deck(viewer, 3), await ranked(viewer), await ranked(viewer, 1),
+    ]);
+    const before = await observe();
     assert.deepEqual(ids((await deck(viewer)).items), [best.id, admirer.id]);
     assert.deepEqual(ids((await deck(viewer, 1)).items), [best.id]);
-    await feedback(admirer, viewer, 'like');
-    const boosted = await deck(viewer);
-    // 批内顺序与展示的分数一致，不能从顺序推断谁对我感兴趣
-    assert.deepEqual(ids(boosted.items), [best.id, admirer.id]);
-    for (const item of boosted.items) assert.equal(item.rankScore, item.recommendation.score, 'rankScore never includes hidden boosts');
-    assert.equal(JSON.stringify(boosted).includes('liked'), false);
-    // 只有一个名额时，对我感兴趣的同学更容易进入这一批
-    assert.deepEqual(ids((await deck(viewer, 1)).items), [admirer.id]);
-    assert.deepEqual(ids((await ranked(viewer)).items), [best.id, admirer.id]);
-    db.exec('DELETE FROM match_feedback');
-    db.prepare("UPDATE users SET last_login_at = datetime('now', '-40 days') WHERE id = ?").run(best.id);
-    assert.deepEqual(ids((await deck(viewer)).items), [admirer.id, best.id], 'long-inactive people move down');
-    db.prepare("UPDATE users SET last_login_at = datetime('now', '-1 days') WHERE id = ?").run(best.id);
-    assert.deepEqual(ids((await deck(viewer)).items), [best.id, admirer.id]);
+
+    // 单向的「感兴趣」：对方回应之前，被喜欢的人看到的任何结果都不变（包括只要一张卡片时）
+    assert.equal((await feedback(admirer, viewer, 'like')).status, 200);
+    assert.equal(await observe(), before, 'a one-way like is unobservable to its recipient');
+    assert.deepEqual(ids((await deck(viewer, 1)).items), [best.id]);
+
+    // 登录时间：最近登录或长期未登录都不改变排序
+    for (const age of ['-40 days', '-1 days', '-8 days']) {
+      db.prepare("UPDATE users SET last_login_at = datetime('now', ?) WHERE id = ?").run(age, best.id);
+      assert.equal(await observe(), before, `last login ${age} is unobservable`);
+    }
+    db.prepare('UPDATE users SET last_login_at = NULL WHERE id = ?').run(best.id);
+    assert.equal(await observe(), before);
+
+    // 别人收到了多少尚未回应的「感兴趣」也不改变排序
+    const crowd = Array.from({ length: 20 }, () => createUser({}, { published: false }));
+    for (const fan of crowd) {
+      db.prepare("INSERT INTO match_feedback (user_id, target_id, action, features) VALUES (?, ?, 'like', '{}')").run(fan.id, best.id);
+    }
+    assert.equal(await observe(), before, 'pending likes received by a candidate are unobservable');
+
+    // 展示的分数与顺序一致：没有任何不出现在返回值里的加成
+    const shown = await deck(viewer);
+    for (const item of shown.items) assert.equal(item.rankScore, item.recommendation.score);
+    const scores = shown.items.map((item) => item.rankScore);
+    assert.deepEqual(scores, [...scores].sort((a, b) => b - a));
+    assert.equal(JSON.stringify(shown).includes('liked'), false);
   });
 
-  await t.test('exploration fills about 20% of the deck deterministically from ranks limit+1 to 3×limit', async () => {
+  await t.test('my own choices can be reviewed: likes still waiting for an answer, and people moved to "not interested" by closing a chat', async () => {
+    reset();
+    const viewer = createUser();
+    const waiting = createUser();
+    const matched = createUser();
+    const closed = createUser();
+    const liked = async () => (await api('/match/feedback?action=like', viewer.cookie)).body.items as any[];
+    assert.deepEqual(await liked(), []);
+    for (const target of [waiting, matched, closed]) assert.equal((await feedback(viewer, target, 'like')).status, 200);
+    assert.deepEqual((await liked()).map((item) => item.targetId).sort(), [waiting.id, matched.id, closed.id].sort());
+
+    // 对方也感兴趣之后进入私聊，不再属于“等待回应”
+    const first = await feedback(matched, viewer, 'like');
+    const second = await feedback(closed, viewer, 'like');
+    assert.equal(first.body.matched, true);
+    assert.deepEqual((await liked()).map((item) => [item.targetId, item.nickname, item.action]), [[waiting.id, waiting.nickname, 'like']]);
+    assert.equal(JSON.stringify(await liked()).includes('SECRET'), false);
+    // 名单只属于自己：对方看不到谁在等自己回应
+    assert.deepEqual((await api('/match/feedback?action=like', waiting.cookie)).body.items, []);
+
+    // 撤回之后回到推荐里
+    assert.equal((await api(`/match/feedback/${waiting.id}`, viewer.cookie, 'DELETE')).status, 200);
+    assert.deepEqual(await liked(), []);
+    assert.ok(ids((await deck(viewer)).items).includes(waiting.id));
+
+    // 解除配对的同学出现在「不感兴趣」名单里，并标明来由；卡片上标记的没有这个标记
+    assert.equal((await api(`/chat/${second.body.matchId}/close`, viewer.cookie, 'POST', {})).status, 200);
+    assert.equal((await feedback(viewer, waiting, 'dislike')).status, 200);
+    const disliked = (await api('/match/feedback?action=dislike', viewer.cookie)).body.items as any[];
+    assert.deepEqual(disliked.map((item) => [item.targetId, item.closedMatch]).sort(), [[closed.id, true], [waiting.id, false]].sort());
+    // 被解除的一方没有做过这个选择，名单里不会出现
+    assert.deepEqual((await api('/match/feedback?action=dislike', closed.cookie)).body.items, []);
+  });
+
+  await t.test('daily assignments cap all endpoints at five, survive concurrent refresh, and never refill', async () => {
     reset();
     const viewer = createUser({ schedule: DAY_SLOTS.slice(0, 40) });
-    const members = Array.from({ length: 32 }, (_, i) => createUser({ schedule: DAY_SLOTS.slice(0, (i % 16) + 1), interests: i % 3 ? ['reading'] : ['games'] }));
-    const list = await ranked(viewer);
-    assert.equal(list.items.length, 32);
-    assert.equal(list.total, 32);
-    assert.equal(list.eligibleCount, 32);
-    assert.deepEqual(ids(list.items), ids([...list.items].sort(compareRecommendationCards)));
-    for (const item of list.items) {
-      assert.equal(item.rankScore, item.recommendation.score);
-      assert.equal(item.explore, false);
-      assert.equal(item.recommendation.version, 'rules-v2');
-      assert.ok(Array.isArray(item.subjects));
+    Array.from({ length: 32 }, (_, i) => createUser({ schedule: DAY_SLOTS.slice(0, (i % 16) + 1), interests: i % 3 ? ['reading'] : ['games'] }));
+    const concurrent = await Promise.all(Array.from({ length: 8 }, (_, index) => index % 2 ? ranked(viewer, 100) : deck(viewer, 40)));
+    const first = concurrent[0];
+    for (const response of concurrent) assert.deepEqual(response, first);
+    assert.equal(first.items.length, 5);
+    assert.equal(first.daily.assigned, 5);
+    assert.equal(first.daily.remaining, 5);
+    assert.equal(first.items[4].explore, true);
+    assert.equal(first.items.filter((item) => item.explore).length, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM daily_recommendation_batches WHERE user_id = ?').get(viewer.id)!.n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM daily_recommendation_items WHERE user_id = ?').get(viewer.id)!.n, 5);
+    assert.deepEqual(ids((await deck(viewer, 1)).items), ids(first.items).slice(0, 1));
+    assert.deepEqual(ids((await deck(viewer, 1000)).items), ids(first.items));
+    assert.deepEqual((await api('/profiles/recommendations', viewer.cookie)).body.items.map((item: any) => item.id), ids(first.items));
+    for (const [index, item] of first.items.entries()) {
+      assert.equal((await feedback(viewer, item.id, (['like', 'dislike', 'skip'] as const)[index % 3])).status, 200);
     }
-    assert.ok(new Set(members.map((m) => m.id)).size === 32);
-
-    const first = await deck(viewer, 10);
-    assert.equal(first.items.length, 10);
-    const explored = first.items.map((item, index) => [item, index] as const).filter(([item]) => item.explore);
-    assert.deepEqual(explored.map(([, index]) => index), [4, 9]);
-    const rankedIds = ids(list.items);
-    assert.deepEqual(ids(first.items.filter((item) => !item.explore)), rankedIds.slice(0, 8));
-    const date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-    const expected = rankedIds.slice(10, 30)
-      .map((id) => ({ id, h: crypto.createHash('sha256').update(`${viewer.id}:${date}:${id}`).digest().readUInt32BE(0) }))
-      .sort((a, b) => a.h - b.h || a.id - b.id).slice(0, 2).map((entry) => entry.id);
-    assert.deepEqual(explored.map(([item]) => item.id), expected);
-    assert.deepEqual(await deck(viewer, 10), first, 'the same day gives the same deck');
-
-    const byDefault = await deck(viewer);
-    assert.equal(byDefault.items.length, 20);
-    assert.equal(byDefault.items.filter((item) => item.explore).length, 4);
-    const capped = await deck(viewer, 1000);
-    assert.equal(capped.items.length, 32, 'limit is capped at 40, and no exploration is needed when everything fits');
-    assert.equal(capped.items.filter((item) => item.explore).length, 0);
-    assert.equal((await deck(viewer, 1)).items.length, 1);
-    assert.equal((await ranked(viewer, 5)).items.length, 5);
+    const done = await deck(viewer);
+    assert.equal(done.state, 'daily_done');
+    assert.deepEqual(done.items, []);
+    assert.equal(done.daily.assigned, 5);
+    assert.equal(done.daily.remaining, 0);
+    createUser();
+    assert.equal((await ranked(viewer)).items.length, 0, 'new profiles cannot refill a spent day');
+    await api(`/match/feedback/${first.items[0].id}`, viewer.cookie, 'DELETE');
+    assert.deepEqual(ids((await deck(viewer)).items), [first.items[0].id], 'undo restores the same assigned person');
+    assert.equal((await deck(viewer)).daily.assigned, 5);
+    db.prepare('UPDATE profiles SET published = 0 WHERE user_id = ?').run(first.items[0].id);
+    assert.equal((await deck(viewer)).state, 'daily_done', 'withdrawal hides the last item without refill');
   });
 
   await t.test('deck responses never serialize identity, contact or activity fields', async () => {

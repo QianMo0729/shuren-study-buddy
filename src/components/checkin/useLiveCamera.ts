@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isCameraPreviewReady, waitForCameraFrame } from './cameraPreview';
 
 export type Facing = 'environment' | 'user';
 
@@ -13,6 +14,7 @@ export interface CameraProblem {
 export type CameraState =
   | { status: 'starting' }
   | { status: 'live'; width: number; height: number }
+  | { status: 'blocked' }
   | { status: 'paused' }
   | { status: 'error'; problem: CameraProblem };
 
@@ -54,6 +56,9 @@ function explain(error: unknown): CameraProblem {
   if (name === 'NotReadableError' || name === 'AbortError' || name === 'TrackStartError') {
     return { kind: 'busy', title: '摄像头正被其他应用占用', desc: '请关闭正在使用摄像头的应用或网页（如视频通话），然后点「重试」。', retry: true };
   }
+  if (name === 'TimeoutError') {
+    return { kind: 'unknown', title: '摄像头还没有传来画面', desc: '请点「重试」重新打开相机；也可以先关闭其他正在使用摄像头的网页或应用。', retry: true };
+  }
   return { kind: 'unknown', title: '摄像头打开失败', desc: '请稍后重试；如果仍然不行，可以换一个浏览器试试。', retry: true };
 }
 
@@ -63,6 +68,8 @@ function explain(error: unknown): CameraProblem {
 export function useLiveCamera(enabled: boolean) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const resumeRef = useRef<(() => void) | null>(null);
+  const cancelPreviewRef = useRef<(() => void) | null>(null);
   const [facing, setFacing] = useState<Facing>('environment');
   const [state, setState] = useState<CameraState>(() => {
     const problem = precheck();
@@ -73,18 +80,41 @@ export function useLiveCamera(enabled: boolean) {
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'hidden');
 
   const stop = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    const stream = streamRef.current;
     streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
+    resumeRef.current = null;
+    cancelPreviewRef.current?.();
+    cancelPreviewRef.current = null;
+    stream?.getTracks().forEach((t) => t.stop());
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
   }, []);
 
   useEffect(() => {
-    const onVisibility = () => setHidden(document.visibilityState === 'hidden');
+    const onVisibility = () => {
+      const background = document.visibilityState === 'hidden';
+      if (background) stop();
+      else if (!streamRef.current?.active) setAttempt((n) => n + 1);
+      setHidden(background);
+    };
+    const onPageHide = () => {
+      stop();
+      setHidden(true);
+    };
+    const onPageShow = () => {
+      setHidden(document.visibilityState === 'hidden');
+      // A page restored from Safari's page cache can retain the old React state.
+      setAttempt((n) => n + 1);
+    };
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('pagehide', stop);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('pagehide', stop);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, [stop]);
 
@@ -101,13 +131,22 @@ export function useLiveCamera(enabled: boolean) {
       return;
     }
     let cancelled = false;
+    let removeListeners = () => {};
     setState({ status: 'starting' });
+    setCanSwitch(false);
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: facing, width: { ideal: 1600 }, height: { ideal: 1200 } },
-          audio: false,
-        });
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: facing }, width: { ideal: 1600 }, height: { ideal: 1200 } },
+            audio: false,
+          });
+        } catch (error) {
+          if (cancelled) return;
+          if ((error as { name?: string })?.name !== 'OverconstrainedError') throw error;
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false });
+        }
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -118,41 +157,112 @@ export function useLiveCamera(enabled: boolean) {
           return;
         }
         streamRef.current = stream;
-        video.srcObject = stream;
+        // Set playback policy before attaching the stream, including DOM attributes
+        // used by WebKit-based browsers on iPhone.
         video.muted = true;
+        video.defaultMuted = true;
         video.playsInline = true;
-        await video.play().catch(() => {});
-        if (!video.videoWidth) await new Promise((resolve) => video.addEventListener('loadedmetadata', resolve, { once: true }));
-        if (cancelled) return;
-        setState({ status: 'live', width: video.videoWidth, height: video.videoHeight });
+        video.setAttribute('muted', '');
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+        video.srcObject = stream;
+        const track = stream.getVideoTracks()[0];
+        let previewController: AbortController | null = null;
+        let wasLive = false;
+        const current = () => !cancelled && streamRef.current === stream;
+        const cancelPreview = () => {
+          previewController?.abort();
+          previewController = null;
+        };
+        const runPreview = () => {
+          if (!current()) return;
+          cancelPreview();
+          wasLive = false;
+          setState({ status: 'starting' });
+          const controller = new AbortController();
+          previewController = controller;
+          let playback: Promise<void>;
+          try {
+            // Keep this call synchronous: resumePreview is called from a user tap.
+            playback = video.play();
+          } catch (error) {
+            playback = Promise.reject(error);
+          }
+          void waitForCameraFrame(video, stream, { signal: controller.signal, playback }).then(() => {
+            if (!current() || controller.signal.aborted) return;
+            wasLive = true;
+            setState({ status: 'live', width: video.videoWidth, height: video.videoHeight });
+          }).catch((error: unknown) => {
+            if (!current() || controller.signal.aborted) return;
+            if ((error as { name?: string })?.name === 'NotAllowedError') {
+              setState({ status: 'blocked' });
+            } else {
+              setState({ status: 'error', problem: explain(error) });
+            }
+          }).finally(() => {
+            if (previewController === controller) previewController = null;
+          });
+        };
+        const onEnded = () => {
+          if (!current()) return;
+          stop();
+          setState({ status: 'error', problem: { kind: 'busy', title: '摄像头已断开', desc: '摄像头被系统或其他应用中断了，请点「重试」。', retry: true } });
+        };
+        const onMute = () => {
+          if (!current()) return;
+          cancelPreview();
+          wasLive = false;
+          setState({ status: 'error', problem: { kind: 'busy', title: '摄像头画面已暂停', desc: '系统或其他应用暂停了摄像头。恢复后会自动继续，也可以点「重试」。', retry: true } });
+        };
+        const onPause = () => {
+          if (!current() || !wasLive || track?.muted) return;
+          cancelPreview();
+          wasLive = false;
+          setState({ status: 'blocked' });
+        };
+        const onPlaying = () => {
+          if (current() && !wasLive && !previewController) runPreview();
+        };
+        const onResize = () => {
+          if (current() && wasLive && isCameraPreviewReady(video, stream)) {
+            setState({ status: 'live', width: video.videoWidth, height: video.videoHeight });
+          }
+        };
+        track?.addEventListener('ended', onEnded);
+        track?.addEventListener('mute', onMute);
+        track?.addEventListener('unmute', runPreview);
+        video.addEventListener('pause', onPause);
+        video.addEventListener('playing', onPlaying);
+        video.addEventListener('resize', onResize);
+        removeListeners = () => {
+          cancelPreview();
+          track?.removeEventListener('ended', onEnded);
+          track?.removeEventListener('mute', onMute);
+          track?.removeEventListener('unmute', runPreview);
+          video.removeEventListener('pause', onPause);
+          video.removeEventListener('playing', onPlaying);
+          video.removeEventListener('resize', onResize);
+        };
+        resumeRef.current = runPreview;
+        cancelPreviewRef.current = cancelPreview;
+        runPreview();
         // 有多个摄像头时才显示切换按钮（权限获得后才能列出设备）
         const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
         if (!cancelled) setCanSwitch(devices.filter((d) => d.kind === 'videoinput').length > 1);
-        // 摄像头被系统收回（例如来电）时提示重试
-        stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-          if (!cancelled && streamRef.current === stream) {
-            setState({ status: 'error', problem: { kind: 'busy', title: '摄像头已断开', desc: '摄像头被系统或其他应用中断了，请点「重试」。', retry: true } });
-          }
-        });
       } catch (error) {
         if (!cancelled) setState({ status: 'error', problem: explain(error) });
       }
     })();
     return () => {
       cancelled = true;
+      removeListeners();
       stop();
     };
   }, [enabled, hidden, facing, attempt, stop]);
 
-  // 视频尺寸可能在旋转手机后变化
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onResize = () => {
-      if (video.videoWidth && streamRef.current) setState({ status: 'live', width: video.videoWidth, height: video.videoHeight });
-    };
-    video.addEventListener('resize', onResize);
-    return () => video.removeEventListener('resize', onResize);
+  const resumePreview = useCallback(() => {
+    if (resumeRef.current) resumeRef.current();
+    else setAttempt((n) => n + 1);
   }, []);
 
   return {
@@ -162,6 +272,7 @@ export function useLiveCamera(enabled: boolean) {
     canSwitch,
     switchCamera: () => setFacing((f) => (f === 'environment' ? 'user' : 'environment')),
     retry: () => setAttempt((n) => n + 1),
+    resumePreview,
     stop,
   };
 }
@@ -171,6 +282,7 @@ export function useLiveCamera(enabled: boolean) {
  * 这是唯一的取图方式：没有任何选择文件 / 相册的入口。
  */
 export function captureFrame(video: HTMLVideoElement, maxSide = 1600, quality = 0.9): string | null {
+  if (!isCameraPreviewReady(video)) return null;
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (!vw || !vh) return null;
@@ -180,8 +292,13 @@ export function captureFrame(video: HTMLVideoElement, maxSide = 1600, quality = 
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
-  ctx.drawImage(video, 0, 0, width, height);
-  return canvas.toDataURL('image/jpeg', quality);
+  try {
+    ctx.drawImage(video, 0, 0, width, height);
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    // Camera interruptions can race with a tap even after a valid preview frame.
+    return null;
+  }
 }
 
 export function captureSize(vw: number, vh: number, maxSide = 1600) {

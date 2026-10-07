@@ -4,15 +4,19 @@ import type { Post } from '../../shared/types.ts';
 import { HttpError, requireUser } from '../auth.ts';
 import { isExcluded } from '../connections.ts';
 import { hasPrivacyConsent } from '../../shared/profileRules.ts';
-import { iso, q } from '../db.ts';
+import { iso, q, tx } from '../db.ts';
+import { applyAutoModeration, reviewState } from '../autoModeration.ts';
 import { notify } from '../notify.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
 import { expand, tokenize } from '../search.ts';
+import { registerReportTarget } from '../social.ts';
 
 export const postRouter = Router();
 postRouter.use(requireUser);
 
 interface PostRow {
+  auto_held?: number;
+  risk_reasons?: string | null;
   id: number;
   user_id: number;
   title: string;
@@ -33,13 +37,15 @@ interface PostRow {
 function author(userId: number) {
   const row = getProfileRow(userId);
   const d = row ? parseData(row) : null;
+  // 与主页接口同一条件：主页撤回、被撤下或撤回隐私同意之后，招募里只剩系统昵称，不再带出资料里的任何内容
+  const visible = !!row && !!d && !!row.published && !row.taken_down && hasPrivacyConsent(d);
   return {
     id: userId,
     nickname: row?.nickname ?? '匿名同学',
-    major: d?.major ?? '',
-    studyType: d?.studyType ?? '',
-    cover: d && d.photoVisibility === 'public' && hasPrivacyConsent(d) && row?.published && !row.taken_down ? d.photos[0] ?? null : null,
-    published: !!row?.published && !row.taken_down,
+    major: visible ? d.major : '',
+    studyType: visible ? d.studyType : '',
+    cover: visible && d.photoVisibility === 'public' ? d.photos[0] ?? null : null,
+    published: visible,
   };
 }
 
@@ -62,8 +68,9 @@ export function toPost(r: PostRow, viewerId: number, withUsers = false): Post {
     interested,
     isMine: r.user_id === viewerId,
     author: author(r.user_id),
-    takenDown: !!r.taken_down,
-    takedownReason: r.takedown_reason,
+    ...reviewState(r),
+    takenDown: !!r.taken_down && !r.auto_held,
+    takedownReason: r.auto_held ? null : r.takedown_reason,
   };
   if (withUsers) {
     post.interestedUsers = q
@@ -97,6 +104,27 @@ function ownPost(id: number, userId: number) {
   if (row.user_id !== userId) throw new HttpError(403, '只能修改自己发布的招募');
   return row;
 }
+
+// 举报招募：只能举报此刻自己看得到的招募（已删除、被撤下、作者与自己互相排除的都按不存在处理）
+const reportablePost = (id: number) => q.get<PostRow>('SELECT * FROM posts WHERE id = ?', id);
+registerReportTarget('post', {
+  canReport: (reporterId, id) => {
+    const row = reportablePost(id);
+    return !!row && !row.deleted && !row.taken_down && row.user_id !== reporterId && !isExcluded(reporterId, row.user_id);
+  },
+  label: (id) => reportablePost(id)?.title ?? '（已删除）',
+  ownerOf: (id) => reportablePost(id)?.user_id ?? null,
+  // 作者之后可以修改或删除招募，举报时留存全文
+  snapshot: (id) => {
+    const row = reportablePost(id);
+    if (!row) return '';
+    const tags: string[] = JSON.parse(row.tags || '[]');
+    return [
+      `标题：${row.title}`, `分类：${optionLabel(POST_CATEGORIES, row.category)}`, `时间：${row.time_text}`, `地点：${row.location}`,
+      row.capacity ? `人数：${row.capacity}` : '', tags.length ? `标签：${tags.join('、')}` : '', `说明：${row.description}`,
+    ].filter(Boolean).join('\n');
+  },
+});
 
 postRouter.get('/', (req, res) => {
   const uid = req.user!.id;
@@ -144,12 +172,14 @@ postRouter.post('/', (req, res) => {
   const p = sanitize(req.body);
   const recent = q.get<{ n: number }>("SELECT COUNT(*) n FROM posts WHERE user_id = ? AND created_at > datetime('now', '-1 day')", uid)!.n;
   if (recent >= 5) throw new HttpError(429, '今天发布的招募有点多啦，明天再来吧');
-  const id = Number(
-    q.run(
+  const id = tx(() => {
+    const id = Number(q.run(
       'INSERT INTO posts (user_id, title, category, description, time_text, location, capacity, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       uid, p.title, p.category, p.description, p.timeText, p.location, p.capacity, JSON.stringify(p.tags),
-    ).lastInsertRowid,
-  );
+    ).lastInsertRowid);
+    applyAutoModeration('posts', id, [p.title, p.description, p.timeText, p.location, ...p.tags].join('\n'));
+    return id;
+  });
   res.json({ post: toPost(q.get<PostRow>('SELECT * FROM posts WHERE id = ?', id)!, uid) });
 });
 
@@ -164,11 +194,14 @@ postRouter.put('/:id', (req, res) => {
   const uid = req.user!.id;
   const row = ownPost(Number(req.params.id), uid);
   const p = sanitize(req.body);
-  q.run(
+  tx(() => {
+    q.run(
     `UPDATE posts SET title = ?, category = ?, description = ?, time_text = ?, location = ?, capacity = ?, tags = ?,
-       updated_at = datetime('now'), reviewed_at = NULL WHERE id = ?`,
+       updated_at = datetime('now') WHERE id = ?`,
     p.title, p.category, p.description, p.timeText, p.location, p.capacity, JSON.stringify(p.tags), row.id,
-  );
+    );
+    applyAutoModeration('posts', row.id, [p.title, p.description, p.timeText, p.location, ...p.tags].join('\n'));
+  });
   res.json({ post: toPost(q.get<PostRow>('SELECT * FROM posts WHERE id = ?', row.id)!, uid, true) });
 });
 

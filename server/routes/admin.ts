@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { ModerationTargetType, ReportTargetType } from '../../shared/types.ts';
 import { HttpError, requireAdmin } from '../auth.ts';
+import { reviewState as autoReviewState } from '../autoModeration.ts';
 import { getSetting, iso, q, setSetting, tx } from '../db.ts';
 import { sendTakedownMail } from '../mail.ts';
 import { beijingTime, notify } from '../notify.ts';
@@ -106,7 +107,7 @@ function reviewState() {
 }
 
 const pendingOf = (type: CommunityType) =>
-  count(`SELECT COUNT(*) n FROM ${MODERATION[type].table} WHERE deleted = 0 AND taken_down = 0 AND reviewed_at IS NULL`);
+  count(`SELECT COUNT(*) n FROM ${MODERATION[type].table} WHERE deleted = 0 AND auto_held = 1`);
 
 const beijingDate = (d = new Date()) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 
@@ -119,8 +120,8 @@ adminRouter.get('/overview', (_req, res) => {
       posts: count("SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND status = 'open'"),
       forumPosts: count('SELECT COUNT(*) n FROM forum_posts WHERE deleted = 0 AND taken_down = 0'),
       checkinsToday: count('SELECT COUNT(*) n FROM checkins WHERE deleted = 0 AND local_date = ?', beijingDate()),
-      pendingProfiles: count('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0 AND reviewed_at IS NULL'),
-      pendingPosts: count('SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND reviewed_at IS NULL'),
+      pendingProfiles: count('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND auto_held = 1'),
+      pendingPosts: count('SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND auto_held = 1'),
       pendingCommunity: pendingContent.forum_post + pendingContent.comment + pendingContent.checkin,
       // 含社区帖子、评论、打卡与私聊消息的举报
       openReports: count("SELECT COUNT(*) n FROM reports WHERE status = 'open'"),
@@ -161,8 +162,8 @@ adminRouter.get('/profiles', (req, res) => {
   const filter = String(req.query.filter ?? 'pending');
   const kw = keyword(req.query.q);
   const where =
-    filter === 'pending' ? 'p.published = 1 AND p.taken_down = 0 AND p.reviewed_at IS NULL'
-    : filter === 'down' ? 'p.taken_down = 1'
+    filter === 'pending' ? 'p.published = 1 AND p.auto_held = 1'
+    : filter === 'down' ? 'p.taken_down = 1 AND p.auto_held = 0'
     : filter === 'reported' ? "p.user_id IN (SELECT target_id FROM reports WHERE target_type = 'profile' AND status = 'open')"
     : 'p.published = 1 OR p.taken_down = 1';
   const rows = q.all<any>(`SELECT p.*, u.email FROM profiles p JOIN users u ON u.id = p.user_id WHERE ${where} ORDER BY p.published_at DESC LIMIT 300`);
@@ -173,7 +174,8 @@ adminRouter.get('/profiles', (req, res) => {
         id: r.user_id, nickname: r.nickname, email: r.email, realName: d.realName, studentId: d.studentId,
         major: d.major, bio: d.bio, studyPlan: d.studyPlan, cover: d.photos[0] ?? null, photos: d.photos,
         publishedAt: iso(r.published_at), reviewedAt: iso(r.reviewed_at), savedAt: iso(r.saved_at),
-        takenDown: !!r.taken_down, takenDownAt: iso(r.taken_down_at), takedownReason: r.takedown_reason,
+        ...autoReviewState(r),
+        takenDown: !!r.taken_down && !r.auto_held, takenDownAt: iso(r.taken_down_at), takedownReason: r.takedown_reason,
         reports: reportCount('profile', r.user_id),
       };
     })
@@ -185,8 +187,8 @@ adminRouter.get('/posts', (req, res) => {
   const filter = String(req.query.filter ?? 'pending');
   const kw = keyword(req.query.q);
   const where =
-    filter === 'pending' ? 'p.taken_down = 0 AND p.reviewed_at IS NULL'
-    : filter === 'down' ? 'p.taken_down = 1'
+    filter === 'pending' ? 'p.auto_held = 1'
+    : filter === 'down' ? 'p.taken_down = 1 AND p.auto_held = 0'
     : filter === 'reported' ? "p.id IN (SELECT target_id FROM reports WHERE target_type = 'post' AND status = 'open')"
     : '1 = 1';
   const rows = q.all<any>(
@@ -197,7 +199,7 @@ adminRouter.get('/posts', (req, res) => {
     .map((r) => ({
       id: r.id, title: r.title, category: r.category, description: r.description, timeText: r.time_text, location: r.location,
       authorId: r.user_id, nickname: r.nickname ?? '', email: r.email, status: r.status,
-      createdAt: iso(r.created_at), reviewedAt: iso(r.reviewed_at), takenDown: !!r.taken_down,
+      createdAt: iso(r.created_at), reviewedAt: iso(r.reviewed_at), ...autoReviewState(r), takenDown: !!r.taken_down && !r.auto_held,
       takenDownAt: iso(r.taken_down_at), takedownReason: r.takedown_reason, reports: reportCount('post', r.id),
     }))
     .filter((x) => !kw || [x.title, x.description, x.nickname, x.email].some((f) => f.toLowerCase().includes(kw)));
@@ -214,8 +216,8 @@ adminRouter.get('/content', (req, res) => {
   const kw = keyword(req.query.q);
   const params: unknown[] = [];
   let where: string;
-  if (filter === 'pending') where = 'x.taken_down = 0 AND x.reviewed_at IS NULL';
-  else if (filter === 'down') where = 'x.taken_down = 1';
+  if (filter === 'pending') where = 'x.auto_held = 1';
+  else if (filter === 'down') where = 'x.taken_down = 1 AND x.auto_held = 0';
   else if (filter === 'reported') {
     where = "x.id IN (SELECT target_id FROM reports WHERE target_type = ? AND status = 'open')";
     params.push(type);
@@ -258,7 +260,7 @@ adminRouter.get('/content', (req, res) => {
     return {
       type, id: r.id, authorId: r.user_id, nickname: r.nickname ?? '', email: r.email,
       title, body, image: images[0] ?? null, images, link,
-      createdAt: iso(r.created_at)!, reviewedAt: iso(r.reviewed_at), takenDown: !!r.taken_down,
+      createdAt: iso(r.created_at)!, reviewedAt: iso(r.reviewed_at), ...autoReviewState(r), takenDown: !!r.taken_down && !r.auto_held,
       takenDownAt: iso(r.taken_down_at), takedownReason: r.takedown_reason, reports: reports.get(r.id) ?? 0,
     };
   });
@@ -313,7 +315,8 @@ adminRouter.post('/takedown', async (req, res) => {
   const time = beijingTime(new Date());
   tx(() => {
     q.run(
-      `UPDATE ${table} SET taken_down = 1, taken_down_at = datetime('now'), takedown_reason = ?, reviewed_at = datetime('now') WHERE ${key} = ?`,
+      `UPDATE ${table} SET taken_down = 1, taken_down_at = datetime('now'), takedown_reason = ?,
+       auto_held = 0, risk_reasons = '[]', reviewed_at = datetime('now') WHERE ${key} = ?`,
       reason, id,
     );
     q.run("UPDATE reports SET status = 'resolved', resolved_at = datetime('now') WHERE target_type = ? AND target_id = ? AND status = 'open'", type, id);
@@ -335,7 +338,7 @@ adminRouter.post('/restore', (req, res) => {
   if (!t.takenDown) throw new HttpError(409, '该内容没有被撤下');
   const { table, key, what } = MODERATION[type];
   tx(() => {
-    q.run(`UPDATE ${table} SET taken_down = 0, takedown_reason = NULL, reviewed_at = datetime('now') WHERE ${key} = ?`, id);
+    q.run(`UPDATE ${table} SET taken_down = 0, takedown_reason = NULL, auto_held = 0, risk_reasons = '[]', reviewed_at = datetime('now') WHERE ${key} = ?`, id);
     notify(t.userId, `你的${what}已恢复展示`, `「${t.label}」经复核后已恢复展示。`, t.link);
     q.run(
       'INSERT INTO moderation_logs (admin_id, action, target_type, target_id, target_user_id, target_label) VALUES (?, ?, ?, ?, ?, ?)',
@@ -354,16 +357,22 @@ adminRouter.post('/approve', (req, res) => {
   const extra = isCommunity(type) ? ' AND deleted = 0' : '';
   let changed = 0;
   tx(() => {
-    for (const id of ids) changed += Number(q.run(`UPDATE ${table} SET reviewed_at = datetime('now') WHERE ${key} = ?${extra}`, id).changes);
+    // 通过仅解除自动拦截；手动撤下和作者未发布的主页仍保持原状态。
+    for (const id of ids) changed += Number(q.run(
+      `UPDATE ${table} SET reviewed_at = datetime('now'),
+       taken_down = CASE WHEN auto_held = 1 THEN 0 ELSE taken_down END,
+       taken_down_at = CASE WHEN auto_held = 1 THEN NULL ELSE taken_down_at END,
+       takedown_reason = CASE WHEN auto_held = 1 THEN NULL ELSE takedown_reason END,
+       auto_held = 0, risk_reasons = '[]' WHERE ${key} = ?${extra}`, id,
+    ).changes);
   });
   res.json({ ok: true, count: changed });
 });
 
 // ---------- 举报 ----------
 
-/** 举报人的补充说明在 detail 列，举报时留存的内容原文在独立的 snapshot 列（见 routes/misc.ts） */
-function splitDetail(type: ReportTargetType, detail: string, stored: string): { note: string; snapshot: string | null } {
-  if (type === 'profile' || type === 'post') return { note: detail, snapshot: null };
+/** 举报人的补充说明在 detail 列，举报时留存的内容原文在独立的 snapshot 列（见 routes/misc.ts）；早期的举报没有快照 */
+function splitDetail(detail: string, stored: string): { note: string; snapshot: string | null } {
   return { note: detail, snapshot: stored ? stored : null };
 }
 
@@ -418,7 +427,7 @@ adminRouter.get('/reports', (req, res) => {
       .map((r) => {
         const type = r.target_type as ReportTargetType;
         const detail = String(r.detail ?? '');
-        const { note, snapshot } = splitDetail(type, detail, String(r.snapshot ?? ''));
+        const { note, snapshot } = splitDetail(detail, String(r.snapshot ?? ''));
         return {
           id: r.id, targetType: type, targetId: r.target_id, targetLabel: reportLabel(type, r.target_id),
           reason: r.reason, detail, note, snapshot, link: linkFor(type, r.target_id),

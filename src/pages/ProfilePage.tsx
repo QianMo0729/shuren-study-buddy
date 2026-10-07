@@ -1,3 +1,4 @@
+import { PendingReviewNotice } from '../components/ReviewStatus';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ChevronLeft } from 'lucide-react';
@@ -34,7 +35,7 @@ export function ProfilePage() {
         </div>
       ) : profile ? (
         <div className="overflow-hidden rounded-xl bg-surface md:p-6">
-          {profile.takenDown && <p className="mb-4 rounded-lg bg-danger-soft px-4 py-3 text-[14px] text-danger">这张主页已被撤下，只有本人和管理员能看到。</p>}
+          {profile.reviewPending ? <PendingReviewNotice /> : profile.takenDown && <p className="mb-4 rounded-lg bg-danger-soft px-4 py-3 text-[14px] text-danger">这张主页已被撤下，只有本人和管理员能看到。</p>}
           <ProfileDetail profile={profile} />
         </div>
       ) : (

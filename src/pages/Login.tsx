@@ -137,7 +137,7 @@ export function Login() {
       setDeadlines((values) => ({ ...values, [cooldownKey]: Date.now() + 60_000 }));
       setNow(Date.now());
       setStep('code');
-      toast.success(mode === 'activate' ? '验证码已发送' : '重设密码请求已提交', mode === 'activate' ? `请查收 ${recipient} 的邮件` : '如果邮箱对应已激活账号，将收到重设密码验证码');
+      toast.success(mode === 'activate' ? '邮件已发送' : '重设密码请求已提交');
     } catch (cause) {
       showFailure(cause, '发送失败，请稍后重试');
     } finally {
@@ -278,7 +278,7 @@ export function Login() {
               {mode !== 'login' && step === 'code' && (
                 <Field label="邮箱验证码" aside={<button type="button" onClick={sendCode} disabled={disabled || cooldown > 0} className="tabular text-[12.5px] text-brand-text hover:underline disabled:text-ink-4 disabled:no-underline">{busy === 'send' ? '发送中…' : cooldown > 0 ? `${cooldown}s 后重新发送` : '重新发送验证码'}</button>}>
                   <Input value={code} onChange={(event) => { setCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 6)); setError(null); }} aria-label="6 位邮箱验证码" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required disabled={disabled} placeholder="输入 6 位验证码" className="tabular tracking-[0.2em] placeholder:tracking-normal" />
-                  <p className="mt-2.5 text-[13px] leading-relaxed text-ink-2" role="status">{mode === 'activate' ? `验证码已发送至 ${sentAddress}，10 分钟内有效。` : `如果 ${sentAddress} 对应已激活账号，将收到验证码，10 分钟内有效。`}</p>
+                  <p className="mt-2.5 text-[13px] leading-relaxed text-ink-2" role="status">{mode === 'activate' ? `请查收 ${sentAddress} 的邮件，验证码 10 分钟内有效。已激活过的学号不会收到验证码，请直接登录。` : `如果 ${sentAddress} 对应已激活账号，将收到验证码，10 分钟内有效。`}</p>
                   <button type="button" onClick={restartVerification} disabled={disabled} className="mt-1 text-[12.5px] text-brand-text underline">{mode === 'activate' ? '修改学号' : '修改邮箱'}</button>
                   {devCode && import.meta.env.DEV && <p className="mt-2.5 flex items-center gap-2 rounded-lg bg-paper-2 px-3 py-2 text-[13px] text-ink-2">开发模式验证码 <b className="font-semibold tracking-wider tabular">{devCode}</b><button type="button" disabled={disabled} className="ml-auto underline" onClick={() => setCode(devCode)}>填入</button></p>}
                 </Field>
@@ -301,7 +301,7 @@ export function Login() {
             </form>
             <div className="mt-7 flex items-start gap-3 border-t border-line pt-5">
               <Illustration name="mascot-empty" className="size-14 shrink-0" />
-              <p className="pt-1 text-[13.5px] leading-relaxed text-ink-2">{mode === 'login' ? <>第一次使用，或以前通过验证码登录？请先<button type="button" disabled={disabled} onClick={() => switchMode('activate')} className="mx-0.5 font-semibold text-brand-text underline underline-offset-4 disabled:opacity-60">激活账号</button>设置密码，已有主页和资料会保留。</> : mode === 'activate' ? <>已有账号且设置过密码？直接<button type="button" disabled={disabled} onClick={() => switchMode('login')} className="mx-0.5 font-semibold text-brand-text underline underline-offset-4 disabled:opacity-60">登录</button>。忘记密码可通过学校邮箱重设。</> : '重设后，所有设备上的旧登录状态都会失效。请使用新密码重新登录。'}</p>
+              <div className="pt-1 text-[13.5px] leading-relaxed text-ink-2">{mode === 'login' ? <>第一次使用，或以前通过验证码登录？先用学号激活账号、设置密码，已有主页和资料会保留。<Button type="button" size="sm" disabled={disabled} onClick={() => switchMode('activate')} className="mt-2.5 flex">用学号激活账号</Button></> : mode === 'activate' ? <>已有账号且设置过密码？直接<button type="button" disabled={disabled} onClick={() => switchMode('login')} className="mx-0.5 font-semibold text-brand-text underline underline-offset-4 disabled:opacity-60">登录</button>。忘记密码可通过学校邮箱重设。</> : '重设后，所有设备上的旧登录状态都会失效。请使用新密码重新登录。'}</div>
             </div>
           </motion.div>
         </div>
@@ -312,7 +312,7 @@ export function Login() {
 
 function PasswordInput({ value, onChange, name, label, disabled, isNew, invalid }: { value: string; onChange: (value: string) => void; name: string; label: string; disabled: boolean; isNew: boolean; invalid?: boolean }) {
   const [visible, setVisible] = useState(false);
-  return <Input value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} aria-describedby={isNew ? 'password-hint' : undefined} name={name} type={visible ? 'text' : 'password'} autoComplete={isNew ? 'new-password' : 'current-password'} minLength={isNew ? PASSWORD_MIN_LENGTH : undefined} required disabled={disabled} invalid={invalid} placeholder={isNew ? '设置一个新密码' : '输入你的密码'} trailing={<button type="button" disabled={disabled} onClick={() => setVisible((current) => !current)} aria-label={visible ? `隐藏${label}` : `显示${label}`} aria-pressed={visible} className="grid size-8 place-items-center rounded text-ink-3 hover:text-ink">{visible ? <EyeOff size={17} aria-hidden /> : <Eye size={17} aria-hidden />}</button>} />;
+  return <Input value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} aria-describedby={isNew ? 'password-hint' : undefined} name={name} type={visible ? 'text' : 'password'} autoComplete={isNew ? 'new-password' : 'current-password'} minLength={isNew ? PASSWORD_MIN_LENGTH : undefined} required disabled={disabled} invalid={invalid} placeholder={!isNew ? '输入你的密码' : name === 'confirmation' ? '再输入一次新密码' : '设置一个新密码'} trailing={<button type="button" disabled={disabled} onClick={() => setVisible((current) => !current)} aria-label={visible ? `隐藏${label}` : `显示${label}`} aria-pressed={visible} className="grid size-8 place-items-center rounded text-ink-3 hover:text-ink">{visible ? <EyeOff size={17} aria-hidden /> : <Eye size={17} aria-hidden />}</button>} />;
 }
 
 function PhotoCredit({ file }: { file: string }) {

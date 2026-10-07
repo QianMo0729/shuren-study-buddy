@@ -1,7 +1,7 @@
 export const STUDENT_EMAIL_DOMAIN = 'mail.sustech.edu.cn';
 export const PASSWORD_MIN_LENGTH = 8;
 export const PASSWORD_MAX_BYTES = 72;
-export const PASSWORD_HINT = '至少 8 位，包含英文字母和数字，最长 72 字节';
+export const PASSWORD_HINT = '至少 8 位，包含英文字母和数字';
 
 /** Keep the browser and server aligned; bcrypt must never silently truncate a password. */
 export function passwordError(value: unknown): string | null {

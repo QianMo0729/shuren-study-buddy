@@ -1,0 +1,73 @@
+{
+  "title": "南科大学习打卡楼栋目录与坐标来源",
+  "preparedOn": "2026-10-06",
+  "coordinateSystem": "WGS84 (EPSG:4326), [longitude, latitude]",
+  "counts": {
+    "places": 52,
+    "libraries": 3,
+    "teachingBuildings": 3,
+    "dormitoryBuildings": 46,
+    "osmFootprints": 51,
+    "communityPoiOnly": 1,
+    "automaticBuildings": 51,
+    "manualOnlyBuildings": 1
+  },
+  "license": {
+    "database": "ODbL-1.0",
+    "url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "attribution": "© OpenStreetMap contributors",
+    "attributionUrl": "https://www.openstreetmap.org/copyright",
+    "scope": "OSM建筑轮廓及其改编地理数据库；不改变应用程序代码的许可。官方资料用于核对楼名；一丹单点来自标明名称的社区导航点位。"
+  },
+  "sources": [
+    {
+      "id": "osm",
+      "url": "https://www.openstreetmap.org",
+      "retrievedOn": "2026-09-07",
+      "dataTimestamp": "2026-09-07T08:30:50Z",
+      "rawSha256": "fe33cf9f8d3f15dc5ad71d0eb30ee4d3f4fdebe6dfe8ba5bed8babc2932acf0b",
+      "use": "51栋原始建筑外轮廓、第二教学楼内庭孔洞、校园边界way/456349157。每个楼栋保留精确sourceUrl。"
+    },
+    {
+      "id": "official-campus-map",
+      "url": "https://icm.sustech.edu.cn/map/",
+      "dataUrl": "https://icm.sustech.edu.cn/map/data/buildings.json",
+      "checkedOn": "2026-10-06",
+      "featureCount": 121,
+      "sha256": "70c3a3649606c7eb6caaa9c0e7fd88ca72f54c89b99f6656046ef80e672bc1ba",
+      "use": "逐项核对51个建筑名称。GeoJSON点与OSM轮廓一致，页面使用OSM/OpenMapTiles图层及浏览器原始经纬度，无GCJ02转换。"
+    },
+    {
+      "id": "community-navigation",
+      "url": "https://bus.sustcra.com/geojson/sustech_bldg.json",
+      "archivedOn": "2026-09-07",
+      "sourceRevisionDate": null,
+      "use": "一丹图书馆原始命名POI：113.9931979856845,22.60036695712506。GeoJSON/MapLibre源坐标；未将南科大中心整体点位冒充馆点。"
+    },
+    {
+      "id": "official-yidan",
+      "url": "https://lib.sustech.edu.cn/2020/1215/c1402a1595/page.htm",
+      "checkedOn": "2026-10-06",
+      "use": "确认一丹图书馆位于南科大中心。"
+    },
+    {
+      "id": "official-hanyong",
+      "url": "https://lib.sustech.edu.cn/980/list.htm",
+      "checkedOn": "2026-10-06",
+      "use": "确认涵泳图书馆为独立馆名。"
+    }
+  ],
+  "processing": [
+    "仅保留图书馆、教学楼和按楼号命名的学生宿舍；没有把书院区域冒充单栋宿舍。",
+    "全部OSM点按原始经纬度保留，未进行GCJ02偏移或由渲染坐标反推。",
+    "lat/lng是根据原始建筑轮廓计算的内部代表点：4米、1米、0.25米网格逐步寻找离边界较远点；不是校方测量入口。polygon与holes保留原始几何。",
+    "polygon的radiusM仅为代表点到最远顶点的上界，自动判定依赖建筑轮廓和GPS误差，不扩大半径匹配。",
+    "一丹无独立已验证建筑轮廓，其命名POI仅作目录依据；只允许手选，不自动将南科大中心判为一丹。",
+    "荔园5栋、创园3栋没有可靠来源，未编造目录或坐标。",
+    "建筑自动识别要求定位精度不超过20米，且误差圆完整落在唯一建筑范围内；边界/邻楼歧义或差精度退回校园级标签，用户可手选并标注（手选）。"
+  ],
+  "limitations": [
+    "公开地图不等于测绘或现场实测，室内GPS、系统精度与源轮廓都有误差。",
+    "二维经纬度无法区分楼层或同栋楼中的房间。"
+  ]
+}

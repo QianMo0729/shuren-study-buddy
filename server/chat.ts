@@ -1,12 +1,13 @@
 // 私聊的业务层：会话摘要、消息分页与序列化、已读、私聊消息的举报登记。
 // 数据表在 server/matches.ts，接口在 server/routes/chat.ts。
 import { hasPrivacyConsent } from '../shared/profileRules.ts';
-import type { ChatMessage, ChatSummary, ContactState } from '../shared/types.ts';
+import type { ChatMessage, ChatSummary, ContactState, PrivateNote } from '../shared/types.ts';
 import { isExcluded } from './connections.ts';
 import { iso, q } from './db.ts';
 import { type MatchRow, matchForUser, otherOf } from './matches.ts';
 import { getProfileRow, parseData } from './profiles.ts';
 import { registerReportTarget } from './social.ts';
+import { noteForOwner, notesForOwner } from './notes.ts';
 
 /** 单条消息最多 1000 字 */
 export const MESSAGE_MAX = 1000;
@@ -71,11 +72,11 @@ const preview = (body: string) => {
   return chars.length > PREVIEW_CHARS ? `${chars.slice(0, PREVIEW_CHARS).join('')}…` : chars.join('');
 };
 
-function toSummary(row: SummaryRow, viewerId: number): ChatSummary {
+function toSummary(row: SummaryRow, viewerId: number, privateNote: PrivateNote | null): ChatSummary {
   const otherId = otherOf(row, viewerId);
   return {
     matchId: row.id,
-    other: otherOfSummary(otherId),
+    other: { ...otherOfSummary(otherId), privateNote },
     status: row.status,
     lastMessage: row.lm_kind && row.lm_created && row.lm_body !== null
       ? { body: preview(row.lm_body), senderId: row.lm_sender, createdAt: iso(row.lm_created)!, kind: row.lm_kind }
@@ -95,7 +96,8 @@ export function listChats(viewerId: number): ChatSummary[] {
      LIMIT ${LIST_LIMIT}`,
     viewerId, viewerId, viewerId, viewerId,
   );
-  return rows.map((row) => toSummary(row, viewerId));
+  const notes = notesForOwner(viewerId);
+  return rows.map((row) => toSummary(row, viewerId, notes.get(otherOf(row, viewerId)) ?? null));
 }
 
 /** 当前用户是该配对的一方、且双方未互相排除时返回配对；否则调用方一律按“不存在”处理 */
@@ -108,7 +110,7 @@ export function visibleMatch(matchId: number, viewerId: number): MatchRow | unde
 export function chatSummary(matchId: number, viewerId: number): ChatSummary | null {
   if (!visibleMatch(matchId, viewerId)) return null;
   const row = q.get<SummaryRow>(`${SUMMARY_SELECT} WHERE x.id = ?`, viewerId, viewerId, matchId);
-  return row ? toSummary(row, viewerId) : null;
+  return row ? toSummary(row, viewerId, noteForOwner(viewerId, otherOf(row, viewerId))) : null;
 }
 
 export function toChatMessage(row: MessageRow, viewerId: number): ChatMessage {

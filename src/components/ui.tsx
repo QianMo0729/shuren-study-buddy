@@ -1,4 +1,4 @@
-import { AnimatePresence, motion, type HTMLMotionProps } from 'motion/react';
+import { AnimatePresence, motion, useDragControls, type HTMLMotionProps } from 'motion/react';
 import {
   forwardRef, useEffect, useId, useState, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes,
 } from 'react';
@@ -332,13 +332,19 @@ export function Tag({ children, tone = 'neutral', className }: { children: React
 
 // ---------------- Modal / Sheet ----------------
 
-function useLockBody(open: boolean) {
+let bodyLockCount = 0;
+let bodyOverflowBeforeLock = '';
+
+/** 嵌套弹窗与资料浮层共用计数，任意顺序卸载都不会留下滚动锁。 */
+export function useLockBody(open: boolean) {
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
+    if (bodyLockCount === 0) bodyOverflowBeforeLock = document.body.style.overflow;
+    bodyLockCount += 1;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = prev;
+      bodyLockCount -= 1;
+      if (bodyLockCount === 0) document.body.style.overflow = bodyOverflowBeforeLock;
     };
   }, [open]);
 }
@@ -368,6 +374,7 @@ export function Modal({
 }) {
   useLockBody(open);
   const mobile = useIsMobile();
+  const dragControls = useDragControls();
   useEffect(() => {
     if (!open || !dismissible) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -390,21 +397,32 @@ export function Modal({
           <motion.div
             role="dialog"
             aria-modal="true"
-            className={cx('relative max-h-[90dvh] w-full overflow-y-auto overscroll-contain rounded-t-2xl bg-surface shadow-lg sm:rounded-2xl', widths[size])}
+            className={cx('relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-surface shadow-lg sm:rounded-2xl', widths[size])}
             initial={mobile ? { y: '100%' } : { opacity: 0, scale: 0.98 }}
             animate={mobile ? { y: 0 } : { opacity: 1, scale: 1 }}
             exit={mobile ? { y: '100%' } : { opacity: 0, scale: 0.98 }}
             transition={mobile ? { type: 'spring', stiffness: 420, damping: 40 } : { duration: 0.18, ease }}
             drag={mobile && dismissible ? 'y' : false}
+            // Let the content scroll natively; only the handle starts a sheet drag.
+            dragListener={false}
+            dragControls={dragControls}
             dragConstraints={{ top: 0, bottom: 0 }}
             dragElastic={{ top: 0, bottom: 0.6 }}
             onDragEnd={(_, info) => {
               if (info.offset.y > 120 || info.velocity.y > 600) onClose();
             }}
           >
-            {mobile && <div className="mx-auto mt-2 h-1 w-9 rounded-full bg-ink/15" />}
+            {mobile && (
+              <div
+                aria-hidden="true"
+                className={cx('flex shrink-0 justify-center pt-2 pb-3', dismissible && 'touch-none cursor-grab')}
+                onPointerDown={(event) => dismissible && dragControls.start(event)}
+              >
+                <div className="h-1 w-9 rounded-full bg-ink/15" />
+              </div>
+            )}
             {title !== undefined && (
-              <div className="flex items-center justify-between px-5 pt-4 sm:px-6 sm:pt-5">
+              <div className="flex shrink-0 items-center justify-between px-5 pt-1 sm:px-6 sm:pt-5">
                 <h3 className="font-display text-[20px] text-ink">{title}</h3>
                 {dismissible && (
                   <IconButton label="关闭" onClick={onClose} className="-mr-2">
@@ -413,7 +431,7 @@ export function Modal({
                 )}
               </div>
             )}
-            <div className="safe-bottom">{children}</div>
+            <div className="safe-bottom min-h-0 overflow-y-auto overscroll-contain">{children}</div>
           </motion.div>
         </div>
       )}

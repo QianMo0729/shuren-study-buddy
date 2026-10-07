@@ -1,5 +1,6 @@
-import { PLAN_PRESETS, SPORTS, TRAITS, optionLabel, overlapSlots } from './options.ts';
+import { GRADES, PLAN_PRESETS, SPORTS, TRAITS, optionLabel, overlapSlots } from './options.ts';
 import type { Contacts, Personality, PrivacyConsent, ProfileInput } from './types.ts';
+import { canonicalMajor } from './majors.ts';
 
 export const emptyContacts = (): Contacts => ({ showEmail: false, wechat: '', qq: '', phone: '', other: '' });
 export const emptyPersonality = (): Personality => ({ talk: 0, noise: 0, punctual: 0, plan: 0, needSupervision: 0, giveSupervision: 0, social: 0 });
@@ -10,7 +11,7 @@ export const hasPrivacyConsent = (p: Pick<ProfileInput, 'privacyConsent'>) =>
 export function emptyProfile(): ProfileInput {
   return {
     schemaVersion: 2,
-    realName: '', studentId: '', gender: '', grade: '', major: '', buddyGender: 'any',
+    realName: '', studentId: '', gender: '', genderVisibility: 'public', grade: '', major: '', buddyGender: 'any',
     photos: [], schedule: [], timetable: null, studyPlan: '', planTags: [], mbti: '',
     contacts: emptyContacts(), status: 'seeking', futurePlan: '', futurePlanOther: '', bio: '',
     studyType: '', modes: [], places: [], placesOther: '', traits: [], traitsOther: '', dislikes: '',
@@ -18,7 +19,7 @@ export function emptyProfile(): ProfileInput {
     expectedPlaces: [], expectedPlacesOther: '', expectedSchedule: [], studyMethods: [], studyMethodsOther: '',
     frequency: '', duration: '', expectations: '', dislikeTags: [], interests: [], interestsOther: '',
     photoVisibility: 'private', privacyConsent: emptyConsent(),
-    subjects: [], goalDeadline: '', studyFormat: '', personality: emptyPersonality(),
+    semesterCourses: [], subjects: [], goalDeadline: '', studyFormat: '', personality: emptyPersonality(),
   };
 }
 
@@ -47,10 +48,13 @@ export function pickProfileInput(src: Partial<ProfileInput>): ProfileInput {
   const out = {} as Record<string, unknown>;
   for (const k of PROFILE_KEYS) out[k] = src[k] ?? base[k];
   const p = out as unknown as ProfileInput;
+  p.major = canonicalMajor(p.major) ?? p.major;
+  p.genderVisibility = src.genderVisibility === 'private' ? 'private' : 'public';
   p.contacts = { ...emptyContacts(), ...src.contacts };
   p.privacyConsent = { ...emptyConsent(), ...src.privacyConsent };
   p.personality = { ...emptyPersonality(), ...(src.personality && typeof src.personality === 'object' ? src.personality : {}) };
   p.subjects = Array.isArray(src.subjects) ? src.subjects : [];
+  p.semesterCourses = Array.isArray(src.semesterCourses) ? src.semesterCourses : [];
   if (src.schemaVersion !== 2) {
     p.schemaVersion = 2;
     p.schedule = migrateSchedule(Array.isArray(src.schedule) ? src.schedule : []);
@@ -86,11 +90,17 @@ export function pickProfileInput(src: Partial<ProfileInput>): ProfileInput {
 export const effectiveSchedule = (p: Pick<ProfileInput, 'schedule' | 'expectedSchedule'>): number[] =>
   p.expectedSchedule.length ? overlapSlots(p.schedule, p.expectedSchedule) : p.schedule;
 
-/** Required publication fields correspond to questionnaire A–F, not optional demographics. */
+/** Public display and search use the visibility setting; matching keeps the original answer. */
+export const publicGender = (p: Pick<ProfileInput, 'gender' | 'genderVisibility'>): string =>
+  p.genderVisibility === 'private' ? '' : p.gender;
+
+/** Required publication fields correspond to questionnaire A–G. */
 export function missingFields(p: ProfileInput): { key: keyof ProfileInput; label: string }[] {
   const m: { key: keyof ProfileInput; label: string }[] = [];
   const need = (ok: boolean, key: keyof ProfileInput, label: string) => !ok && m.push({ key, label });
   need(!!p.realName.trim(), 'realName', '真实姓名');
+  need(p.gender === 'male' || p.gender === 'female', 'gender', '性别');
+  need(GRADES.some((grade) => grade.value === p.grade), 'grade', '年级');
   need(p.planTags.some((v) => PLAN_PRESETS.includes(v)), 'planTags', '近期学习目标');
   need(p.places.length > 0 || !!p.placesOther.trim(), 'places', '我的学习地点');
   need(p.schedule.length > 0, 'schedule', '我的空闲时间');

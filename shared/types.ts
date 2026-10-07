@@ -2,6 +2,12 @@
 
 export type Role = 'user' | 'admin';
 
+/** 仅极高风险内容暂缓公开，等待管理员复核；其余内容直接发布。 */
+export interface ContentReviewState {
+  reviewPending: boolean;
+  reviewReasons: string[];
+}
+
 export interface SessionUser {
   id: number;
   email: string;
@@ -44,6 +50,7 @@ export interface ProfileInput {
   realName: string;
   studentId: string;
   gender: string;
+  genderVisibility: 'public' | 'private';
   grade: string;
   major: string; // 专业/院系 id，见 shared/majors.ts
   buddyGender: string;
@@ -84,12 +91,23 @@ export interface ProfileInput {
   interestsOther: string;
   photoVisibility: 'private' | 'public';
   privacyConsent: PrivacyConsent;
-  /** 具体科目 / 课程 / 考试，如「线性代数」「雅思」「CS231n」，最多 8 项 */
+  /** 本学期课表课程，仅本人可见，不参与匹配评分，最多 30 门标准课程。 */
+  semesterCourses: string[];
+  /** 本次学习目标的科目（标准课程或考试），最多 3 项。 */
   subjects: string[];
   /** 目标截止日期（考试日等），'' 或 YYYY-MM-DD */
   goalDeadline: string;
   studyFormat: StudyFormat;
   personality: Personality;
+}
+
+export type QuestionnaireSection = 'identity' | 'demographics' | 'goals' | 'study' | 'personality' | 'expectations' | 'privacy' | 'review';
+
+/** 自动保存的未提交答案，与已经发布的资料独立存储。 */
+export interface ProfileDraft {
+  form: ProfileInput;
+  section: QuestionnaireSection;
+  updatedAt: string;
 }
 
 export interface PrivacyConsent {
@@ -99,7 +117,7 @@ export interface PrivacyConsent {
   withdrawal: boolean;
 }
 
-export interface MyProfile extends ProfileInput {
+export interface MyProfile extends ProfileInput, ContentReviewState {
   userId: number;
   nickname: string;
   email: string;
@@ -112,10 +130,18 @@ export interface MyProfile extends ProfileInput {
   stats: { views: number; favorites: number; contactViews: number };
 }
 
+/** 仅当前登录者可见的私人备注，绝不写入被备注人的公开资料。 */
+export interface PrivateNote {
+  remarkName: string;
+  note: string;
+  updatedAt: string;
+}
+
 /** 广场卡片 */
 export interface ProfileCard {
   id: number;
   nickname: string;
+  remarkName?: string;
   major: string;
   gender: string;
   grade: string;
@@ -185,8 +211,9 @@ export interface DeckResponse {
   state: RecommendationResponse['state'];
   missing: { key: string; label: string }[];
   eligibleCount: number;
-  /** 去掉已反馈对象后仍可推荐的人数 */
+  /** 今日名单中仍可查看的人数 */
   total: number;
+  daily: { date: string; limit: number; assigned: number; remaining: number; resetsAt: string };
   personalization: { samples: number; active: boolean; emphasis: string[] };
 }
 
@@ -199,8 +226,11 @@ export interface FeedbackResult {
 export interface FeedbackItem {
   targetId: number;
   nickname: string;
+  remarkName?: string;
   action: FeedbackAction;
   createdAt: string;
+  /** 这条「不感兴趣」是解除配对时自动记下的 */
+  closedMatch?: boolean;
 }
 
 // ---------- 私聊 ----------
@@ -209,7 +239,7 @@ export type ContactState = 'none' | 'pending_outgoing' | 'pending_incoming' | 'a
 
 export interface ChatSummary {
   matchId: number;
-  other: { id: number; nickname: string; cover: string | null };
+  other: { id: number; nickname: string; cover: string | null; privateNote?: PrivateNote | null };
   status: 'active' | 'closed';
   lastMessage: { body: string; senderId: number | null; createdAt: string; kind: 'text' | 'system' } | null;
   unread: number;
@@ -239,7 +269,7 @@ export interface ForumAuthor {
   profileVisible: boolean;
 }
 
-export interface ForumPost {
+export interface ForumPost extends ContentReviewState {
   id: number;
   title: string;
   body: string;
@@ -256,7 +286,7 @@ export interface ForumPost {
   match?: MatchInfo;
 }
 
-export interface ForumComment {
+export interface ForumComment extends ContentReviewState {
   id: number;
   targetType: ForumTargetType;
   targetId: number;
@@ -268,7 +298,7 @@ export interface ForumComment {
 
 export type CheckinVisibility = 'all' | 'buddies';
 
-export interface Checkin {
+export interface Checkin extends ContentReviewState {
   id: number;
   image: string;
   caption: string;
@@ -306,7 +336,7 @@ export interface RecommendationResponse {
   items: ProfileCard[];
   total: number;
   eligibleCount: number;
-  state: 'ready' | 'incomplete' | 'unpublished' | 'unavailable' | 'no_overlap' | 'empty';
+  state: 'ready' | 'incomplete' | 'unpublished' | 'unavailable' | 'no_overlap' | 'empty' | 'daily_done';
   missing: { key: string; label: string }[];
 }
 
@@ -319,9 +349,10 @@ export interface MatchInfo {
 }
 
 /** 他人主页（公开字段，不含姓名、学号） */
-export interface PublicProfile {
+export interface PublicProfile extends ContentReviewState {
   id: number;
   nickname: string;
+  privateNote?: PrivateNote | null;
   gender: string;
   grade: string;
   major: string;
@@ -397,7 +428,7 @@ export interface ContactRequest {
   direction: 'incoming' | 'outgoing';
 }
 
-export interface Post {
+export interface Post extends ContentReviewState {
   id: number;
   title: string;
   category: string;

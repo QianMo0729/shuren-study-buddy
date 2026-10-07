@@ -32,7 +32,12 @@ DEV_SHOW_CODES=false
 ADMIN_EMAILS=
 RESEND_API_KEY=
 MAIL_FROM=no-reply@your-verified-domain.example
+CODE_PEPPER=
+UPLOAD_QUOTA_MB=200
+MIN_FREE_DISK_MB=1024
 ```
+
+`CODE_PEPPER` 是邮箱验证码校验值的密钥，填一段足够长的随机字符串（例如 `openssl rand -hex 32` 的输出）。它只应存在于这份环境配置中，**不要和数据库备份放在一起**：数据库里保存的是带密钥的校验值，单独拿到数据库无法穷举验证码。留空时每次启动随机生成，重启后尚未使用的验证码（10 分钟有效）失效。`UPLOAD_QUOTA_MB` 是每人上传图片的合计上限；`MIN_FREE_DISK_MB` 是数据目录所在磁盘的最低可用空间，低于它时暂停接收图片与打卡照片，建议同时为该磁盘配置用量告警。
 
 按实际域名修改 `APP_URL`；它决定邮件链接、Cookie 安全策略及写请求的 Origin 校验。不要给私有环境文件设置公共读取权限。
 

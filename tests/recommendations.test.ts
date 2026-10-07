@@ -14,7 +14,7 @@ import {
 
 const consent = { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true };
 const profile = (changes: Partial<ProfileInput> = {}): ProfileInput => ({
-  ...emptyProfile(), realName: '测试同学', schedule: [0, 1, 2], planTags: ['期末复习备考'],
+  ...emptyProfile(), realName: '测试同学', gender: 'male', grade: 'y1', schedule: [0, 1, 2], planTags: ['期末复习备考'],
   studyType: 'quiet', places: ['library'], privacyConsent: { ...consent },
   ...changes,
 });
@@ -59,6 +59,16 @@ test('weekly study need is sessions × hours, with a 4-hour estimate when either
   assert.equal(weeklyNeedHours(profile({ frequency: 'weekly1', duration: 'short' })), 2.25);
   assert.equal(weeklyNeedHours(profile({ frequency: 'irregular', duration: 'medium' })), 4.5);
   assert.equal(weeklyNeedHours(profile({ frequency: 'constructor', duration: 'toString' })), 4);
+});
+
+test('private semester timetable courses never change matching scores, reasons or eligibility', () => {
+  const me = complete();
+  const peer = complete({ subjects: ['雅思'] });
+  const before = recommendationFor(me, peer);
+  const after = recommendationFor({ ...me, semesterCourses: ['CS109 计算机程序设计基础'] }, {
+    ...peer, semesterCourses: ['CS109 计算机程序设计基础', 'CS317 计算机科学与技术前沿讲座 I'],
+  });
+  assert.deepEqual(after, before);
 });
 
 // ---------- 性质 4：硬条件 ----------
@@ -169,6 +179,23 @@ test('same subject beats same goal category with different subjects, which beats
   assert.ok(sameSubject.score > sameCategory.score && sameCategory.score > differentCategory.score);
   assert.ok(sameSubject.reasons.some((text) => text.includes('都在准备 雅思')));
   assert.ok(sameCategory.cautions.some((text) => text.includes('具体科目不同')));
+});
+
+test('same-named courses with different codes are still scored apart, but the reminder says so instead of "different subjects"', () => {
+  const me = profile({ planTags: ['期末复习备考'], subjects: ['MA107A 线性代数 A'] });
+  const content = (result: RecommendationInfo) => dimension(result, 'content').similarity!;
+  for (const theirs of ['MA113 线性代数', '线性代数', 'MA107B 线性代数 B', 'MA109 线性代数精讲']) {
+    const result = score(me, profile({ planTags: ['期末复习备考'], subjects: [theirs] }));
+    assert.equal(content(result), 0.5, `${theirs}: the matching rule itself is unchanged`);
+    assert.ok(result.cautions.some((text) => text.startsWith('同名课程、编号不同')), `${theirs}: ${result.cautions.join(' / ')}`);
+    assert.ok(!result.cautions.some((text) => text.includes('具体科目不同')), theirs);
+  }
+  // 同一个编号仍然是同一门课；先后修的课程、真正不同的课程仍然提示“具体科目不同”
+  assert.equal(content(score(me, profile({ planTags: ['期末复习备考'], subjects: ['MA107A 线性代数 A'] }))), 1);
+  for (const theirs of ['MA101a 数学分析I', 'MA102a 数学分析II']) {
+    const other = score(profile({ planTags: ['期末复习备考'], subjects: ['MA203a 数学分析III'] }), profile({ planTags: ['期末复习备考'], subjects: [theirs] }));
+    assert.ok(other.cautions.some((text) => text.includes('具体科目不同')), theirs);
+  }
 });
 
 test('subjects match through normalization, synonyms and containment, without accidental substrings', () => {

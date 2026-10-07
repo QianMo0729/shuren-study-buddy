@@ -59,7 +59,7 @@ export function EventForm() {
     setError(null);
     try {
       const r = editing ? await api.updatePost(Number(id), form) : await api.createPost(form);
-      toast.success(editing ? '已保存修改' : '招募已发布', editing ? undefined : '感兴趣的同学会通过你的主页联系你');
+      toast.success(r.post.reviewPending ? '已提交，等待审核' : editing ? '已保存修改' : '已发布', r.post.reviewPending || editing ? undefined : '感兴趣的同学会通过你的主页联系你');
       nav(`/events/${r.post.id}`, { replace: true });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '发布失败');
@@ -84,6 +84,8 @@ export function EventForm() {
     interestCount: 0,
     interested: false,
     isMine: true,
+    reviewPending: false,
+    reviewReasons: [],
     author: { id: user?.id ?? 0, nickname: user?.nickname ?? '我', major: '', studyType: '', cover: null, published: true },
   };
 

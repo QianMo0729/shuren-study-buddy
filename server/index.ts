@@ -14,8 +14,11 @@ import { connectionsRouter } from './routes/connections.ts';
 import { profileRouter } from './routes/profiles.ts';
 import { matchRouter } from './routes/match.ts';
 import { chatRouter } from './routes/chat.ts';
+import { notesRouter } from './routes/notes.ts';
 import { forumRouter } from './routes/forum.ts';
 import { checkinRouter } from './routes/checkins.ts';
+import { timetableRouter } from './routes/timetables.ts';
+import { startUploadMaintenance } from './uploads.ts';
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -46,8 +49,10 @@ app.use('/api/posts', postRouter);
 app.use('/api/connections', connectionsRouter);
 app.use('/api/match', matchRouter);
 app.use('/api/chat', chatRouter);
+app.use('/api/notes', notesRouter);
 app.use('/api/forum', forumRouter);
 app.use('/api/checkins', checkinRouter);
+app.use('/api/timetables', timetableRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', miscRouter);
 app.use('/api', (_req, _res, next) => next(new HttpError(404, '接口不存在')));
@@ -78,6 +83,8 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   res.status(500).json({ error: '服务器开小差了，请稍后再试' });
 });
+
+startUploadMaintenance();
 
 app.listen(config.port, config.host, () => {
   console.log(`\n🌳 树仁学发 · 学习搭子 API 已启动：http://${config.host}:${config.port}`);

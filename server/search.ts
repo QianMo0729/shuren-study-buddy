@@ -1,6 +1,7 @@
 import { SLOT_COUNT, overlapSlots, slotsHours } from '../shared/options.ts';
 import { type SubjectForm, sameSubject, subjectForm } from '../shared/subjects.ts';
 import { collegeOf } from '../shared/majors.ts';
+import { publicGender } from '../shared/profileRules.ts';
 import type { AdvancedQuery, Criterion, CriterionField, MatchInfo, ProfileInput } from '../shared/types.ts';
 
 import { expand, tokenize } from '../shared/searchText.ts';
@@ -77,7 +78,7 @@ export function criterionHit(c: Criterion, d: ProfileInput, nickname: string, my
   switch (c.field) {
     case 'major': return v.includes(d.major);
     case 'college': return v.includes(collegeOf(d.major));
-    case 'gender': return v.includes(d.gender);
+    case 'gender': return !!publicGender(d) && v.includes(publicGender(d));
     case 'grade': return v.includes(d.grade);
     case 'studyType': return v.includes(d.studyType);
     case 'futurePlan': return v.includes(d.futurePlan);

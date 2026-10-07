@@ -76,7 +76,7 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash) VALUES (?, 1, ?)').run(email, passwordHash).lastInsertRowid);
     const data: ProfileInput = {
-      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId,
+      ...emptyProfile(), realName: `SECRET-NAME-${id}`, studentId, gender: 'male', grade: 'y1',
       planTags: ['期末复习备考'], places: ['library'], schedule: [0, 1, 2], studyType: 'quiet',
       privacyConsent: { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true },
       contacts: { showEmail: true, wechat: `SECRET-WECHAT-${id}`, qq: '90000123', phone: '18800001234', other: 'SECRET-CONTACT' },
@@ -152,7 +152,7 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     for (const savedAt of [null, '']) {
       db.prepare('UPDATE profiles SET saved_at = ? WHERE user_id = ?').run(savedAt, candidate.id);
       const unsavedResult = await recommend(viewer);
-      assert.equal(unsavedResult.state, 'empty');
+      assert.equal(unsavedResult.state, 'daily_done');
       assert.equal(unsavedResult.eligibleCount, 0);
       assert.deepEqual(unsavedResult.items, []);
     }
@@ -170,7 +170,7 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     for (const patch of [{ realName: '' }, { planTags: [] }, { places: [] }, { schedule: [] }, { studyType: '' }, { status: 'busy' }]) {
       storeProfile(candidate, patch);
       const result = await recommend(viewer);
-      assert.equal(result.state, 'empty', JSON.stringify(patch));
+      assert.equal(result.state, 'daily_done', JSON.stringify(patch));
       assert.equal(result.eligibleCount, 0);
     }
     for (const key of Object.keys(candidate.data.privacyConsent)) {
@@ -185,6 +185,7 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     reset();
     const viewer = createUser();
     const candidate = createUser();
+    assert.equal((await recommend(viewer)).items[0]?.id, candidate.id);
     for (const [from, to] of [[viewer.id, candidate.id], [candidate.id, viewer.id]]) {
       db.prepare('INSERT INTO exclusions (user_id, target_id) VALUES (?, ?)').run(from, to);
       assert.equal((await recommend(viewer)).eligibleCount, 0);
@@ -239,25 +240,29 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     assert.equal(disjoint.total, 0);
     assert.deepEqual(disjoint.items, []);
     storeProfile(candidate, { schedule: [0, 1], expectedSchedule: [0] });
-    const common = await recommend(viewer);
+    assert.equal((await recommend(viewer)).state, 'no_overlap', 'today’s empty assignment is not refilled');
+    // A fresh viewer tests the now-compatible schedule without modifying a frozen daily assignment.
+    const freshViewer = createUser({ schedule: [0, 1], expectedSchedule: [0] });
+    db.prepare('UPDATE profiles SET published = 0 WHERE user_id = ?').run(viewer.id);
+    const common = await recommend(freshViewer);
     assert.equal(common.state, 'ready');
     assert.deepEqual(common.items[0].recommendation!.commonSlots, [0]);
     assert.equal(common.items[0].recommendation!.overlapHours, 2);
     assert.equal(common.items[0].overlapHours, 2);
-    storeProfile(viewer, { schedule: [0, 1], expectedSchedule: [2] });
-    assert.equal((await recommend(viewer)).state, 'no_overlap');
+    storeProfile(freshViewer, { schedule: [0, 1], expectedSchedule: [2] });
+    assert.equal((await recommend(freshViewer)).state, 'daily_done');
   });
 
-  await t.test('ties are deterministic, results are bounded, and profile changes recompute scores immediately', async () => {
+  await t.test('daily results are capped and stable while profile changes recompute compatibility immediately', async () => {
     reset();
     const viewer = createUser();
     const candidates = Array.from({ length: 23 }, () => createUser());
     const first = await recommend(viewer);
     const second = await recommend(viewer);
-    assert.equal(first.total, 23);
+    assert.equal(first.total, 5);
     assert.equal(first.eligibleCount, 23);
-    assert.equal(first.items.length, 20);
-    assert.deepEqual(first.items.map((item) => item.id), candidates.slice(0, 20).map((item) => item.id));
+    assert.equal(first.items.length, 5);
+    assert.deepEqual(first.items.slice(0, 4).map((item) => item.id), candidates.slice(0, 4).map((item) => item.id));
     assert.deepEqual(first, second);
     for (const item of first.items) {
       const info = item.recommendation!;
@@ -266,10 +271,10 @@ test('recommendations respect onboarding, reciprocal availability and current pr
       assert.ok(Number.isFinite(info.coverage) && info.coverage >= 0 && info.coverage <= 100);
       assert.ok(['great', 'good', 'fair'].includes(info.tier));
       assert.equal(info.dimensions.length, 7);
-      // The compatibility list is the plain questionnaire order: no personal blend, no exploration.
+      // Compatibility endpoints share the daily assignment, including its exploration slot.
       const card = item as DeckCard;
       assert.equal(card.rankScore, info.score);
-      assert.equal(card.explore, false);
+
       assert.ok(Array.isArray(card.subjects));
     }
     const changed = await api('/profiles/me', candidates[0].cookie, 'PUT', { profile: {
@@ -277,8 +282,8 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     } });
     assert.equal(changed.status, 200);
     const updated = await recommend(viewer);
-    assert.equal(updated.items[0].id, candidates[1].id);
-    assert.ok(!updated.items.some((item) => item.id === candidates[0].id));
+    assert.equal(updated.items[0].id, candidates[0].id, 'daily order remains fixed');
+    assert.ok(updated.items[0].recommendation!.score < first.items[0].recommendation!.score, 'live compatibility is recomputed');
 
     // A complete draft update changes the current user's comparison without needing a new login.
     const saved = await api('/profiles/me', viewer.cookie, 'PUT', { profile: {

@@ -1,56 +1,45 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Search, SlidersHorizontal, X } from 'lucide-react';
-import type { AdvancedQuery, ForumPost, ProfileCard as Card, PostSearchQuery } from '../../../shared/types';
+import type { AdvancedQuery, ForumPost, PostSearchQuery } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { ease } from '../../lib/motion';
-import { Button, Empty, Modal, Segmented, useIsMobile } from '../ui';
+import { Button, Empty, Modal, useIsMobile } from '../ui';
 import {
-  AdvancedSearch, DEFAULT_POST_QUERY, DEFAULT_QUERY, POST_FIELDS, PROFILE_FIELDS, activeCount, describeValues, fieldLabel, type FieldDef,
+  AdvancedSearch, DEFAULT_POST_QUERY, POST_FIELDS, activeCount, describeValues, fieldLabel,
 } from '../AdvancedSearch';
-import { CardSkeleton, ProfileCard } from '../ProfileCard';
-import { ProfileOverlay } from '../ProfileOverlay';
 import { Illustration } from '../brand';
 import { ForumPostCard, PostSkeleton } from './ForumPostCard';
-import { PostComposer } from './PostComposer';
-import { onAccountChanged } from '../../lib/auth';
+import { PostComposerDialog } from './PostComposerDialog';
+import { onAccountChanged, useAuth } from '../../lib/auth';
 
-type Target = 'posts' | 'people';
 type Mode =
   | { kind: 'feed' }
   | { kind: 'keyword'; q: string }
-  | { kind: 'posts'; query: PostSearchQuery }
-  | { kind: 'people'; query: AdvancedQuery & { keyword?: string }; box?: string };
-
-const CARD_GRID = 'grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4';
-const TARGETS = [{ value: 'posts', label: '帖子' }, { value: 'people', label: '同学' }];
-const fieldsOf = (target: Target): FieldDef[] => (target === 'posts' ? POST_FIELDS : PROFILE_FIELDS);
+  | { kind: 'posts'; query: PostSearchQuery };
 
 // 返回社区时先显示上次的帖子流，再在后台刷新
 let feedCache: { items: ForumPost[]; hasMore: boolean } | null = null;
 // 换号或退出后丢弃上一位同学的帖子流缓存
 onAccountChanged(() => { feedCache = null; });
 
-/** 聊天区：发帖、帖子流、关键词检索与高级检索（帖子 / 同学） */
+/** 聊天区：发帖、帖子流与独立的帖子检索。找同学位于匹配分区。 */
 export function TalkArea() {
   const nav = useNavigate();
+  const { user } = useAuth();
   const mobile = useIsMobile(1024);
   const [mode, setMode] = useState<Mode>({ kind: 'feed' });
   const [input, setInput] = useState('');
   const [posts, setPosts] = useState<ForumPost[]>(() => feedCache?.items ?? []);
-  const [people, setPeople] = useState<Card[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(feedCache?.hasMore ?? false);
   const [loading, setLoading] = useState(!feedCache);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [advOpen, setAdvOpen] = useState(false);
-  const [target, setTarget] = useState<Target>('posts');
   const [postQuery, setPostQuery] = useState<AdvancedQuery>(DEFAULT_POST_QUERY);
-  const [peopleQuery, setPeopleQuery] = useState<AdvancedQuery>(DEFAULT_QUERY);
-  const [openCard, setOpenCard] = useState<Card | null>(null);
   const reqId = useRef(0);
 
   const load = useCallback(async (m: Mode) => {
@@ -58,12 +47,7 @@ export function TalkArea() {
     setLoading(true);
     setError(null);
     try {
-      if (m.kind === 'people') {
-        const r = await api.advancedSearch(m.query);
-        if (id !== reqId.current) return;
-        setPeople(r.items);
-        setTotal(r.total);
-      } else if (m.kind === 'posts') {
+      if (m.kind === 'posts') {
         const r = await api.forum.search(m.query);
         if (id !== reqId.current) return;
         setPosts(r.items);
@@ -93,7 +77,6 @@ export function TalkArea() {
     reqId.current += 1; // 立即作废进行中的请求
     const cached = next.kind === 'feed' ? feedCache : null;
     setPosts(cached?.items ?? []);
-    setPeople([]);
     setTotal(0);
     setHasMore(cached?.hasMore ?? false);
     setError(null);
@@ -102,16 +85,15 @@ export function TalkArea() {
   }, []);
 
   // 关键词输入：防抖 300ms；帖子高级检索中修改关键词则带着关键词重新检索。
-  // 搜索框只检索帖子：「找同学」模式记下进入时搜索框里的文字（box），之后改动搜索框才切回帖子关键词检索
   useEffect(() => {
     const keyword = input.trim();
-    const applied = mode.kind === 'keyword' ? mode.q : mode.kind === 'posts' ? mode.query.keyword ?? '' : mode.kind === 'people' ? mode.box ?? '' : '';
+    const applied = mode.kind === 'keyword' ? mode.q : mode.kind === 'posts' ? mode.query.keyword ?? '' : '';
     if (keyword === applied) return;
     const timer = setTimeout(() => {
       if (mode.kind === 'posts') {
         if (!keyword && !mode.query.criteria.length) changeMode({ kind: 'feed' });
         else changeMode({ ...mode, query: { ...mode.query, keyword } });
-      } else changeMode(keyword ? { kind: 'keyword', q: keyword } : mode.kind === 'people' ? { ...mode, box: '' } : { kind: 'feed' });
+      } else changeMode(keyword ? { kind: 'keyword', q: keyword } : { kind: 'feed' });
     }, 300);
     return () => clearTimeout(timer);
   }, [input, mode, changeMode]);
@@ -135,31 +117,23 @@ export function TalkArea() {
     }
   };
 
-  const queryOf = (t: Target) => (t === 'posts' ? postQuery : peopleQuery);
-  const setQueryOf = (t: Target, q: AdvancedQuery) => (t === 'posts' ? setPostQuery(q) : setPeopleQuery(q));
-
-  const runAdvanced = (t: Target = target, q: AdvancedQuery = queryOf(t)) => {
+  const runAdvanced = (q: AdvancedQuery = postQuery) => {
     const criteria = q.criteria.filter((c) => c.values.length);
-    // 搜索框是帖子关键词，只用于检索帖子；找同学时的自我介绍关键词在面板里的「自我介绍关键词」条件中单独填写
-    const postKeyword = input.trim();
+    const keyword = input.trim();
     setAdvOpen(false);
-    if (!criteria.length) {
-      changeMode(postKeyword ? { kind: 'keyword', q: postKeyword } : { kind: 'feed' });
-      return;
-    }
-    changeMode(t === 'posts' ? { kind: 'posts', query: { ...q, criteria, keyword: postKeyword } } : { kind: 'people', query: { ...q, criteria, keyword: '' }, box: postKeyword });
+    changeMode(criteria.length ? { kind: 'posts', query: { ...q, criteria, keyword } }
+      : keyword ? { kind: 'keyword', q: keyword } : { kind: 'feed' });
   };
 
   const reset = () => {
-    setQueryOf(target, target === 'posts' ? DEFAULT_POST_QUERY : DEFAULT_QUERY);
-    if (mode.kind === target) changeMode(input.trim() ? { kind: 'keyword', q: input.trim() } : { kind: 'feed' });
+    setPostQuery(DEFAULT_POST_QUERY);
+    if (mode.kind === 'posts') changeMode(input.trim() ? { kind: 'keyword', q: input.trim() } : { kind: 'feed' });
   };
 
-  const removeCriterion = (t: Target, field: string) => {
-    const q = queryOf(t);
-    const next = { ...q, criteria: q.criteria.map((c) => (c.field === field ? { ...c, values: [] } : c)) };
-    setQueryOf(t, next);
-    runAdvanced(t, next);
+  const removeCriterion = (field: string) => {
+    const next = { ...postQuery, criteria: postQuery.criteria.map((c) => c.field === field ? { ...c, values: [] } : c) };
+    setPostQuery(next);
+    runAdvanced(next);
   };
 
   const clearAll = () => {
@@ -188,56 +162,38 @@ export function TalkArea() {
     });
   };
 
-  const advancedKind = mode.kind === 'posts' || mode.kind === 'people' ? mode.kind : null;
-  const applied = advancedKind ? (mode as Extract<Mode, { kind: 'posts' | 'people' }>).query.criteria : [];
-  const appliedFields = advancedKind ? fieldsOf(advancedKind) : [];
-  const matchLabel = (fields: FieldDef[]) => (key: string) => fieldLabel(key.split(':')[1] ?? key, fields);
-  const currentQuery = queryOf(target);
+  const advancedKind = mode.kind === 'posts';
+  const applied = mode.kind === 'posts' ? mode.query.criteria : [];
+  const matchLabel = (key: string) => fieldLabel(key.split(':')[1] ?? key, POST_FIELDS);
 
   const panel = (
     <AdvancedSearch
-      query={currentQuery}
-      onChange={(q) => setQueryOf(target, q)}
+      query={postQuery}
+      onChange={setPostQuery}
       onSearch={() => runAdvanced()}
       onReset={reset}
-      busy={loading && mode.kind === target}
-      fields={fieldsOf(target)}
-      title={mobile ? null : '高级检索'}
-      desc={target === 'posts'
-        ? '「标题或正文」检索帖子内容；作者条件只检索作者已公开的主页。精确匹配需符合过半加分条件；模糊匹配符合一项即可。'
-        : '按问卷资料检索同学。精确匹配需符合过半加分条件；模糊匹配符合一项即可。「必须」与「排除」始终生效。'}
-      header={
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-semibold text-ink">检索对象</span>
-          <Segmented options={TARGETS} value={target} onChange={(v) => setTarget(v as Target)} />
-        </div>
-      }
+      busy={loading && mode.kind === 'posts'}
+      fields={POST_FIELDS}
+      title={mobile ? null : '帖子高级检索'}
+      desc="「标题或正文」检索帖子内容；作者条件只检索作者已公开的主页。精确匹配需符合过半加分条件；模糊匹配符合一项即可。"
     />
   );
 
-  const statusText = loading
-    ? mode.kind === 'people' ? '正在查找同学…' : '正在加载帖子…'
-    : error
-      ? '本次加载未完成'
-      : mode.kind === 'feed'
-        ? '最新帖子'
-        : mode.kind === 'keyword'
-          ? `找到 ${posts.length}${hasMore ? '+' : ''} 条帖子 · 按命中关键词数排序`
-          : mode.kind === 'posts'
-            ? `找到 ${total} 条帖子${total > posts.length ? `（显示前 ${posts.length} 条）` : ''} · ${mode.query.matchMode === 'fuzzy' ? '模糊匹配' : '精确匹配'} · 按符合条件数排序`
-            : `找到 ${people.length} 位同学 · ${mode.query.matchMode === 'fuzzy' ? '模糊匹配' : '精确匹配'} · 按符合条件数排序`;
+  const statusText = loading ? '正在加载帖子…' : error ? '本次加载未完成' : mode.kind === 'feed' ? '最新帖子'
+    : mode.kind === 'keyword' ? `找到 ${posts.length}${hasMore ? '+' : ''} 条帖子 · 按命中关键词数排序`
+    : `找到 ${total} 条帖子${total > posts.length ? `（显示前 ${posts.length} 条）` : ''} · ${mode.query.matchMode === 'fuzzy' ? '模糊匹配' : '精确匹配'} · 按符合条件数排序`;
 
   return (
-    <div>
+    <div className="pb-10">
       <div className="flex gap-2">
         <label className="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-md border border-line-strong bg-surface px-3.5 transition-[border-color,box-shadow] focus-within:border-brand focus-within:shadow-[0_0_0_3px_var(--brand-soft)]">
           <Search size={17} className="shrink-0 text-ink-3" aria-hidden />
           <input
             value={input}
             onChange={(e) => setInput(e.target.value.slice(0, 100))}
-            placeholder={mode.kind === 'people' ? '搜索同学的自我介绍' : '搜索帖子，例如：晚霞 食堂 线代'}
+            placeholder="搜索帖子，例如：晚霞 食堂 线代"
             className="h-full min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-ink-4 sm:text-[15px]"
-            aria-label={mode.kind === 'people' ? '搜索同学的自我介绍' : '搜索帖子标题与正文'}
+            aria-label="搜索帖子标题与正文"
             enterKeyHint="search"
           />
           {input && (
@@ -257,9 +213,11 @@ export function TalkArea() {
           className="px-3.5 sm:px-5"
         >
           <span className="hidden sm:inline">高级检索</span>
-          {activeCount(currentQuery) > 0 && <span className="tabular">{activeCount(currentQuery)}</span>}
+          {activeCount(postQuery) > 0 && <span className="tabular">{activeCount(postQuery)}</span>}
         </Button>
       </div>
+
+      <p className="mt-2 text-[13px] text-ink-3">想按专业、课程或时间找搭子？<Link to="/match/search" className="ml-1 text-brand-text underline underline-offset-2">去找同学</Link></p>
 
       {mobile ? (
         <Modal open={advOpen} onClose={() => setAdvOpen(false)} title="高级检索" size="lg">{panel}</Modal>
@@ -289,13 +247,13 @@ export function TalkArea() {
       {advancedKind && applied.length > 0 && (
         <div className="-mt-1 mb-4">
           <div className="flex flex-wrap gap-1.5">
-            <span className="inline-flex h-7 items-center rounded-md bg-ink px-2 text-[12px] text-surface">{advancedKind === 'posts' ? '检索帖子' : '检索同学'}</span>
+            <span className="inline-flex h-7 items-center rounded-md bg-ink px-2 text-[12px] text-surface">检索帖子</span>
             {applied.map((c) => (
               <span key={c.field} className="inline-flex min-h-7 items-center gap-1 rounded-md border border-line bg-surface pr-1 pl-2 text-[12px] text-ink-2">
                 {c.mode === 'must' && <b className="font-semibold text-ink">必须</b>}
                 {c.mode === 'not' && <b className="font-semibold text-danger">排除</b>}
-                {fieldLabel(c.field, appliedFields)}：{describeValues(c.field, c.values, appliedFields)}
-                <button type="button" onClick={() => removeCriterion(advancedKind, c.field)} className="grid size-5 place-items-center rounded text-ink-3 hover:bg-paper-2 hover:text-ink" aria-label={`移除条件：${fieldLabel(c.field, appliedFields)}`}>
+                {fieldLabel(c.field, POST_FIELDS)}：{describeValues(c.field, c.values, POST_FIELDS)}
+                <button type="button" onClick={() => removeCriterion(c.field)} className="grid size-5 place-items-center rounded text-ink-3 hover:bg-paper-2 hover:text-ink" aria-label={`移除条件：${fieldLabel(c.field, POST_FIELDS)}`}>
                   <X size={12} />
                 </button>
               </span>
@@ -305,23 +263,7 @@ export function TalkArea() {
         </div>
       )}
 
-      {mode.kind === 'feed' && <div className="mb-4"><PostComposer collapsible onDone={onCreated} /></div>}
-
-      {mode.kind === 'people' ? (
-        loading ? (
-          <div className={CARD_GRID}>{Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}</div>
-        ) : error ? (
-          <Empty art={<Illustration name="mascot-empty" className="mb-4 size-24" />} title="暂时无法检索同学" desc={error} action={<Button variant="primary" onClick={() => void load(mode)}>重新加载</Button>} />
-        ) : people.length === 0 ? (
-          <Empty art={<Illustration name="mascot-search" className="mb-4 size-28" />} title="没有找到符合条件的同学" desc="减少一些条件、换个关键词，或切换到「模糊匹配」。" action={<Button variant="primary" onClick={() => setAdvOpen(true)}>调整条件</Button>} />
-        ) : (
-          <div className={CARD_GRID}>
-            {people.map((card, i) => (
-              <ProfileCard key={card.id} index={i} card={card} onOpen={() => setOpenCard(card)} matchLabels={matchLabel(PROFILE_FIELDS)} />
-            ))}
-          </div>
-        )
-      ) : loading && !posts.length ? (
+      {loading && !posts.length ? (
         <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <PostSkeleton key={i} />)}</div>
       ) : error && !posts.length ? (
         <Empty art={<Illustration name="mascot-empty" className="mb-4 size-24" />} title="帖子暂时没有加载出来" desc={error} action={<Button variant="primary" onClick={() => void load(mode)}>重新加载</Button>} />
@@ -345,7 +287,7 @@ export function TalkArea() {
               index={i}
               onOpen={() => nav(`/community/posts/${p.id}`)}
               onChange={(x) => patchPost(p.id, x)}
-              matchLabel={mode.kind === 'posts' ? matchLabel(POST_FIELDS) : undefined}
+              matchLabel={mode.kind === 'posts' ? matchLabel : undefined}
             />
           ))}
           {hasMore && (
@@ -358,19 +300,8 @@ export function TalkArea() {
         </div>
       )}
 
-      <AnimatePresence>
-        {openCard && (
-          <ProfileOverlay
-            key={openCard.id}
-            id={openCard.id}
-            match={openCard.match}
-            searchQuery={mode.kind === 'people' ? mode.query : undefined}
-            keyword={mode.kind === 'people' ? mode.query.keyword : undefined}
-            onClose={() => setOpenCard(null)}
-            onChanged={() => void load(mode)}
-          />
-        )}
-      </AnimatePresence>
+      <PostComposerDialog key={user?.id ?? 'anon'} onDone={onCreated} />
+
     </div>
   );
 }

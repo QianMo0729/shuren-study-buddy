@@ -1,3 +1,4 @@
+import { PendingReviewNotice } from '../components/ReviewStatus';
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { ChevronLeft, Flag, Pencil, ShieldX, Trash2 } from 'lucide-react';
@@ -78,7 +79,7 @@ export function ForumPostDetail() {
         <ChevronLeft size={17} aria-hidden /> 校园社区
       </button>
 
-      {post.takenDown && (
+      {post.reviewPending ? <PendingReviewNotice /> : post.takenDown && (
         <p className="mb-4 rounded-md bg-danger-soft px-4 py-3 text-[14px] text-danger" role="status">
           这条帖子已被管理员撤下{post.takedownReason ? `，原因：${post.takedownReason}` : ''}。{post.isMine ? '只有你和管理员能看到。' : '其他同学已看不到它。'}
         </p>
@@ -102,12 +103,12 @@ export function ForumPostDetail() {
           </p>
           <ImageGrid images={post.images} onOpen={setViewing} className="mt-4" />
           <p className="mt-4 text-[12.5px] text-ink-3">
-            发布于 {fullDateTime(post.createdAt)}
+            {post.reviewPending ? '提交于' : '发布于'} {fullDateTime(post.createdAt)}
             {edited && ` · 编辑于 ${fullDateTime(post.updatedAt)}`}
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-            {!post.takenDown && (
+            {!post.takenDown && !post.reviewPending && (
               <LikeButton type="post" id={post.id} liked={post.liked} count={post.likeCount} onChange={(r) => setPost({ ...post, liked: r.liked, likeCount: r.likeCount })} />
             )}
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -117,7 +118,7 @@ export function ForumPostDetail() {
                   <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} className="text-danger hover:bg-danger-soft hover:text-danger" onClick={() => setConfirmDelete(true)}>删除</Button>
                 </>
               ) : (
-                !post.takenDown && (
+                !post.takenDown && !post.reviewPending && (
                   <button type="button" onClick={() => setReport(true)} className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-ink-3 hover:bg-danger-soft hover:text-danger">
                     <Flag size={14} aria-hidden /> 举报
                   </button>
@@ -134,7 +135,7 @@ export function ForumPostDetail() {
       )}
 
       <div className="mt-4">
-        <Comments type="post" id={post.id} readOnly={post.takenDown} onCountChange={(n) => setPost((p) => (p ? { ...p, commentCount: n } : p))} />
+        <Comments type="post" id={post.id} readOnly={post.takenDown || post.reviewPending} onCountChange={(n) => setPost((p) => (p ? { ...p, commentCount: n } : p))} />
       </div>
 
       <ImageLightbox images={post.images} index={viewing} onIndex={setViewing} onClose={closeViewer} />

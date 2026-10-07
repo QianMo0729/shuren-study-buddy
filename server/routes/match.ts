@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { hasPrivacyConsent, pickProfileInput } from '../../shared/profileRules.ts';
+import { hasPrivacyConsent, missingFields, pickProfileInput } from '../../shared/profileRules.ts';
 import type { DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import { isExcluded } from '../connections.ts';
@@ -11,6 +11,7 @@ import {
 } from '../matching.ts';
 import { parseFeatures } from '../learning.ts';
 import { notify } from '../notify.ts';
+import { notesForOwner } from '../notes.ts';
 import { ensureProfile } from '../profiles.ts';
 
 // 匹配推荐：滑卡、按契合度排序的列表、感兴趣 / 不感兴趣 / 稍后再看
@@ -18,8 +19,11 @@ export const matchRouter = Router();
 matchRouter.use(requireUser);
 
 /** 主页仍对他人公开（四项隐私同意完整）；已撤回同意的同学不出现在列表中 */
-function consented(data: string) {
-  try { return hasPrivacyConsent(pickProfileInput(JSON.parse(data))); } catch { return false; }
+function consented(data: string, complete = false) {
+  try {
+    const profile = pickProfileInput(JSON.parse(data));
+    return hasPrivacyConsent(profile) && (!complete || missingFields(profile).length === 0);
+  } catch { return false; }
 }
 
 const ACTIONS: FeedbackAction[] = ['like', 'dislike', 'skip'];
@@ -61,7 +65,7 @@ matchRouter.post('/feedback', (req, res) => {
       : viewer.state === 'unpublished' ? '请先上传你的主页，对方才能看到你' : '你的主页目前不参与匹配，请先检查主页状态', { state: viewer.state });
   }
 
-  const features = featuresBetween(viewer.data, target.data);
+  const features = action === 'skip' ? null : featuresBetween(viewer.data, target.data);
   const before = feedbackOf(uid, targetId);
   const previous = before ? { features: parseFeatures(before.features), action: before.action } : undefined;
   const result = recordFeedback(uid, targetId, action, features ?? {});
@@ -94,19 +98,27 @@ matchRouter.get('/feedback', (req, res) => {
   const uid = req.user!.id;
   const action = req.query.action;
   if (!isAction(action)) throw new HttpError(400, '请选择要查看的反馈类型');
-  const rows = q.all<{ target_id: number; nickname: string; action: FeedbackAction; created_at: string; data: string }>(
-    `SELECT f.target_id, p.nickname, f.action, f.updated_at AS created_at, p.data
+  const rows = q.all<{ target_id: number; nickname: string; action: FeedbackAction; created_at: string; data: string; saved_at: string | null; match_status: string | null; closed_by: number | null }>(
+    `SELECT f.target_id, p.nickname, f.action, f.updated_at AS created_at, p.data, p.saved_at, m.status AS match_status, m.closed_by
      FROM match_feedback f
+     LEFT JOIN matches m ON m.user_a = min(f.user_id, f.target_id) AND m.user_b = max(f.user_id, f.target_id)
      JOIN profiles p ON p.user_id = f.target_id
      JOIN users u ON u.id = f.target_id
      WHERE f.user_id = ? AND f.action = ? AND p.published = 1 AND p.taken_down = 0
        AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> ''
        AND NOT EXISTS (SELECT 1 FROM exclusions e WHERE (e.user_id = f.user_id AND e.target_id = f.target_id) OR (e.user_id = f.target_id AND e.target_id = f.user_id))
-     ORDER BY f.updated_at DESC, f.target_id DESC LIMIT 200`,
-    uid, action,
+     ORDER BY f.updated_at DESC, f.target_id DESC LIMIT ?`,
+    uid, action, action === 'skip' ? -1 : 200,
   );
+  const notes = notesForOwner(uid);
   const items: FeedbackItem[] = rows
-    .filter((row) => consented(row.data))
-    .map((row) => ({ targetId: row.target_id, nickname: row.nickname, action: row.action, createdAt: iso(row.created_at)! }));
+    .filter((row) => consented(row.data, action === 'skip') && (action !== 'skip' || !!row.saved_at))
+    // 已经互相感兴趣的同学在私聊里，不属于“等待对方回应”
+    .filter((row) => !(action === 'like' && row.match_status === 'active'))
+    .map((row) => ({
+      targetId: row.target_id, nickname: row.nickname, remarkName: notes.get(row.target_id)?.remarkName || undefined, action: row.action, createdAt: iso(row.created_at)!,
+      // 这条「不感兴趣」来自我解除配对，而不是在卡片上的选择
+      closedMatch: action === 'dislike' && row.match_status === 'closed' && row.closed_by === uid,
+    }));
   res.json({ items });
 });
