@@ -1,7 +1,7 @@
 // 各功能模块在此登记自己的数据处理方式，避免公共路由（文件访问、举报、评论、注销）依赖具体模块。
 // 模块在被 server/index.ts 引入时完成登记，此后才开始处理请求。
 import crypto from 'node:crypto';
-import type { ForumTargetType, ReportTargetType } from '../shared/types.ts';
+import type { ForumTargetType, ReportTargetType, Role } from '../shared/types.ts';
 
 // ---------- 注销账号时的清理 ----------
 
@@ -21,7 +21,7 @@ export function runAccountCleanup(userId: number) {
 
 export interface FileViewer {
   id: number;
-  role: 'user' | 'admin';
+  role: Role;
 }
 /** 返回 true 才允许非本人、非管理员读取该文件 */
 type FileAccess = (viewer: FileViewer, ownerId: number, name: string) => boolean;
@@ -60,8 +60,8 @@ export function reportTargetFor(type: ReportTargetType): ReportTarget | undefine
   return reportTargets.get(type);
 }
 
-/** 快照的长度上限，高于任何一种内容的最大长度（社区帖子正文 2000 字） */
-export const SNAPSHOT_MAX = 8000;
+/** 快照的长度上限：高于任何一种内容的最大长度，也能放下举报私聊消息时附带的前后 40 条对话 */
+export const SNAPSHOT_MAX = 16000;
 
 /** 快照超长时不悄悄截断：注明原文长度并留下原文的 SHA-256，之后可以核对内容是否被改动过 */
 export function boundSnapshot(text: string): string {

@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { normalizeRole } from '../../shared/roles.ts';
+import { deviceHashOf, recordDevice } from '../audits.ts';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -79,7 +81,7 @@ export function sessionUser(userId: number): SessionUser | null {
   return {
     id: u.id,
     email: u.email,
-    role: u.role === 'admin' ? 'admin' : 'user',
+    role: normalizeRole(u.role),
     nickname: p?.nickname ?? null,
     published: !!p?.published && !p.taken_down,
     hasProfile: !!p,
@@ -143,6 +145,7 @@ authRouter.post('/activate', async (req, res) => {
     syncRole(id, email);
     destroySession(req, res);
     createSession(res, id);
+    recordDevice(id, deviceHashOf(req));
     return sessionUser(id);
   });
   res.json({ user });
@@ -166,6 +169,7 @@ authRouter.post('/login', async (req, res) => {
   syncRole(current.id, email);
   destroySession(req, res);
   createSession(res, current.id);
+  recordDevice(current.id, deviceHashOf(req));
   res.json({ user: sessionUser(current.id) });
 });
 

@@ -168,7 +168,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal(db.prepare('SELECT published FROM profiles WHERE user_id = ?').get(legacy.id)!.published, 1);
     storeProfile(legacy, { gender: 'female', grade: 'y1' });
     assert.equal((await api('/auth/me', legacy.cookie)).body.user.questionnaireComplete, true);
-    assert.ok(!ids((await deck(viewer)).items).includes(legacy.id), 'completing another profile does not refill today');
+    assert.ok(ids((await deck(viewer)).items).includes(legacy.id), 'a list shorter than five is topped up later the same day');
   });
 
   await t.test('hidden gender is redacted from every public card and profile while matching uses the actual answer', async () => {

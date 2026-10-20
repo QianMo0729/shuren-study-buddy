@@ -2,6 +2,7 @@
 // 数据表在 server/matches.ts，接口在 server/routes/chat.ts。
 import { hasPrivacyConsent } from '../shared/profileRules.ts';
 import type { ChatMessage, ChatSummary, ContactState, PrivateNote } from '../shared/types.ts';
+import { relationBetween } from './buddyState.ts';
 import { isExcluded } from './connections.ts';
 import { iso, q } from './db.ts';
 import { type MatchRow, matchForUser, otherOf } from './matches.ts';
@@ -25,6 +26,8 @@ interface MessageRow {
   kind: 'text' | 'system';
   body: string;
   created_at: string;
+  /** 发送时命中的敏感词类别，逗号分隔 */
+  flags?: string;
 }
 
 interface SummaryRow extends MatchRow {
@@ -84,6 +87,7 @@ function toSummary(row: SummaryRow, viewerId: number, privateNote: PrivateNote |
     unread: row.unread,
     createdAt: iso(row.created_at)!,
     contactState: contactStateOf(viewerId, otherId),
+    buddy: relationBetween(viewerId, otherId),
   };
 }
 
@@ -122,6 +126,7 @@ export function toChatMessage(row: MessageRow, viewerId: number): ChatMessage {
     body: row.body,
     createdAt: iso(row.created_at)!,
     mine: row.sender_id !== null && row.sender_id === viewerId,
+    ...(row.flags ? { flags: row.flags.split(',') } : {}),
   };
 }
 
@@ -158,8 +163,10 @@ export function cleanMessageBody(raw: unknown): string {
     .trim();
 }
 
-export function insertMessage(matchId: number, senderId: number, body: string): ChatMessage {
-  const id = Number(q.run("INSERT INTO messages (match_id, sender_id, kind, body) VALUES (?, ?, 'text', ?)", matchId, senderId, body).lastInsertRowid);
+export function insertMessage(matchId: number, senderId: number, body: string, flags: string[] = []): ChatMessage {
+  const id = Number(q.run(
+    "INSERT INTO messages (match_id, sender_id, kind, body, flags) VALUES (?, ?, 'text', ?, ?)", matchId, senderId, body, flags.join(','),
+  ).lastInsertRowid);
   q.run("UPDATE matches SET last_message_at = datetime('now') WHERE id = ?", matchId);
   return toChatMessage(q.get<MessageRow>('SELECT * FROM messages WHERE id = ?', id)!, senderId);
 }
@@ -177,6 +184,45 @@ export function markRead(matchId: number, userId: number, lastId: number) {
 
 // ---------- 举报私聊消息 ----------
 
+/** 举报时附带被举报消息前后各多少条对话 */
+export const REPORT_CONTEXT = 20;
+/** 附带的其他消息每条最多保留的字数（被举报的那条保留全文） */
+const CONTEXT_CHARS = 200;
+
+const stamp = (sqlite: string) => new Date(`${sqlite.replace(' ', 'T')}Z`).toLocaleString('zh-CN', {
+  timeZone: 'Asia/Shanghai', hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
+/**
+ * 举报时留存的对话：被举报消息前后各 20 条，以举报那一刻为准。
+ * 管理员只能看到这一段，不能翻看整段私聊。
+ */
+export function reportContext(messageId: number): string {
+  const target = q.get<MessageRow>('SELECT * FROM messages WHERE id = ?', messageId);
+  if (!target) return '';
+  const before = q.all<MessageRow>('SELECT * FROM messages WHERE match_id = ? AND id < ? ORDER BY id DESC LIMIT ?', target.match_id, target.id, REPORT_CONTEXT).reverse();
+  const after = q.all<MessageRow>('SELECT * FROM messages WHERE match_id = ? AND id > ? ORDER BY id ASC LIMIT ?', target.match_id, target.id, REPORT_CONTEXT);
+  const names = new Map<number, string>();
+  const nameOf = (id: number | null) => {
+    if (id === null) return '系统';
+    if (!names.has(id)) names.set(id, getProfileRow(id)?.nickname ?? '同学');
+    return names.get(id)!;
+  };
+  const line = (m: MessageRow, full: boolean) => {
+    const chars = [...m.body.replace(/\s+/gu, ' ').trim()];
+    const body = full || chars.length <= CONTEXT_CHARS ? chars.join('') : `${chars.slice(0, CONTEXT_CHARS).join('')}…`;
+    return `${full ? '▶ ' : ''}[${stamp(m.created_at)}] ${nameOf(m.sender_id)}：${body}`;
+  };
+  return [
+    `被举报的消息：${target.body}`,
+    '',
+    `— 举报时附带的对话（前后各 ${REPORT_CONTEXT} 条，▶ 为被举报的消息）—`,
+    ...before.map((m) => line(m, false)),
+    line(target, true),
+    ...after.map((m) => line(m, false)),
+  ].join('\n');
+}
+
 registerReportTarget('message', {
   // 只能举报对方发给自己的文字消息（不能举报自己的消息和系统消息）
   canReport(reporterId, id) {
@@ -188,6 +234,6 @@ registerReportTarget('message', {
   },
   label: () => '私聊消息',
   ownerOf: (id) => q.get<{ sender_id: number | null }>('SELECT sender_id FROM messages WHERE id = ?', id)?.sender_id ?? null,
-  // 举报时留存原文：之后即使配对被删除（如注销），管理员仍能核实
-  snapshot: (id) => q.get<{ body: string }>('SELECT body FROM messages WHERE id = ?', id)?.body ?? '',
+  // 举报时留存原文与前后的对话：之后即使配对被删除（如注销），管理员仍能核实
+  snapshot: reportContext,
 });

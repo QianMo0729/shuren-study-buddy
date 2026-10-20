@@ -39,13 +39,19 @@ export function previousExposureDays(uid: number, date: string): Map<number, str
   ).map((row) => [row.target_id, row.last_day]));
 }
 
-/** BEGIN IMMEDIATE 串行化多进程首次领取；唯一键和 position 上限进一步保证每天最多五位。 */
-export function dailyBatch(uid: number, date: string, create: () => { items: DailyAssignment[]; emptyState: 'empty' | 'no_overlap' }): DailyBatch {
+type Generate = (exclude: Set<number>, need: number) => { items: DailyAssignment[]; emptyState: 'empty' | 'no_overlap' };
+
+/**
+ * 当天名单：第一次领取时生成最多五位；名单不满五位时（例如活动初期人少），当天之后再领取会补足空位。
+ * 已经推荐过的同学不撤回、不替换；处理（感兴趣 / 不感兴趣 / 稍后再看）、撤销或对方注销都不会退还名额。
+ * BEGIN IMMEDIATE 串行化多进程同时领取；唯一键和 position 上限进一步保证每天最多五位。
+ */
+export function dailyBatch(uid: number, date: string, generate: Generate): DailyBatch {
   db.exec('BEGIN IMMEDIATE');
   try {
     let batch = q.get<BatchRow>('SELECT assigned_count, empty_state FROM daily_recommendation_batches WHERE user_id = ? AND day = ?', uid, date);
     if (!batch) {
-      const generated = create();
+      const generated = generate(new Set(), DAILY_RECOMMENDATION_LIMIT);
       const items = generated.items.slice(0, DAILY_RECOMMENDATION_LIMIT);
       q.run('INSERT INTO daily_recommendation_batches (user_id, day, assigned_count, empty_state) VALUES (?, ?, ?, ?)', uid, date, items.length, generated.emptyState);
       items.forEach((item, index) => q.run(
@@ -53,6 +59,24 @@ export function dailyBatch(uid: number, date: string, create: () => { items: Dai
         uid, date, index, item.id, item.rankScore, item.explore ? 1 : 0,
       ));
       batch = { assigned_count: items.length, empty_state: generated.emptyState };
+    } else if (batch.assigned_count < DAILY_RECOMMENDATION_LIMIT) {
+      const assigned = new Set(q.all<{ target_id: number | null }>(
+        'SELECT target_id FROM daily_recommendation_items WHERE user_id = ? AND day = ?', uid, date,
+      ).flatMap((row) => (row.target_id === null ? [] : [row.target_id])));
+      const need = DAILY_RECOMMENDATION_LIMIT - batch.assigned_count;
+      const generated = generate(assigned, need);
+      const items = generated.items.filter((item) => !assigned.has(item.id)).slice(0, need);
+      items.forEach((item, index) => q.run(
+        'INSERT INTO daily_recommendation_items (user_id, day, position, target_id, rank_score, explore) VALUES (?, ?, ?, ?, ?, ?)',
+        uid, date, batch!.assigned_count + index, item.id, item.rankScore, item.explore ? 1 : 0,
+      ));
+      if (items.length) {
+        q.run('UPDATE daily_recommendation_batches SET assigned_count = ? WHERE user_id = ? AND day = ?', batch.assigned_count + items.length, uid, date);
+        batch = { assigned_count: batch.assigned_count + items.length, empty_state: batch.empty_state };
+      } else if (generated.emptyState !== batch.empty_state && batch.assigned_count === 0) {
+        q.run('UPDATE daily_recommendation_batches SET empty_state = ? WHERE user_id = ? AND day = ?', generated.emptyState, uid, date);
+        batch = { ...batch, empty_state: generated.emptyState };
+      }
     }
     const items = q.all<{ target_id: number; rank_score: number; explore: number }>(
       'SELECT target_id, rank_score, explore FROM daily_recommendation_items WHERE user_id = ? AND day = ? AND target_id IS NOT NULL ORDER BY position', uid, date,

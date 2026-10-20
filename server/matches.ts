@@ -80,6 +80,16 @@ export interface FeedbackRow {
 }
 
 const pair = (a: number, b: number): [number, number] => (a < b ? [a, b] : [b, a]);
+
+/** 新会话开头的文明交流提示 */
+export const CIVILITY_NOTE = '请文明交流：涉及政治敏感、色情、血腥暴力的内容会被拦截或提示；遇到骚扰可以随时举报。';
+
+/** 配对关闭（解除配对、排除、不感兴趣）后要同步处理的其他模块，例如搭子绑定随之解除 */
+type MatchClosedHook = (match: MatchRow, closedBy: number) => void;
+const matchClosedHooks: MatchClosedHook[] = [];
+export function onMatchClosed(hook: MatchClosedHook) {
+  matchClosedHooks.push(hook);
+}
 export const otherOf = (m: MatchRow, uid: number) => (m.user_a === uid ? m.user_b : m.user_a);
 
 export function matchBetween(a: number, b: number): MatchRow | undefined {
@@ -122,7 +132,23 @@ function ensureMatch(a: number, b: number): { match: MatchRow; created: boolean 
   const [x, y] = pair(a, b);
   const id = Number(q.run('INSERT INTO matches (user_a, user_b) VALUES (?, ?)', x, y).lastInsertRowid);
   addSystemMessage(id, '你们互相感兴趣啦！先打个招呼，聊聊学习目标和时间安排。');
+  addSystemMessage(id, CIVILITY_NOTE);
   return { match: q.get<MatchRow>('SELECT * FROM matches WHERE id = ?', id)!, created: true };
+}
+
+/**
+ * 不经过滑卡直接建立（或重新开启）配对，例如接受搭子邀请：双方的选择都记为「感兴趣」，与互相感兴趣后的状态一致。
+ * 调用方负责校验资格并放在事务里。
+ */
+export function openMatch(a: number, b: number): { match: MatchRow; created: boolean } {
+  for (const [from, to] of [[a, b], [b, a]]) {
+    q.run(
+      `INSERT INTO match_feedback (user_id, target_id, action, features) VALUES (?, ?, 'like', '{}')
+       ON CONFLICT(user_id, target_id) DO UPDATE SET action = 'like', updated_at = datetime('now')`,
+      from, to,
+    );
+  }
+  return ensureMatch(a, b);
 }
 
 /**
@@ -183,6 +209,7 @@ export function closeMatch(matchId: number, closedBy: number) {
     m.user_a, m.user_b, m.user_b, m.user_a,
   );
   addSystemMessage(matchId, '配对已解除，聊天已关闭。');
+  for (const hook of matchClosedHooks) hook(m, closedBy);
 }
 
 export function matchStateFor(viewerId: number, targetId: number): { state: MatchState; matchId: number | null } {

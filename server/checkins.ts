@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getCampusPlace, placeLabelFor, type GeoInput } from '../shared/campusPlaces.ts';
 import { hasPrivacyConsent } from '../shared/profileRules.ts';
-import type { Checkin, CheckinSession, CheckinStats, CheckinVisibility, ForumAuthor } from '../shared/types.ts';
+import { isStaff } from '../shared/roles.ts';
+import type { Checkin, CheckinSession, CheckinStats, CheckinVisibility, ForumAuthor, Role } from '../shared/types.ts';
 import { HttpError, sha256 } from './auth.ts';
 import './community.ts';
 import { config } from './config.ts';
@@ -17,6 +18,9 @@ import { registerContentTarget, registerFileAccess, registerReportTarget } from 
 import { StampError, stampPool } from './stampPool.ts';
 import { assertStorageAvailable } from './uploads.ts';
 import { applyAutoModeration, reviewState } from './autoModeration.ts';
+import './activityTables.ts';
+import { invalidInfo } from './audits.ts';
+import { touchScores } from './scoring.ts';
 
 export const CHECKIN_LIMITS = {
   /** 拍照凭证有效期 */
@@ -54,11 +58,16 @@ export interface CheckinRow {
   taken_down_at: string | null;
   takedown_reason: string | null;
   reviewed_at: string | null;
+  invalid?: number;
+  invalid_reason?: string | null;
+  invalid_at?: string | null;
+  invalid_by?: number | null;
+  device_hash?: string | null;
 }
 
 export interface Viewer {
   id: number;
-  role: 'user' | 'admin';
+  role: Role;
 }
 
 const UPLOAD_DIR = path.join(config.dataDir, 'uploads');
@@ -285,7 +294,7 @@ export function assertCanStamp() {
  */
 export async function createCheckin(
   userId: number,
-  input: { jpeg: Buffer; caption: string; visibility: CheckinVisibility; location: GeoInput | null; placeId?: string | null },
+  input: { jpeg: Buffer; caption: string; visibility: CheckinVisibility; location: GeoInput | null; placeId?: string | null; deviceHash?: string | null },
   now = new Date(),
 ): Promise<CheckinRow> {
   const placeLabel = placeLabelFor(input.location, input.placeId);
@@ -310,14 +319,15 @@ export async function createCheckin(
       q.run("INSERT INTO uploads (name, user_id, kind, bytes) VALUES (?, ?, 'checkin', ?)", name, userId, stamped.length);
       const id = Number(
         q.run(
-          `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          userId, name, input.caption, placeLabel, sqliteTime(now), beijingDate(now), stampText, input.visibility,
+          `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility, device_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          userId, name, input.caption, placeLabel, sqliteTime(now), beijingDate(now), stampText, input.visibility, input.deviceHash ?? null,
         ).lastInsertRowid,
       );
       applyAutoModeration('checkins', id, input.caption);
       return id;
     });
+    touchScores();
     return getCheckinRow(id)!;
   } catch (e) {
     fs.rmSync(file, { force: true });
@@ -347,7 +357,7 @@ export function canViewCheckin(viewerId: number, id: number): boolean {
 /** 详情页：作者本人与管理员可以看到被撤下的打卡（作者看到撤下原因）；已删除的对所有人都不可见 */
 export function checkinVisibleTo(row: CheckinRow | undefined, viewer: Viewer): row is CheckinRow {
   if (!row || row.deleted) return false;
-  if (row.user_id === viewer.id || viewer.role === 'admin') return true;
+  if (row.user_id === viewer.id || isStaff(viewer.role)) return true;
   return canViewCheckin(viewer.id, row.id);
 }
 
@@ -448,7 +458,7 @@ export function toCheckins(rows: CheckinRow[], viewer: Viewer): Checkin[] {
   const eng = engagement(rows.map((r) => r.id), viewer.id);
   return rows.map((r) => {
     const e = eng.get(r.id)!;
-    const canSeeModeration = r.user_id === viewer.id || viewer.role === 'admin';
+    const canSeeModeration = r.user_id === viewer.id || isStaff(viewer.role);
     return {
       id: r.id,
       image: r.image,
@@ -465,6 +475,7 @@ export function toCheckins(rows: CheckinRow[], viewer: Viewer): Checkin[] {
       ...reviewState(r, canSeeModeration),
       takenDown: canSeeModeration && !!r.taken_down && !r.auto_held,
       takedownReason: canSeeModeration && r.taken_down && !r.auto_held ? r.takedown_reason : null,
+      invalid: canSeeModeration ? invalidInfo(r) : null,
     };
   });
 }

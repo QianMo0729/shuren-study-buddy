@@ -3,6 +3,7 @@
 import crypto from 'node:crypto';
 import { effectiveSchedule, emptyProfile, hasPrivacyConsent, missingFields } from '../shared/profileRules.ts';
 import type { DeckCard, DeckResponse, FeedbackAction, ProfileInput, PrivateNote, RecommendationInfo } from '../shared/types.ts';
+import { boundUserIds } from './buddyState.ts';
 import { excludedIds } from './connections.ts';
 import { getSetting, q, setSetting, tx } from './db.ts';
 import { beijingDate, DAILY_RECOMMENDATION_LIMIT, dailyBatch, nextBeijingMidnight, previousExposureDays } from './dailyRecommendations.ts';
@@ -238,6 +239,8 @@ export function candidatePool(viewer: ViewerContext): CandidatePool {
     )),
     // 对方已对我不感兴趣（静默）
     ...idSet(q.all<{ id: number }>("SELECT user_id AS id FROM match_feedback WHERE target_id = ? AND action = 'dislike'", uid)),
+    // 已经绑定了学习搭子的同学（找同学仍然能搜到）
+    ...boundUserIds(),
     // 已有活跃配对
     ...idSet(q.all<{ id: number }>(
       "SELECT CASE WHEN user_a = ? THEN user_b ELSE user_a END AS id FROM matches WHERE status = 'active' AND (user_a = ? OR user_b = ?)", uid, uid, uid,
@@ -285,7 +288,7 @@ function personalizationOf(m: UserModel): DeckResponse['personalization'] {
   return { samples: m.samples, active: m.samples >= 5, emphasis: emphasis(m.model, m.prior, m.samples) };
 }
 
-/** 固定每日名单，实时过滤已处理、撤回、拉黑、停用或不再符合硬条件的对象，不补位。 */
+/** 固定每日名单，实时过滤已处理、撤回、拉黑、停用、已绑定搭子或不再符合硬条件的对象；处理后不补位，名单不满五位时当天补足。 */
 export function buildDeck(uid: number, limit: number, now = new Date()): DeckResponse {
   const viewer = viewerContext(uid);
   const m = userModel(uid);
@@ -296,20 +299,20 @@ export function buildDeck(uid: number, limit: number, now = new Date()): DeckRes
     return { items: [], state: viewer.state, missing: viewer.missing, eligibleCount: 0, total: 0, personalization, daily };
   }
   const { eligibleCount, candidates } = candidatePool(viewer);
-  const batch = dailyBatch(uid, date, () => {
+  const batch = dailyBatch(uid, date, (exclude, need) => {
     const exposures = previousExposureDays(uid, date);
     const recentSince = beijingDate(new Date(now.getTime() - 7 * 86_400_000));
-    const ranked = candidates.map((c) => ({
+    const ranked = candidates.filter((c) => !exclude.has(c.id)).map((c) => ({
       c,
       personal: personalizedScore(c.recommendation.score, predict(m.model, extractFeatures(c.recommendation, viewer.data, c.data)), m.samples),
       recent: (exposures.get(c.id) ?? '') >= recentSince,
     })).sort((a, b) => Number(a.recent) - Number(b.recent) || b.personal - a.personal || compareRecommendationCards(a.c, b.c));
     const max = DAILY_RECOMMENDATION_LIMIT;
-    const items = ranked.slice(0, max).map((entry) => ({ id: entry.c.id, rankScore: Math.round(entry.personal * 10) / 10, explore: false }));
-    // 探索只在同一曝光组内抽签，不挤掉尚未曝光的合适同学。
+    const items = ranked.slice(0, need).map((entry) => ({ id: entry.c.id, rankScore: Math.round(entry.personal * 10) / 10, explore: false }));
+    // 探索只在同一曝光组内抽签，不挤掉尚未曝光的合适同学；补位时不放探索位。
     const explorationPool = ranked.slice(max, max * 3).filter((entry) => entry.recent === ranked[max - 1]?.recent)
       .sort((a, b) => exploreHash(uid, date, a.c.id) - exploreHash(uid, date, b.c.id) || a.c.id - b.c.id);
-    if (items.length === max && explorationPool.length) {
+    if (need === max && items.length === max && explorationPool.length) {
       const pick = explorationPool[0];
       items[max - 1] = { id: pick.c.id, rankScore: Math.round(pick.personal * 10) / 10, explore: true };
     }

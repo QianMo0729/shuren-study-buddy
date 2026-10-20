@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { isStaff, normalizeRole } from '../../shared/roles.ts';
 import { POST_CATEGORIES, optionLabel } from '../../shared/options.ts';
 import type { Post } from '../../shared/types.ts';
 import { HttpError, requireUser } from '../auth.ts';
@@ -205,7 +206,7 @@ postRouter.post('/', (req, res) => {
 postRouter.get('/:id', (req, res) => {
   const uid = req.user!.id;
   const row = q.get<PostRow>('SELECT * FROM posts WHERE id = ? AND deleted = 0', Number(req.params.id));
-  if (!row || (req.user!.role !== 'admin' && isExcluded(uid, row.user_id)) || (row.taken_down && row.user_id !== uid && req.user!.role !== 'admin')) throw new HttpError(404, '帖子不存在或已下线');
+  if (!row || (!isStaff(req.user!.role) && isExcluded(uid, row.user_id)) || (row.taken_down && row.user_id !== uid && !isStaff(req.user!.role))) throw new HttpError(404, '帖子不存在或已下线');
   res.json({ post: toPost(row, uid, true) });
 });
 

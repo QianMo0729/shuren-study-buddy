@@ -157,6 +157,22 @@ export function sendTakedownMail(to: string, kind: ModerationTargetType, label: 
   );
 }
 
+/** 打卡被判无效：写明哪一条、什么理由、申诉期限 */
+export function sendInvalidCheckinMail(to: string, label: string, reason: string, time: string, deadline: string, link: string) {
+  const url = `${config.appUrl}${link}`;
+  const html = layout(
+    '你的一次打卡没有计分',
+    `<p style="margin:0 0 14px;line-height:1.8;color:#4A5650">你的打卡「<b style="color:#18211C">${escapeHtml(label)}</b>」经审核判为无效，不计入搭子积分。打卡本身仍然保留。</p>
+     <table style="width:100%;font-size:14px;color:#4A5650;border-collapse:collapse">
+       <tr><td style="padding:8px 0;width:72px;color:#8A948E">时间</td><td style="padding:8px 0">${time}</td></tr>
+       <tr><td style="padding:8px 0;color:#8A948E">原因</td><td style="padding:8px 0">${escapeHtml(reason)}</td></tr>
+     </table>
+     <p style="margin:18px 0 0;line-height:1.8;color:#4A5650;font-size:14px">如有异议，可以在 ${deadline} 前打开这条打卡提交一次申诉，会由另一位审核员复核。</p>
+     <a href="${escapeHtml(url)}" style="display:inline-block;margin-top:18px;background:#005C65;color:#fff;text-decoration:none;padding:10px 22px;border-radius:999px;font-size:14px">查看打卡</a>`,
+  );
+  return sendMail(to, `【${BRAND}】你的一次打卡没有计分`, html, `你的打卡「${label}」经审核判为无效，不计入搭子积分。原因：${reason}。如有异议，请在 ${deadline} 前申诉：${url}`);
+}
+
 function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }

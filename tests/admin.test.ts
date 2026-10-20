@@ -499,7 +499,8 @@ test('admin moderation covers community posts, comments, check-ins and the new r
     const m = byId.get(messageReport);
     assert.equal(m.targetType, 'message');
     assert.equal(m.targetLabel, '私聊消息');
-    assert.equal(m.snapshot, '加我微信 abc，不然别想好过');
+    assert.ok(m.snapshot.startsWith('被举报的消息：加我微信 abc，不然别想好过'), m.snapshot);
+    assert.match(m.snapshot, /▶ \[[^\]]+\] [^：]+：加我微信 abc，不然别想好过/, 'the reported line is marked inside the attached conversation');
     assert.equal(m.note, '对方威胁我');
     assert.equal(m.detail, '对方威胁我', 'the reporter note and the stored snapshot are kept apart');
     assert.equal(m.link, null, 'messages have no public page');

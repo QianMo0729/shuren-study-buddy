@@ -7,6 +7,8 @@ import './db.ts';
 import './matches.ts';
 import './community.ts';
 import { adminRouter } from './routes/admin.ts';
+import { adminActivityRouter } from './routes/adminActivity.ts';
+import { activityRouter } from './routes/activity.ts';
 import { authRouter } from './routes/auth.ts';
 import { miscRouter } from './routes/misc.ts';
 import { postRouter } from './routes/posts.ts';
@@ -19,6 +21,8 @@ import { forumRouter } from './routes/forum.ts';
 import { checkinRouter } from './routes/checkins.ts';
 import { timetableRouter } from './routes/timetables.ts';
 import { startUploadMaintenance } from './uploads.ts';
+import { startAuditMaintenance } from './audits.ts';
+import './buddies.ts';
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -54,6 +58,8 @@ app.use('/api/notes', notesRouter);
 app.use('/api/forum', forumRouter);
 app.use('/api/checkins', checkinRouter);
 app.use('/api/timetables', timetableRouter);
+app.use('/api/activity', activityRouter);
+app.use('/api/admin', adminActivityRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', miscRouter);
 app.use('/api', (_req, _res, next) => next(new HttpError(404, '接口不存在')));
@@ -90,6 +96,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 startUploadMaintenance();
+startAuditMaintenance();
 
 app.listen(config.port, config.host, () => {
   console.log(`\n🌳 树仁学发 · 学习搭子 API 已启动：http://${config.host}:${config.port}`);

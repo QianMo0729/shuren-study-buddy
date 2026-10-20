@@ -497,8 +497,29 @@ test('private chat between mutually interested students', { timeout: 120_000 }, 
     const row = db.prepare("SELECT detail, snapshot, reporter_id FROM reports WHERE target_type = 'message' AND target_id = ?").get(messageId) as { detail: string; snapshot: string; reporter_id: number };
     assert.equal(row.reporter_id, b.id);
     assert.match(row.detail, /补充说明/);
-    assert.equal(row.snapshot, '这是一条需要核实的消息', 'the message text is stored in its own column');
+    assert.ok(row.snapshot.startsWith('被举报的消息：这是一条需要核实的消息'), 'the message text is stored in its own column');
     assert.doesNotMatch(row.detail, /这是一条需要核实的消息/);
+  });
+
+  await t.test('a message report attaches the 20 messages before and after it, as they were at report time', async () => {
+    const a = createUser();
+    const b = createUser();
+    const matchId = matchUsers(a, b);
+    const ids: number[] = [];
+    for (let i = 1; i <= 50; i++) {
+      const from = i % 2 ? a : b;
+      // 直接写库，避免触发发送频率限制
+      ids.push(Number(db.prepare("INSERT INTO messages (match_id, sender_id, kind, body) VALUES (?, ?, 'text', ?)").run(matchId, from.id, `第${i}条`).lastInsertRowid));
+    }
+    const target = ids[24]; // 第 25 条，由 a 发出
+    assert.equal((await api('/reports', b.cookie, 'POST', { targetType: 'message', targetId: target, reason: '不当言论或骚扰' })).status, 200);
+    db.prepare("INSERT INTO messages (match_id, sender_id, kind, body) VALUES (?, ?, 'text', '举报之后才发的')").run(matchId, a.id);
+    const { snapshot } = db.prepare("SELECT snapshot FROM reports WHERE target_type = 'message' AND target_id = ?").get(target) as { snapshot: string };
+    assert.ok(snapshot.startsWith('被举报的消息：第25条'));
+    for (const n of [5, 24, 26, 45]) assert.ok(snapshot.includes(`：第${n}条`), `message ${n} is within 20 of the reported one`);
+    for (const n of [4, 46]) assert.ok(!snapshot.includes(`：第${n}条\n`) && !snapshot.endsWith(`：第${n}条`), `message ${n} is outside the window`);
+    assert.match(snapshot, /▶ \[[^\]]+\] [^：]+：第25条/);
+    assert.ok(!snapshot.includes('举报之后才发的'), 'the snapshot is frozen at report time');
   });
 
   await t.test('account deletion removes the matches and messages of that student', async () => {

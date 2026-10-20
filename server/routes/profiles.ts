@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { isStaff, normalizeRole } from '../../shared/roles.ts';
 import { canonicalMajor } from '../../shared/majors.ts';
 import type { ContactReveal, ProfileCard, ProfileDraft, QuestionnaireSection, RecommendationResponse } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
@@ -236,6 +237,33 @@ profileRouter.post('/search', (req, res) => {
   res.json({ items: strip(sortCards(out, 'overlap')), total: out.length });
 });
 
+/** 系统昵称末尾的编号，例如「白鹭KLM23」里的 KLM23；输入可以带或不带物种名、空格 */
+export function parseNicknameId(raw: unknown): { prefix: string; code: string } | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.normalize('NFKC').trim().replace(/\s+/gu, '');
+  const m = /^([\p{Script=Han}]{0,6})([A-Za-z]{3})(\d{2})$/u.exec(text);
+  return m ? { prefix: m[1], code: `${m[2].toUpperCase()}${m[3]}` } : null;
+}
+
+// 按 ID（系统昵称或末尾编号）查找：已经认识的同学可以直接找到对方，再邀请绑定搭子。不支持按学号查找
+profileRouter.get('/lookup', (req, res) => {
+  rateLimit(`profile-lookup:${req.user!.id}`, 60, 60_000);
+  const parsed = parseNicknameId(req.query.id);
+  if (!parsed) throw new HttpError(400, '请输入对方的 ID，例如：白鹭KLM23 或 KLM23');
+  const me = viewer(req.user!.id);
+  const excluded = excludedIds(me.id);
+  const rows = q.all<any>(
+    `SELECT p.* FROM profiles p JOIN users u ON u.id = p.user_id
+     WHERE p.nickname LIKE ? AND p.published = 1 AND p.taken_down = 0
+       AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> '' LIMIT 20`,
+    `%${parsed.code}`,
+  ).filter((r) => r.nickname.toUpperCase().endsWith(parsed.code) && (!parsed.prefix || r.nickname.startsWith(parsed.prefix)));
+  const items = rows
+    .filter((r) => !excluded.has(r.user_id) && hasPrivacyConsent(sharedProfile(r)))
+    .map((r) => toCard(r, sharedProfile(r), me));
+  res.json({ items });
+});
+
 profileRouter.get('/favorites', (req, res) => {
   const me = viewer(req.user!.id);
   const rows = q.all<any>(
@@ -276,15 +304,15 @@ registerReportTarget('profile', {
 profileRouter.get('/:id', (req, res) => {
   const id = Number(req.params.id);
   const me = viewer(req.user!.id);
-  const row = visibleRow(id, me.id, req.user!.role === 'admin');
+  const row = visibleRow(id, me.id, isStaff(req.user!.role));
   if (id !== me.id) q.run('UPDATE profiles SET views = views + 1 WHERE user_id = ?', id);
-  res.json({ profile: toPublic(row, parseData(row), me.id, me.schedule, req.user!.role === 'admin') });
+  res.json({ profile: toPublic(row, parseData(row), me.id, me.schedule, isStaff(req.user!.role)) });
 });
 
 profileRouter.post('/:id/contact', (req, res) => {
   const id = Number(req.params.id);
   const uid = req.user!.id;
-  const row = visibleRow(id, uid, req.user!.role === 'admin');
+  const row = visibleRow(id, uid, isStaff(req.user!.role));
   if (id !== uid && !canExchangeContacts(uid, id)) throw new HttpError(403, '双方确认联系申请后才可交换联系方式');
   const c = parseData(row).contacts;
   const reveal: ContactReveal = {

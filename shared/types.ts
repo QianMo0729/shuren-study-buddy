@@ -1,6 +1,6 @@
 // 前后端共享的数据结构
 
-export type Role = 'user' | 'admin';
+export type Role = 'user' | 'moderator' | 'admin';
 
 /** 仅极高风险内容暂缓公开，等待管理员复核；其余内容直接发布。 */
 export interface ContentReviewState {
@@ -158,6 +158,8 @@ export interface ProfileCard {
   studyPlan?: string;
   planTags?: string[];
   subjects?: string[];
+  /** 已经绑定了学习搭子 */
+  hasBuddy?: boolean;
 }
 
 export type DimensionKey = 'time' | 'content' | 'personality' | 'style' | 'places' | 'rhythm' | 'interests';
@@ -245,6 +247,7 @@ export interface ChatSummary {
   unread: number;
   createdAt: string;
   contactState: ContactState;
+  buddy: BuddyRelation;
 }
 
 export interface ChatMessage {
@@ -255,6 +258,8 @@ export interface ChatMessage {
   body: string;
   createdAt: string;
   mine: boolean;
+  /** 发送时命中的敏感词类别（见 shared/activity.ts 的 SENSITIVE_LABELS），对方收到时显示提示 */
+  flags?: string[];
 }
 
 // ---------- 社区：聊天区帖子、打卡 ----------
@@ -284,6 +289,16 @@ export interface ForumPost extends ContentReviewState {
   takenDown?: boolean;
   takedownReason?: string | null;
   match?: MatchInfo;
+  /** 申请了 Bonus 的学习分享帖（被驳回或撤回的不算） */
+  share?: boolean;
+  /** Bonus 审核状态，只返回给作者与审核人员 */
+  bonus?: BonusState | null;
+}
+
+export interface BonusState {
+  status: 'pending' | 'approved' | 'rejected' | 'withdrawn';
+  points: number;
+  reason: string | null;
 }
 
 export interface ForumComment extends ContentReviewState {
@@ -315,6 +330,17 @@ export interface Checkin extends ContentReviewState {
   isMine: boolean;
   takenDown?: boolean;
   takedownReason?: string | null;
+  /** 被判无效（不计分），只返回给作者与审核人员 */
+  invalid?: CheckinInvalid | null;
+}
+
+export interface CheckinInvalid {
+  reason: string;
+  at: string;
+  appeal: 'none' | 'open' | 'upheld' | 'overturned';
+  /** 还在申诉期内、且没有申诉过 */
+  canAppeal: boolean;
+  appealDeadline: string;
 }
 
 export interface CheckinSession {
@@ -406,6 +432,7 @@ export interface PublicProfile extends ContentReviewState {
   /** 当前用户对这位同学的反馈状态；matched 表示互相感兴趣、可以私聊 */
   matchState: MatchState;
   matchId: number | null;
+  buddy: BuddyRelation;
 }
 
 export interface ContactReveal {
@@ -503,4 +530,68 @@ export interface AdvancedQuery {
 /** 社区帖子的高级检索：postText 检索标题与正文，其余字段检索作者已公开的主页资料 */
 export interface PostSearchQuery extends AdvancedQuery {
   keyword?: string;
+}
+
+// ---------- 搭子绑定与打卡积分 ----------
+
+export interface BuddyPartner {
+  id: number;
+  nickname: string;
+  cover: string | null;
+}
+
+/**
+ * 当前用户与另一位同学的搭子关系：
+ * bound 已互相绑定；incoming / outgoing 有待处理的邀请；
+ * none 可以邀请；unavailable 一方已经有搭子或主页不可用。
+ */
+export interface BuddyRelation {
+  state: 'bound' | 'incoming' | 'outgoing' | 'none' | 'unavailable';
+  inviteId: number | null;
+  /** 对方已经和别人绑定 */
+  otherHasBuddy: boolean;
+  /** 我已经和别人绑定 */
+  iHaveBuddy: boolean;
+}
+
+export type ShurenMember = 'yes' | 'no';
+
+export interface SeasonInfo {
+  start: string;
+  end: string;
+  status: 'upcoming' | 'running' | 'ended';
+}
+
+export interface BuddyStatus {
+  pair: {
+    id: number;
+    partner: BuddyPartner;
+    createdAt: string;
+    /** 从这一天（周一）开始计分 */
+    startsOn: string;
+    started: boolean;
+    matchId: number | null;
+    /** 不能参与评奖的原因；可以参与时为 null */
+    ineligible: string | null;
+  } | null;
+  invites: { id: number; direction: 'incoming' | 'outgoing'; other: BuddyPartner; createdAt: string }[];
+  /** 本周进度（只有次数，没有分数） */
+  week: { start: string; end: string; count: number; cap: number } | null;
+  rank: { rank: number; tied: boolean; total: number } | null;
+  shurenMember: ShurenMember | null;
+  season: SeasonInfo;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  tied: boolean;
+  members: [BuddyPartner, BuddyPartner];
+  mine: boolean;
+}
+
+export interface LeaderboardResponse {
+  items: LeaderboardEntry[];
+  /** 排名统计到哪一天（最近一个已结束的周日）；赛季还没有完整的一周时为 null */
+  through: string | null;
+  season: SeasonInfo;
 }

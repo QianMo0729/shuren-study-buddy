@@ -1,10 +1,13 @@
 import { Router } from 'express';
+import type { Role } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import {
   CHECKIN_LIMITS, assertCanStamp, checkSession, checkinVisibleTo, consumeSession, createCheckin, getCheckinRow, issueSession, listCheckins,
   parseCaption, parseLiveJpeg, parseLocation, parsePlaceId, parseVisibility, recentCount, statsFor, toCheckin, toCheckins, type FeedScope,
 } from '../checkins.ts';
+import { deviceHashOf, recordDevice } from '../audits.ts';
 import { q } from '../db.ts';
+import { touchScores } from '../scoring.ts';
 import { ensureProfile } from '../profiles.ts';
 
 // 学习打卡：照片只能来自网页相机实时拍摄（一次性拍照凭证），时间与地点水印由服务器盖章。
@@ -12,7 +15,7 @@ import { ensureProfile } from '../profiles.ts';
 export const checkinRouter = Router();
 checkinRouter.use(requireUser);
 
-const viewerOf = (req: { user?: { id: number; role: 'user' | 'admin' } }) => ({ id: req.user!.id, role: req.user!.role });
+const viewerOf = (req: { user?: { id: number; role: Role } }) => ({ id: req.user!.id, role: req.user!.role });
 
 function parseId(v: unknown) {
   const n = Number(v);
@@ -50,7 +53,9 @@ checkinRouter.post('/', async (req, res) => {
   stamping.add(uid);
   try {
     // 客户端传来的任何时间字段都被忽略：时间取服务器此刻
-    const row = await createCheckin(uid, { jpeg, caption, visibility, location, placeId }, new Date());
+    const deviceHash = deviceHashOf(req);
+    recordDevice(uid, deviceHash);
+    const row = await createCheckin(uid, { jpeg, caption, visibility, location, placeId, deviceHash }, new Date());
     res.json({ checkin: toCheckin(row, viewerOf(req)), stats: statsFor(uid) });
   } finally {
     stamping.delete(uid);
@@ -82,5 +87,6 @@ checkinRouter.delete('/:id', (req, res) => {
   if (!row || row.deleted) throw new HttpError(404, '打卡不存在或已删除');
   if (row.user_id !== req.user!.id) throw new HttpError(403, '只能删除自己的打卡');
   q.run('UPDATE checkins SET deleted = 1 WHERE id = ?', row.id);
+  touchScores();
   res.json({ ok: true });
 });

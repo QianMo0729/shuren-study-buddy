@@ -240,7 +240,9 @@ test('recommendations respect onboarding, reciprocal availability and current pr
     assert.equal(disjoint.total, 0);
     assert.deepEqual(disjoint.items, []);
     storeProfile(candidate, { schedule: [0, 1], expectedSchedule: [0] });
-    assert.equal((await recommend(viewer)).state, 'no_overlap', 'today’s empty assignment is not refilled');
+    const refilled = await recommend(viewer);
+    assert.equal(refilled.state, 'ready', 'a list shorter than five is topped up later the same day');
+    assert.deepEqual(refilled.items.map((item) => item.id), [candidate.id]);
     // A fresh viewer tests the now-compatible schedule without modifying a frozen daily assignment.
     const freshViewer = createUser({ schedule: [0, 1], expectedSchedule: [0] });
     db.prepare('UPDATE profiles SET published = 0 WHERE user_id = ?').run(viewer.id);
