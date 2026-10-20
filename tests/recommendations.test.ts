@@ -9,7 +9,8 @@ import test from 'node:test';
 import { emptyPersonality, emptyProfile, missingFields, pickProfileInput } from '../shared/profileRules.ts';
 import type { Personality, ProfileCard, ProfileInput, RecommendationDimension, RecommendationInfo } from '../shared/types.ts';
 import {
-  DIMENSION_LABELS, DIMENSION_WEIGHTS, RECOMMENDATION_VERSION, compareRecommendationCards, hardFilter, recommendationFor, weeklyNeedHours,
+  DIMENSION_LABELS, DIMENSION_WEIGHTS, RECOMMENDATION_VERSION, compareRecommendationCards, hardFilter, prepareProfile, recommendationBetween,
+  recommendationFor, weeklyNeedHours,
 } from '../server/recommendations.ts';
 
 const consent = { policy: true, contactExchange: true, silentExclusion: true, withdrawal: true };
@@ -619,4 +620,33 @@ test('place reasons say where they come from and never contradict the cautions',
   assert.ok(!result.reasons.some((r) => r.startsWith('常去同样的地点')));
   const same = score(profile({ places: ['library'] }), profile({ places: ['library'] }));
   assert.ok(same.reasons.some((r) => r.startsWith('常去同样的地点')), same.reasons.join(' / '));
+});
+
+// ---------- 预先准备好的问卷 ----------
+
+test('prepared profiles give exactly the same result as comparing the raw questionnaires, however often they are reused', () => {
+  const people = [
+    complete(),
+    complete({ gender: 'female', buddyGender: 'female', subjects: ['雅思', '线代'], mbti: 'enfp-t', studyType: 'discuss', schedule: [1, 2, 9, 30] }),
+    complete({ studyFormat: 'online', places: [], placesOther: ' 荔园 咖啡馆 ', expectedPlaces: [], expectedPlacesOther: '荔园咖啡馆', interests: ['other'], interestsOther: '桌游' }),
+    complete({ schedule: [2, 2, 40, 999, -1], expectedSchedule: [2, 40], goalDeadline: '2027-03-01', dislikeTags: ['social', 'silent'], planTags: ['其他'], goalOther: '保研' }),
+    profile({ schedule: [50] }),
+    profile({ personality: traits({ talk: 5, social: 5, punctual: 1 }), studyType: 'flexible', frequency: 'daily', duration: 'long' }),
+    profile({ planTags: [], subjects: [], places: ['any'], mbti: '不确定' }),
+  ];
+  const prepared = people.map(prepareProfile);
+  let compared = 0;
+  let filtered = 0;
+  // Each prepared questionnaire is compared with every other one, twice: reuse must not change anything.
+  for (let round = 0; round < 2; round++) {
+    for (const [i, a] of people.entries()) {
+      for (const [j, b] of people.entries()) {
+        const expected = recommendationFor(a, b);
+        assert.deepEqual(recommendationBetween(prepared[i], prepared[j]), expected, `pair ${i} → ${j}`);
+        assert.equal(expected === null, hardFilter(a, b) !== null, `hard filter agrees for pair ${i} → ${j}`);
+        if (expected) compared++; else filtered++;
+      }
+    }
+  }
+  assert.ok(compared > 20 && filtered > 4, `fixtures cover both outcomes (${compared} scored, ${filtered} filtered)`);
 });

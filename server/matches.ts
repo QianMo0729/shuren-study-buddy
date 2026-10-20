@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS matches (
   CHECK (user_a < user_b)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_pair ON matches(user_a, user_b);
+-- 「我参与的配对」按 user_a 或 user_b 查找；没有它，未读私聊数会扫描整张 messages 表
+CREATE INDEX IF NOT EXISTS idx_matches_user_b ON matches(user_b);
 
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

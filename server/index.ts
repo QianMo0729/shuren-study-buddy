@@ -39,7 +39,8 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '8mb' }));
-app.use(loadUser);
+// 只有接口需要识别登录状态；静态文件不必为每个请求查一次会话
+app.use('/api', loadUser);
 
 app.use('/api/auth', authRouter);
 app.use('/api/profiles', profileRouter);
@@ -66,6 +67,10 @@ if (config.isProd && fs.existsSync(dist)) {
       },
     }),
   );
+  // 构建产物里没有的文件返回 404 而不是首页：发布新版本后，旧页面请求已被替换的分块时能明确失败，前端据此刷新到新版本
+  app.use('/assets', (_req, res) => {
+    res.status(404).type('text/plain').send('Not found');
+  });
   app.get(/.*/, (_req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(dist, 'index.html'));

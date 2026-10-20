@@ -16,8 +16,12 @@ import { ContactCard } from './ContactCard';
 import { MessageBubble, SystemNote } from './MessageBubble';
 import { needsSeparator, separatorTime } from './format';
 
-/** 页面可见时每 4 秒拉一次新消息 */
+/**
+ * 页面可见时轮询新消息：刚有消息往来时每 4 秒一次；会话安静下来以后逐步放慢，
+ * 收到新消息、自己发言或回到页面时恢复。
+ */
 const POLL_MS = 4000;
+const pollDelay = (quietMs: number) => (quietMs < 60_000 ? POLL_MS : quietMs < 5 * 60_000 ? 8000 : 15_000);
 const errorText = (cause: unknown) => (cause instanceof ApiError ? cause.message : '网络连接失败，请稍后重试');
 
 type Pending = { key: number; body: string; createdAt: string };
@@ -70,6 +74,10 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
   const readUpTo = useRef(0);
   const sending = useRef(0);
   const polling = useRef(false);
+  /** 最近一次有消息往来（或打开会话、回到页面）的时间，决定轮询的间隔 */
+  const lastActivity = useRef(Date.now());
+  /** 立即按最新的间隔重新安排下一次轮询 */
+  const reschedule = useRef(() => {});
   const olderLoading = useRef(false);
   const alive = useRef(true);
   const tempKey = useRef(0);
@@ -121,6 +129,7 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
           const known = new Set(messagesRef.current.map((m) => m.id));
           const fresh = r.messages.filter((m) => !known.has(m.id));
           if (fresh.length) {
+            lastActivity.current = Date.now();
             if (nearBottom()) anchor.current = 'bottom';
             else if (fresh.some((m) => !m.mine)) setNewBelow(true);
             setMessages((list) => merge(list, r.messages));
@@ -162,20 +171,26 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
     let stopped = false;
     let timer = 0;
     const loop = () => {
+      window.clearTimeout(timer);
       timer = window.setTimeout(async () => {
         if (document.visibilityState === 'visible') await poll();
         if (!stopped) loop();
-      }, POLL_MS);
+      }, pollDelay(Date.now() - lastActivity.current));
     };
+    lastActivity.current = Date.now();
+    reschedule.current = loop;
     loop();
     const onVisibility = () => {
       if (document.visibilityState !== 'visible') return;
+      lastActivity.current = Date.now();
       markRead();
       void poll();
+      loop();
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       stopped = true;
+      reschedule.current = () => {};
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
@@ -241,6 +256,8 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
     stick.current = true;
     setNewBelow(false);
     setPending((list) => [...list, { key, body, createdAt: new Date().toISOString() }]);
+    lastActivity.current = Date.now();
+    reschedule.current();
     sending.current += 1;
     let ok = false;
     try {

@@ -3,14 +3,15 @@
 import crypto from 'node:crypto';
 import { effectiveSchedule, emptyProfile, hasPrivacyConsent, missingFields } from '../shared/profileRules.ts';
 import type { DeckCard, DeckResponse, FeedbackAction, ProfileInput, RecommendationInfo } from '../shared/types.ts';
-import { getSetting, q, setSetting } from './db.ts';
+import { excludedIds } from './connections.ts';
+import { getSetting, q, setSetting, tx } from './db.ts';
 import {
   type Features, type PreferenceModel, type TrainingSample,
   cloneModel, defaultPrior, emphasis, extractFeatures, fitGlobalPrior, onlineUpdate, parseFeatures, parseModel,
   personalizedScore, predict, serializeModel,
 } from './learning.ts';
-import { getProfileRow, parseData, toCard } from './profiles.ts';
-import { compareRecommendationCards, hardFilter, recommendationFor } from './recommendations.ts';
+import { getProfileRow, parseData, sharedProfile, toCard } from './profiles.ts';
+import { type PreparedProfile, compareRecommendationCards, prepareProfile, recommendationBetween, recommendationFor } from './recommendations.ts';
 
 export type ViewerState = 'ready' | 'incomplete' | 'unavailable' | 'unpublished';
 
@@ -122,9 +123,11 @@ function saveUserModel(uid: number, model: PreferenceModel, samples: number) {
  */
 export function learnFromFeedback(uid: number, features: Features | null, _action: FeedbackAction, previous?: { features: Features | null; action: FeedbackAction }) {
   if (!features && !previous?.features) return;
-  if (features) setSetting(EVENTS_KEY, String(Number(getSetting(EVENTS_KEY, '0')) + 1));
-  const { model, samples } = userModel(uid);
-  saveUserModel(uid, model, samples);
+  tx(() => {
+    if (features) setSetting(EVENTS_KEY, String(Number(getSetting(EVENTS_KEY, '0')) + 1));
+    const { model, samples } = userModel(uid);
+    saveUserModel(uid, model, samples);
+  });
   if (features) scheduleGlobalRefit();
 }
 
@@ -169,10 +172,11 @@ export function maybeRefitGlobalPrior(force = false): boolean {
 // ---------- 候选集 ----------
 
 interface Candidate {
+  /** 与 row.user_id 相同；与 recommendation 一起供 compareRecommendationCards 排序 */
+  id: number;
   row: ProfileRowLike;
   data: ProfileInput;
-  rec: RecommendationInfo;
-  features: Features;
+  recommendation: RecommendationInfo;
 }
 
 interface CandidatePool {
@@ -181,6 +185,30 @@ interface CandidatePool {
 }
 
 const idSet = (rows: { id: number }[]) => new Set(rows.map((r) => r.id));
+
+interface CandidateInfo {
+  prepared: PreparedProfile;
+  /** 问卷完整、同意隐私条款且状态可约 */
+  eligible: boolean;
+}
+
+/**
+ * 候选人问卷的派生量。键是 sharedProfile 返回的只读对象：资料没有改动时它一直是同一个对象，
+ * 派生量也就一直可用；资料改动后是新对象，旧的派生量随之被回收。
+ */
+const candidateInfo = new WeakMap<ProfileInput, CandidateInfo>();
+
+function candidateInfoOf(data: ProfileInput): CandidateInfo {
+  let info = candidateInfo.get(data);
+  if (!info) {
+    info = {
+      prepared: prepareProfile(data),
+      eligible: !missingFields(data).length && hasPrivacyConsent(data) && ACTIVE_STATUSES.includes(data.status),
+    };
+    candidateInfo.set(data, info);
+  }
+  return info;
+}
 
 /** 资格过滤（含反馈、排除、配对等）后，再经硬条件过滤得到候选人 */
 export function candidatePool(viewer: ViewerContext): CandidatePool {
@@ -194,7 +222,7 @@ export function candidatePool(viewer: ViewerContext): CandidatePool {
   );
   const blocked = new Set<number>([
     // 任一方向的排除
-    ...idSet(q.all<{ id: number }>('SELECT CASE WHEN user_id = ? THEN target_id ELSE user_id END AS id FROM exclusions WHERE user_id = ? OR target_id = ?', uid, uid, uid)),
+    ...excludedIds(uid),
     // 旧版联系申请被拒绝的（从未配对过的同学之间；私聊中的拒绝由配对与反馈状态处理，不应永久屏蔽推荐）
     ...idSet(q.all<{ id: number }>(
       `SELECT CASE WHEN c.requester_id = ? THEN c.recipient_id ELSE c.requester_id END AS id
@@ -214,27 +242,30 @@ export function candidatePool(viewer: ViewerContext): CandidatePool {
       "SELECT CASE WHEN user_a = ? THEN user_b ELSE user_a END AS id FROM matches WHERE status = 'active' AND (user_a = ? OR user_b = ?)", uid, uid, uid,
     )),
   ]);
+  const me = prepareProfile(viewer.data);
   let eligibleCount = 0;
   const candidates: Candidate[] = [];
   for (const row of rows) {
     if (blocked.has(row.user_id)) continue;
-    const data = parseData(row);
-    if (missingFields(data).length || !hasPrivacyConsent(data) || !ACTIVE_STATUSES.includes(data.status)) continue;
+    const data = sharedProfile(row);
+    const candidate = candidateInfoOf(data);
+    if (!candidate.eligible) continue;
     eligibleCount++;
-    if (hardFilter(viewer.data, data)) continue;
-    const rec = recommendationFor(viewer.data, data);
-    if (!rec) continue;
-    candidates.push({ row, data, rec, features: extractFeatures(rec, viewer.data, data) });
+    // 硬条件不满足时为 null
+    const recommendation = recommendationBetween(me, candidate.prepared);
+    if (!recommendation) continue;
+    candidates.push({ id: row.user_id, row, data, recommendation });
   }
   return { eligibleCount, candidates };
 }
 
+/** 卡片只为最终返回的那几位生成，排序用不到它 */
 function cardOf(viewer: ViewerContext, c: Candidate, rankScore: number, explore: boolean): DeckCard {
   const me = { id: viewer.uid, schedule: effectiveSchedule(viewer.data) };
   return {
     ...toCard(c.row, c.data, me),
-    overlapHours: c.rec.overlapHours,
-    recommendation: c.rec,
+    overlapHours: c.recommendation.overlapHours,
+    recommendation: c.recommendation,
     rankScore: Math.round(rankScore * 10) / 10,
     explore,
     subjects: c.data.subjects,
@@ -274,20 +305,20 @@ export function buildDeck(uid: number, limit: number, now = new Date()): DeckRes
   if (viewer.state !== 'ready') return emptyDeck(viewer, m.samples, personalization);
   const { eligibleCount, candidates } = candidatePool(viewer);
   const ranked = candidates
-    .map((c) => {
-      const personal = personalizedScore(c.rec.score, predict(m.model, c.features), m.samples);
-      return { personal, card: cardOf(viewer, c, personal, false) };
-    })
-    .sort((a, b) => b.personal - a.personal || compareRecommendationCards(a.card, b.card));
+    .map((c) => ({
+      c,
+      personal: personalizedScore(c.recommendation.score, predict(m.model, extractFeatures(c.recommendation, viewer.data, c.data)), m.samples),
+    }))
+    .sort((a, b) => b.personal - a.personal || compareRecommendationCards(a.c, b.c));
 
   const positions = explorePositions(limit);
   const date = beijingDate(now);
   const pool = ranked.slice(limit, 3 * limit)
-    .map((entry) => ({ entry, h: exploreHash(uid, date, entry.card.id) }))
-    .sort((a, b) => a.h - b.h || a.entry.card.id - b.entry.card.id)
+    .map((entry) => ({ entry, h: exploreHash(uid, date, entry.c.id) }))
+    .sort((a, b) => a.h - b.h || a.entry.c.id - b.entry.c.id)
     .slice(0, positions.length)
-    .map(({ entry }) => ({ ...entry.card, explore: true }));
-  const main = ranked.slice(0, limit - pool.length).map((entry) => entry.card);
+    .map(({ entry }) => cardOf(viewer, entry.c, entry.personal, true));
+  const main = ranked.slice(0, limit - pool.length).map((entry) => cardOf(viewer, entry.c, entry.personal, false));
   const items: DeckCard[] = [...main];
   pool.forEach((card, k) => items.splice(Math.min(positions[k], items.length), 0, card));
 
@@ -308,13 +339,13 @@ export function buildRanked(uid: number, limit: number): DeckResponse {
   const personalization = personalizationOf(m);
   if (viewer.state !== 'ready') return emptyDeck(viewer, m.samples, personalization);
   const { eligibleCount, candidates } = candidatePool(viewer);
-  const items = candidates.map((c) => cardOf(viewer, c, c.rec.score, false)).sort(compareRecommendationCards);
+  const items = [...candidates].sort(compareRecommendationCards).slice(0, limit).map((c) => cardOf(viewer, c, c.recommendation.score, false));
   return {
-    items: items.slice(0, limit),
-    state: items.length ? 'ready' : eligibleCount ? 'no_overlap' : 'empty',
+    items,
+    state: candidates.length ? 'ready' : eligibleCount ? 'no_overlap' : 'empty',
     missing: viewer.missing,
     eligibleCount,
-    total: items.length,
+    total: candidates.length,
     personalization,
   };
 }
@@ -344,7 +375,6 @@ export function feedbackTarget(targetId: number): FeedbackTarget | null {
 
 /** 反馈当时的特征快照；没有共同时间等硬条件不满足时返回 null（不参与学习） */
 export function featuresBetween(viewer: ProfileInput, target: ProfileInput): Features | null {
-  if (hardFilter(viewer, target)) return null;
   const rec = recommendationFor(viewer, target);
   return rec ? extractFeatures(rec, viewer, target) : null;
 }

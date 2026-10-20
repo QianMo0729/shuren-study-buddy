@@ -135,15 +135,32 @@ function landingStats() {
   return { types, topPlans, categories, species };
 }
 
+// 这些数字要读全部已发布的主页，而首页不需要登录就能访问：结果保留一分钟，不随访问量重复计算
+const LANDING_TTL_MS = 60_000;
+let landing: { at: number; breakdown: ReturnType<typeof landingStats>; stats: { profiles: number; posts: number; users: number } } | null = null;
+
+function landingData() {
+  const now = Date.now();
+  if (!landing || now - landing.at >= LANDING_TTL_MS) {
+    landing = {
+      at: now,
+      breakdown: landingStats(),
+      stats: {
+        profiles: q.get<{ n: number }>('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0')!.n,
+        posts: q.get<{ n: number }>("SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND status = 'open'")!.n,
+        users: q.get<{ n: number }>('SELECT COUNT(*) n FROM users WHERE activated = 1')!.n,
+      },
+    };
+  }
+  return landing;
+}
+
 miscRouter.get('/meta', (req, res) => {
+  const { breakdown, stats } = landingData();
   res.json({
-    breakdown: landingStats(),
+    breakdown,
     allowedDomains: config.allowedDomains,
     devMode: isLocalDevRequest(req),
-    stats: {
-      profiles: q.get<{ n: number }>('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0')!.n,
-      posts: q.get<{ n: number }>("SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND status = 'open'")!.n,
-      users: q.get<{ n: number }>('SELECT COUNT(*) n FROM users WHERE activated = 1')!.n,
-    },
+    stats,
   });
 });

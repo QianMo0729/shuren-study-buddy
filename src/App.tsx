@@ -1,26 +1,38 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router';
+import { PageBoundary } from './components/PageBoundary';
 import { Shell } from './components/Shell';
 import { useAuth } from './lib/auth';
+import { lazyPage } from './lib/lazyPage';
 import { page } from './lib/motion';
-import { Admin } from './pages/Admin';
-import { Credits } from './pages/Credits';
-import { EditProfile } from './pages/EditProfile';
-import { EventDetail } from './pages/EventDetail';
-import { EventForm } from './pages/EventForm';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
-import { Me } from './pages/Me';
-import { NotFound } from './pages/NotFound';
-import { ProfilePage } from './pages/ProfilePage';
-import { Privacy } from './pages/Privacy';
-import { Match } from './pages/Match';
-import { Community } from './pages/Community';
-import { ForumPostDetail } from './pages/ForumPostDetail';
-import { CheckinCamera } from './pages/CheckinCamera';
-import { CheckinDetail } from './pages/CheckinDetail';
-import { Messages } from './pages/Messages';
+
+// 首页与登录页随主包加载；其余页面各自成块，用到时才下载（管理后台、问卷的课程目录、打卡相机的楼栋数据都不小）
+const Admin = lazyPage(() => import('./pages/Admin').then((m) => m.Admin));
+const Credits = lazyPage(() => import('./pages/Credits').then((m) => m.Credits));
+const EditProfile = lazyPage(() => import('./pages/EditProfile').then((m) => m.EditProfile));
+const EventDetail = lazyPage(() => import('./pages/EventDetail').then((m) => m.EventDetail));
+const EventForm = lazyPage(() => import('./pages/EventForm').then((m) => m.EventForm));
+const Me = lazyPage(() => import('./pages/Me').then((m) => m.Me));
+const NotFound = lazyPage(() => import('./pages/NotFound').then((m) => m.NotFound));
+const ProfilePage = lazyPage(() => import('./pages/ProfilePage').then((m) => m.ProfilePage));
+const Privacy = lazyPage(() => import('./pages/Privacy').then((m) => m.Privacy));
+const Match = lazyPage(() => import('./pages/Match').then((m) => m.Match));
+const Community = lazyPage(() => import('./pages/Community').then((m) => m.Community));
+const ForumPostDetail = lazyPage(() => import('./pages/ForumPostDetail').then((m) => m.ForumPostDetail));
+const CheckinCamera = lazyPage(() => import('./pages/CheckinCamera').then((m) => m.CheckinCamera));
+const CheckinDetail = lazyPage(() => import('./pages/CheckinDetail').then((m) => m.CheckinDetail));
+const Messages = lazyPage(() => import('./pages/Messages').then((m) => m.Messages));
+
+/** 底部导航的四个分区：登录后趁空闲取回来，切换时不用等 */
+const MAIN_PAGES = [Match, Community, Messages, Me];
+
+// 直接打开某个分区时，主包一执行就开始取它的分块，不等登录状态返回
+({ match: Match, community: Community, messages: Messages, me: Me } as Record<string, { preload: () => void }>)[
+  window.location.pathname.split('/')[1]
+]?.preload();
 
 function RequireAuth({ children, admin }: { children: ReactNode; admin?: boolean }) {
   const { user, loading } = useAuth();
@@ -64,7 +76,9 @@ function LegacySquare() {
 function Page({ children }: { children: ReactNode }) {
   return (
     <motion.div variants={page} initial="initial" animate="enter" exit="exit">
-      {children}
+      <PageBoundary>
+        <Suspense fallback={<BootScreen />}>{children}</Suspense>
+      </PageBoundary>
     </motion.div>
   );
 }
@@ -72,6 +86,15 @@ function Page({ children }: { children: ReactNode }) {
 export function App() {
   const location = useLocation();
   const section = location.pathname.split('/')[1] || 'home';
+  const { user } = useAuth();
+
+  // 已登录（或正在登录页，登录后就会进入匹配页）时，等浏览器空闲再预取主要分区
+  const warm = !!user || section === 'login';
+  useEffect(() => {
+    if (!warm) return;
+    const timer = window.setTimeout(() => MAIN_PAGES.forEach((p) => p.preload()), 1500);
+    return () => window.clearTimeout(timer);
+  }, [warm]);
 
   // 进入新的分区时回到顶部；同一分区内（匹配页打开主页浮层、私聊切换会话）保持滚动位置
   const previousSection = useRef(section);

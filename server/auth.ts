@@ -47,6 +47,8 @@ function parseCookies(header: string | undefined) {
 export function createSession(res: Response, userId: number) {
   const token = crypto.randomBytes(32).toString('base64url');
   const expires = new Date(Date.now() + config.sessionDays * 86400_000);
+  // 顺手清理这个账号已经过期的会话，会话表不会无限增长
+  q.run('DELETE FROM sessions WHERE user_id = ? AND expires_at < ?', userId, new Date().toISOString());
   q.run(
     'INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)',
     sha256(token),

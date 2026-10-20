@@ -201,8 +201,9 @@ export function Landing() {
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-[1180px] flex-col gap-6 px-5 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-4">
-            <img src="/assets/brand/shuren-lockup.png" alt="南方科技大学树仁书院" className="h-10 w-auto dark:hidden" />
-            <img src="/assets/brand/shuren-mark-white.png" alt="南方科技大学树仁书院" className="hidden h-10 w-auto opacity-80 dark:block" />
+            {/* 浅色、深色各一张，只显示其一：懒加载的图片在隐藏时不会下载 */}
+            <img src="/assets/brand/shuren-lockup.png" alt="南方科技大学树仁书院" loading="lazy" decoding="async" className="h-10 w-auto dark:hidden" />
+            <img src="/assets/brand/shuren-mark-white.png" alt="南方科技大学树仁书院" loading="lazy" decoding="async" className="hidden h-10 w-auto opacity-80 dark:block" />
             <p className="text-[15px] leading-relaxed font-bold text-ink-2">
               居高怀仁　止于至善
               <br />

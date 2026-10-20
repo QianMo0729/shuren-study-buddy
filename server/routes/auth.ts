@@ -11,6 +11,7 @@ import { missingFields, pickProfileInput } from '../../shared/profileRules.ts';
 import { config } from '../config.ts';
 import { q, tx } from '../db.ts';
 import { sendAccountNoticeMail, sendCodeMail } from '../mail.ts';
+import { PasswordPoolError, passwordPool } from '../passwordPool.ts';
 import {
   HttpError, accountEmail, canShowDevCodes, clientKey, consumeCode, consumeSetupToken, createSession, destroySession, discardCode,
   issueCode, issueSetupToken, rateLimit, requirePassword, requireUser, revokeAccountCredentials, setupTokenEmail, studentEmail,
@@ -25,6 +26,18 @@ const account = (email: string) => q.get<Account>('SELECT id, email, activated, 
 const PASSWORD_COST = 12;
 // Unknown and inactive accounts still do a password comparison to avoid a fast account-existence oracle.
 const DUMMY_HASH = bcrypt.hashSync('This-is-not-an-account-password-4278', PASSWORD_COST);
+
+/** 密码的哈希与校验都在工作线程里算（server/passwordPool.ts）；排队已满或超时时请用户稍后再试 */
+async function offMainThread<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof PasswordPoolError && error.reason !== 'failed') throw new HttpError(503, '现在登录的同学有点多，请稍后再试');
+    throw error;
+  }
+}
+const hashPassword = (password: string) => offMainThread(passwordPool.hash(password, PASSWORD_COST));
+const verifyPassword = (password: string, hash: string) => offMainThread(passwordPool.verify(password, hash));
 
 function verificationCode(value: unknown): string {
   if (typeof value !== 'string' || !/^[0-9]{6}$/.test(value)) throw new HttpError(400, '请输入 6 位数字验证码');
@@ -118,7 +131,7 @@ authRouter.post('/activate', async (req, res) => {
   const password = requirePassword(req.body?.password);
   const email = setupTokenEmail(req.body?.setupToken);
   ensureCanActivate(email);
-  const hash = await bcrypt.hash(password, PASSWORD_COST);
+  const hash = await hashPassword(password);
   const user = tx(() => {
     // Recheck after the asynchronous hash so concurrent completion cannot overwrite a password.
     ensureCanActivate(email);
@@ -144,7 +157,7 @@ authRouter.post('/login', async (req, res) => {
     throw new HttpError(401, '邮箱或密码不正确，请确认账号已激活');
   }
   const before = account(email);
-  const valid = await bcrypt.compare(password, before?.password_hash || DUMMY_HASH);
+  const valid = await verifyPassword(password, before?.password_hash || DUMMY_HASH);
   // Password resets can run while bcrypt yields. Never issue a session for an outdated hash.
   const current = account(email);
   if (!valid || !before?.activated || !before.password_hash || !current?.activated || current.password_hash !== before.password_hash) {
@@ -172,7 +185,7 @@ authRouter.post('/reset-password', async (req, res) => {
   rateLimit(`reset-ip:${clientKey(req)}`, 30, 10 * 60_000);
   rateLimit(`reset:${clientKey(req)}:${email}`, 10, 10 * 60_000);
   // 无论账号是否存在都先做同样的哈希计算，再校验验证码：响应内容与耗时不随账号状态变化
-  const hash = await bcrypt.hash(password, PASSWORD_COST);
+  const hash = await hashPassword(password);
   const outcome = tx(() => {
     try {
       consumeCode(email, 'password_reset', code);
@@ -202,7 +215,7 @@ authRouter.delete('/account', requireUser, async (req, res) => {
   const current = account(req.user!.email);
   const password: unknown = req.body?.password;
   if (!current?.password_hash || typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 72
-    || !(await bcrypt.compare(password, current.password_hash))) throw new HttpError(400, '密码不正确');
+    || !(await verifyPassword(password, current.password_hash))) throw new HttpError(400, '密码不正确');
   const files = q.all<{ name: string }>('SELECT name FROM uploads WHERE user_id = ?', uid);
   tx(() => {
     const latest = account(current.email);

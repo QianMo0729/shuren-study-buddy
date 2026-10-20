@@ -34,10 +34,10 @@ function QuestionnaireRequired() {
       </header>
       <section aria-labelledby="questionnaire-required-title" className="mx-auto flex max-w-xl flex-col items-center py-7 text-center sm:py-10">
         <img
-          src="/assets/mascot-questionnaire.png"
+          src="/assets/mascot-questionnaire.webp"
           alt="小树仁拿着问卷和铅笔，微笑着等你一起填写"
-          width={1254}
-          height={1254}
+          width={512}
+          height={512}
           className="mb-6 size-52 object-contain sm:size-64"
         />
         <p className="mb-2 text-[13px] font-semibold tracking-[0.12em] text-brand-text">小树仁的小提醒</p>

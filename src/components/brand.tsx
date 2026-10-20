@@ -124,5 +124,6 @@ export function Plate({
 export function Illustration({ name, className }: { name: string; className?: string }) {
   const [ok, setOk] = useState(true);
   if (!ok) return null;
-  return <img src={`/assets/${name}.png`} alt="" className={cx('object-contain', className)} onError={() => setOk(false)} />;
+  // 由 scripts/gen-mascots.mjs 从 docs/mascots/ 的原图导出，512px
+  return <img src={`/assets/${name}.webp`} alt="" width={512} height={512} decoding="async" className={cx('object-contain', className)} onError={() => setOk(false)} />;
 }
