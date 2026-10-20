@@ -7,6 +7,7 @@ import { useToast } from '../lib/toast';
 import { cx } from '../lib/format';
 import { ease, spring } from '../lib/motion';
 import { Logo } from './brand';
+import { ROLE_LABELS, isStaff } from '../../shared/roles';
 
 type NavItem = { to: string; label: string; short: string; icon: typeof Sparkles; also?: string[]; badge?: 'messages' };
 const NAV: NavItem[] = [
@@ -48,7 +49,7 @@ export function Shell({ children }: { children: ReactNode }) {
 function TopBar() {
   const { user } = useAuth();
   const loc = useLocation();
-  const links = user?.role === 'admin' ? [...NAV, ADMIN] : NAV;
+  const links = isStaff(user?.role) ? [...NAV, ADMIN] : NAV;
 
   return (
     <header className="glass sticky top-0 z-40 border-b border-line">
@@ -110,7 +111,7 @@ function UserMenu() {
     return () => window.removeEventListener('pointerdown', on);
   }, [open]);
   if (!user) return null;
-  const name = user.nickname ?? (user.role === 'admin' ? '管理员' : '新同学');
+  const name = user.nickname ?? (isStaff(user.role) ? ROLE_LABELS[user.role] : '新同学');
   return (
     <div ref={ref} className="relative hidden md:block">
       <button onClick={() => setOpen((v) => !v)} className="flex h-10 items-center gap-2.5 rounded-lg px-2.5 transition-colors hover:bg-ink/[.05]" aria-expanded={open}>
@@ -136,7 +137,7 @@ function UserMenu() {
                 { label: '编辑问卷与资料', icon: PenLine, to: '/me/edit' },
                 { label: '拍照打卡', icon: Camera, to: '/community/checkin/new' },
                 { label: '发起招募', icon: Megaphone, to: '/events/new' },
-                ...(user.role === 'admin' ? [{ label: '管理后台', icon: Shield, to: '/admin' }] : []),
+                ...(isStaff(user.role) ? [{ label: '管理后台', icon: Shield, to: '/admin' }] : []),
               ].map((i) => (
                 <button
                   key={i.to}
@@ -171,7 +172,7 @@ function UserMenu() {
 function TabBar() {
   const { user } = useAuth();
   const loc = useLocation();
-  const tabs = user?.role === 'admin' ? [...NAV, ADMIN] : NAV;
+  const tabs = isStaff(user?.role) ? [...NAV, ADMIN] : NAV;
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-line bg-paper/95 backdrop-blur-md md:hidden safe-bottom">
       <div className="mx-auto flex h-[58px] max-w-md items-stretch justify-around">

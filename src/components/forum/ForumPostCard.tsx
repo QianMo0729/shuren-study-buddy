@@ -1,4 +1,5 @@
 import { PendingReviewBadge } from '../ReviewStatus';
+import { ShareBadge } from './ShareBadge';
 import { motion } from 'motion/react';
 import { useState } from 'react';
 import { MessageSquare } from 'lucide-react';
@@ -40,6 +41,7 @@ export function ForumPostCard({ post, onOpen, onChange, matchLabel, index = 0 }:
       <div className="flex items-start justify-between gap-3">
         <AuthorLine author={post.author} time={post.createdAt} />
         {post.reviewPending ? <PendingReviewBadge /> : post.takenDown && <span className="shrink-0 rounded-[4px] bg-danger-soft px-2 py-0.5 text-[12px] text-danger">已被撤下，仅你可见</span>}
+        <ShareBadge post={post} />
         {post.match && post.match.total > 0 && (
           <span className="shrink-0 rounded-sm px-1.5 py-0.5 font-display text-seal" title={`符合 ${post.match.score} 项，共 ${post.match.total} 项`}>
             <span className="text-[17px] leading-none">{post.match.score}</span>

@@ -7,11 +7,13 @@ import { PageHeader } from '../components/ui';
 import { TalkArea } from '../components/forum/TalkArea';
 import { CheckinFeed } from '../components/checkin/CheckinFeed';
 import { Events } from './Events';
+import { Leaderboard } from '../components/buddy/Leaderboard';
 
-type Tab = 'talk' | 'checkin' | 'events';
+type Tab = 'talk' | 'checkin' | 'board' | 'events';
 const TABS: { value: Tab; label: string }[] = [
   { value: 'talk', label: '聊天区' },
   { value: 'checkin', label: '打卡' },
+  { value: 'board', label: '搭子榜' },
   { value: 'events', label: '招募' },
 ];
 const parseTab = (v: string | null): Tab => (TABS.some((t) => t.value === v) ? (v as Tab) : 'talk');
@@ -20,7 +22,7 @@ const parseTab = (v: string | null): Tab => (TABS.some((t) => t.value === v) ? (
 export function Community() {
   const [params, setParams] = useSearchParams();
   const tab = parseTab(params.get('tab'));
-  const refs = useRef<Record<Tab, HTMLButtonElement | null>>({ talk: null, checkin: null, events: null });
+  const refs = useRef<Record<Tab, HTMLButtonElement | null>>({ talk: null, checkin: null, board: null, events: null });
 
   const select = (next: Tab, focus = false) => {
     setParams((p) => {
@@ -42,7 +44,7 @@ export function Community() {
 
   return (
     <div>
-      <PageHeader title="校园社区" desc="在聊天区分享校园生活，用实时拍照打卡记录学习，或者发起一场学习招募。" className="mb-0! border-b-0! pb-3!" />
+      <PageHeader title="校园社区" desc="在聊天区分享校园生活，用实时拍照打卡记录学习，看看搭子榜，或者发起一场学习招募。" className="mb-0! border-b-0! pb-3!" />
       <div className="sticky top-14 z-30 mb-5 border-b border-ink bg-paper">
         <div role="tablist" aria-label="社区分区" className="flex gap-7" onKeyDown={onKeyDown}>
           {TABS.map((t) => {
@@ -68,7 +70,7 @@ export function Community() {
         </div>
       </div>
       <div role="tabpanel" id="community-panel" aria-labelledby={`community-tab-${tab}`}>
-        {tab === 'talk' ? <TalkArea /> : tab === 'checkin' ? <CheckinFeed /> : <Events embedded />}
+        {tab === 'talk' ? <TalkArea /> : tab === 'checkin' ? <CheckinFeed /> : tab === 'board' ? <Leaderboard /> : <Events embedded />}
       </div>
     </div>
   );

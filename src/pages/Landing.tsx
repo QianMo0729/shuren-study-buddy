@@ -210,9 +210,14 @@ export function Landing() {
               <span className="font-sans text-[13px] text-ink-3">由树仁书院学生发展中心维护</span>
             </p>
           </div>
-          <Link to="/credits" className="text-[14px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
-            图版与照片出处
-          </Link>
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
+            <Link to="/rules" className="text-[14px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
+              搭子打卡活动规则
+            </Link>
+            <Link to="/credits" className="text-[14px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
+              图版与照片出处
+            </Link>
+          </div>
         </div>
       </footer>
     </div>

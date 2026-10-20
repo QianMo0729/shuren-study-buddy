@@ -1,4 +1,5 @@
 import { PendingReviewNotice } from '../components/ReviewStatus';
+import { BonusNotice } from '../components/forum/ShareBadge';
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { ChevronLeft, Flag, Pencil, ShieldX, Trash2 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { LikeButton } from '../components/forum/LikeButton';
 import { ImageGrid, ImageLightbox } from '../components/forum/PostImages';
 import { PostComposer } from '../components/forum/PostComposer';
 import { excerpt } from '../components/forum/text';
+import { isStaff } from '../../shared/roles';
 
 /** 社区帖子详情：全文、图片大图、点赞、评论；作者可编辑 / 删除；他人可举报；管理员可撤下 */
 export function ForumPostDetail() {
@@ -70,7 +72,7 @@ export function ForumPostDetail() {
       </div>
     );
 
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isStaff(user?.role);
   const edited = new Date(post.updatedAt).getTime() - new Date(post.createdAt).getTime() > 60_000;
 
   return (
@@ -84,6 +86,7 @@ export function ForumPostDetail() {
           这条帖子已被管理员撤下{post.takedownReason ? `，原因：${post.takedownReason}` : ''}。{post.isMine ? '只有你和管理员能看到。' : '其他同学已看不到它。'}
         </p>
       )}
+      <BonusNotice post={post} />
 
       {editing ? (
         <PostComposer

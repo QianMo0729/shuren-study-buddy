@@ -8,6 +8,7 @@ import { lazyPage } from './lib/lazyPage';
 import { page } from './lib/motion';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
+import { isStaff } from '../shared/roles';
 
 // 首页与登录页随主包加载；其余页面各自成块，用到时才下载（管理后台、问卷的课程目录、打卡相机的楼栋数据都不小）
 const Admin = lazyPage(() => import('./pages/Admin').then((m) => m.Admin));
@@ -19,6 +20,7 @@ const Me = lazyPage(() => import('./pages/Me').then((m) => m.Me));
 const NotFound = lazyPage(() => import('./pages/NotFound').then((m) => m.NotFound));
 const ProfilePage = lazyPage(() => import('./pages/ProfilePage').then((m) => m.ProfilePage));
 const Privacy = lazyPage(() => import('./pages/Privacy').then((m) => m.Privacy));
+const Rules = lazyPage(() => import('./pages/Rules').then((m) => m.Rules));
 const Match = lazyPage(() => import('./pages/Match').then((m) => m.Match));
 const MatchLater = lazyPage(() => import('./pages/Match').then((m) => m.MatchLater));
 const PeopleSearch = lazyPage(() => import('./pages/PeopleSearch').then((m) => m.PeopleSearch));
@@ -41,7 +43,7 @@ function RequireAuth({ children, admin }: { children: ReactNode; admin?: boolean
   const loc = useLocation();
   if (loading) return <BootScreen />;
   if (!user) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
-  if (admin && user.role !== 'admin') return <Navigate to="/match" replace />;
+  if (admin && !isStaff(user.role)) return <Navigate to="/match" replace />;
   return <>{children}</>;
 }
 
@@ -106,7 +108,7 @@ export function App() {
     if (!stay) window.scrollTo({ top: 0 });
   }, [location.pathname, section]);
 
-  const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy';
+  const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy' || section === 'rules';
 
   const routes = (
     <AnimatePresence mode="wait" initial={false}>
@@ -114,6 +116,7 @@ export function App() {
         <Route path="/" element={<Page><Landing /></Page>} />
         <Route path="/login" element={<Page><Login /></Page>} />
         <Route path="/privacy" element={<Page><Privacy /></Page>} />
+        <Route path="/rules" element={<Page><Rules /></Page>} />
         <Route path="/credits" element={<Page><Credits /></Page>} />
         <Route path="/square/*" element={<LegacySquare />} />
         <Route path="/match/search/*" element={<RequireAuth><Page><PeopleSearch /></Page></RequireAuth>} />

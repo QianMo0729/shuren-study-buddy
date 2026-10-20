@@ -25,6 +25,8 @@ import { MatchBar, MatchButtons, MatchCelebrationFor, useMatchActions } from './
 import { MoreMenu } from './match/MoreMenu';
 import { PersonalityScale } from './match/PersonalityScale';
 import { PrivateNote } from './PrivateNote';
+import { isStaff } from '../../shared/roles';
+import { BuddyButton } from './buddy/BuddyActions';
 
 export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, searchQuery, keyword, recommendation }: { profile: PublicProfile; onClose?: () => void; onChanged?: () => void; inOverlay?: boolean; match?: MatchInfo; searchQuery?: AdvancedQuery; keyword?: string; recommendation?: RecommendationInfo }) {
   const { user } = useAuth();
@@ -108,6 +110,7 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               <StatusDot status={profile.status} />
               {optionLabel(STATUSES, profile.status)}
               {profile.publishedAt && <span>· {timeAgo(profile.publishedAt)}上传</span>}
+              {!profile.isMe && profile.buddy?.otherHasBuddy && <span className="ml-1 rounded-[4px] bg-paper-2 px-1.5 py-px text-[12px] text-ink-2">已有搭子</span>}
             </p>
             <motion.h2 layoutId={inOverlay ? `nick-${profile.id}` : undefined} transition={spring} className="mt-1.5">
               {privateNote?.remarkName ? <span className="font-display text-[32px] break-words">{privateNote.remarkName}</span> : <Nickname name={profile.nickname} size={32} />}
@@ -170,9 +173,10 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
                 <Flag size={16} />
               </IconButton>
               <MoreMenu items={[{ label: '排除这位同学', icon: <UserRoundX size={15} aria-hidden />, tone: 'danger', onSelect: () => setExcluding(true) }]} />
+              {profile.buddy && <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto"><BuddyButton relation={profile.buddy} userId={profile.id} nickname={profile.nickname} onChanged={onChanged} /></div>}
             </>
           )}
-          {user?.role === 'admin' && !profile.isMe && (
+          {isStaff(user?.role) && !profile.isMe && (
             <Button variant="dangerOutline" size="sm" icon={<ShieldX size={14} />} onClick={() => setTakedown(true)} className="ml-auto">
               撤下此主页
             </Button>

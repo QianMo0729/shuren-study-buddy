@@ -2,7 +2,7 @@ import { PendingReviewBadge, PendingReviewNotice } from '../components/ReviewSta
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
-import { Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert, Sparkles } from 'lucide-react';
+import { Camera, Copy, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert, Sparkles } from 'lucide-react';
 import { STUDY_TYPES } from '../../shared/options';
 import type { Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
@@ -14,6 +14,8 @@ import { Button, ConfirmDialog, Empty, Field, Input, Modal, PageHeader, Segmente
 import { Cover, Nickname, ProfileCard } from '../components/ProfileCard';
 import { PostCard } from '../components/PostCard';
 import { Illustration, Seal } from '../components/brand';
+import { BuddyPanel } from '../components/buddy/BuddyPanel';
+import { ROLE_LABELS, isStaff } from '../../shared/roles';
 
 const TABS = [
   { id: 'notifications', label: '通知' },
@@ -110,6 +112,20 @@ export function Me() {
                   <div className="min-w-0">
                     <Nickname name={profile.nickname} size={20} />
                     <p className="mt-0.5 truncate text-[13px] text-ink-3">{user?.email}</p>
+                    <button
+                      type="button"
+                      className="mt-1 inline-flex items-center gap-1 text-[12.5px] text-ink-3 hover:text-ink"
+                      title="把 ID 发给已经认识的同学，对方在「找同学」里输入就能找到你"
+                      onClick={async () => {
+                        try {
+                          if (!navigator.clipboard) throw new Error();
+                          await navigator.clipboard.writeText(profile.nickname);
+                          toast.success('ID 已复制', '发给已经认识的同学，对方在「找同学」里输入就能找到你');
+                        } catch { toast.error('复制失败', `你的 ID 是 ${profile.nickname}`); }
+                      }}
+                    >
+                      <Copy size={12} aria-hidden />复制我的 ID
+                    </button>
                   </div>
                   {type && <Seal char={type.glyph} tone={type.tone} size={28} />}
                 </div>
@@ -169,6 +185,7 @@ export function Me() {
               </div>
             </div>
           )}
+          {profile && <BuddyPanel />}
         </section>
 
         {/* 标签页 */}
@@ -751,7 +768,7 @@ function AccountSettings() {
         <h3 className="text-[15px] font-semibold text-ink">登录邮箱</h3>
         <p className="mt-1 text-[15px] break-all text-ink">
           {user?.email}
-          {user?.role === 'admin' && <Tag tone="brand" className="ml-2">管理员</Tag>}
+          {user && isStaff(user.role) && <Tag tone="brand" className="ml-2">{ROLE_LABELS[user.role]}</Tag>}
         </p>
         <p className="mt-1 text-[13.5px] text-ink-3">邮箱用于校园身份验证，不能修改；只有在私聊中双方同意交换联系方式、且你选择了展示校园邮箱时，才会让对方看到。</p>
       </section>

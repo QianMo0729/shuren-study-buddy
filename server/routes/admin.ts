@@ -6,6 +6,7 @@ import { getSetting, iso, q, setSetting, tx } from '../db.ts';
 import { sendTakedownMail } from '../mail.ts';
 import { beijingTime, notify } from '../notify.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
+import { ensureWeeklySamples } from '../audits.ts';
 import { touchScores } from '../scoring.ts';
 import { reportTargetFor } from '../social.ts';
 
@@ -114,6 +115,8 @@ const pendingOf = (type: CommunityType) =>
 const beijingDate = (d = new Date()) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 
 adminRouter.get('/overview', (_req, res) => {
+  // 上一周结束后第一次打开后台时生成抽检名单，待办数才准确
+  ensureWeeklySamples();
   const pendingContent = { forum_post: pendingOf('forum_post'), comment: pendingOf('comment'), checkin: pendingOf('checkin') };
   res.json({
     stats: {

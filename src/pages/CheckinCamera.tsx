@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Camera, CameraOff, ChevronLeft, MapPin, ShieldCheck, SwitchCamera } from 'lucide-react';
 import type { Checkin, CheckinStats, CheckinVisibility } from '../../shared/types';
 import { CAMPUS_PLACES, NO_LOCATION_LABEL, placeLabelFor } from '../../shared/campusPlaces';
@@ -14,6 +14,8 @@ import { useCheckinSession } from '../components/checkin/useCheckinSession';
 import { useGeoLabel } from '../components/checkin/useGeoLabel';
 import { captureFrame, useLiveCamera } from '../components/checkin/useLiveCamera';
 import { Viewfinder } from '../components/checkin/Viewfinder';
+import { PHOTO_MUST, captionLength } from '../../shared/activity';
+import { useActivityConfig } from '../lib/activity';
 
 const CAPTION_MAX = 200;
 const VISIBILITY_OPTIONS = [
@@ -39,6 +41,7 @@ const writePref = (key: string, value: string) => {
 export function CheckinCamera() {
   const nav = useNavigate();
   const toast = useToast();
+  const activity = useActivityConfig();
   const captionId = useId();
   const placeId = useId();
   const [done, setDone] = useState<{ checkin: Checkin; stats: CheckinStats } | null>(null);
@@ -206,6 +209,8 @@ export function CheckinCamera() {
           </div>
 
           <div className="space-y-5">
+            <PhotoRules />
+
             <Field label="谁可以看到" hint={visibility === 'all' ? '登录的同学都能看到（与你互相排除的人除外）。' : '只有和你互相感兴趣、正在私聊的搭子能看到。'}>
               <Segmented options={VISIBILITY_OPTIONS} value={visibility} onChange={(v) => setVisibility(v as CheckinVisibility)} />
             </Field>
@@ -256,7 +261,13 @@ export function CheckinCamera() {
               </p>
             </div>
 
-            <Field label="说明" optional>
+            <Field
+              label="说明"
+              optional
+              hint={captionLength(caption) >= activity.config.captionMin
+                ? '参加搭子打卡的话，这次打卡的说明已经够计分了。'
+                : `参加搭子打卡的话，写一句学了什么（至少 ${activity.config.captionMin} 个字）才计分${caption.trim() ? `，还差 ${activity.config.captionMin - captionLength(caption)} 个字` : ''}。`}
+            >
               <Textarea
                 id={captionId}
                 aria-label="打卡说明"
@@ -273,6 +284,24 @@ export function CheckinCamera() {
         </div>
       )}
     </div>
+  );
+}
+
+/** 计分打卡的照片要求（与规则页同一份文字） */
+function PhotoRules() {
+  return (
+    <section aria-labelledby="photo-rules" className="rounded-md border border-line bg-surface p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 id="photo-rules" className="text-[14px] font-semibold text-ink">计分打卡的照片要求</h2>
+        <Link to="/rules#photo" className="text-[12.5px] text-ink-3 underline-offset-2 hover:text-ink hover:underline">完整规则</Link>
+      </div>
+      <ol className="mt-2 space-y-1 text-[13.5px] leading-relaxed text-ink-2">
+        {PHOTO_MUST.map((rule, index) => (
+          <li key={rule.title} className="flex gap-2"><span className="tabular text-ink-4">{index + 1}</span><span><b className="font-semibold text-ink">{rule.title}</b>：{rule.desc}</span></li>
+        ))}
+      </ol>
+      <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">只拍桌面或风景、翻拍旧图、屏幕上是游戏视频、一个人替两人拍，都会被判为无效。</p>
+    </section>
   );
 }
 

@@ -50,6 +50,7 @@ export function CheckinCard({ checkin, onOpen, onChange, index = 0 }: {
         <AuthorLine author={c.author} time={c.stampedAt} />
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           {c.reviewPending ? <PendingReviewBadge /> : c.takenDown && <span className="rounded-[4px] bg-danger-soft px-2 py-0.5 text-[12px] text-danger">已被撤下，仅你可见</span>}
+          {c.invalid && <span className="rounded-[4px] bg-accent-soft px-2 py-0.5 text-[12px] text-accent-text">未计分</span>}
           {c.visibility === 'buddies' && (
             <span className="inline-flex items-center gap-1 rounded-[4px] bg-paper-2 px-2 py-0.5 text-[12px] text-ink-2">
               <Lock size={11} aria-hidden /> 仅搭子可见

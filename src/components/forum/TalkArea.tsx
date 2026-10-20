@@ -17,6 +17,7 @@ import { onAccountChanged, useAuth } from '../../lib/auth';
 
 type Mode =
   | { kind: 'feed' }
+  | { kind: 'share' }
   | { kind: 'keyword'; q: string }
   | { kind: 'posts'; query: PostSearchQuery };
 
@@ -54,7 +55,7 @@ export function TalkArea() {
         setTotal(r.total);
         setHasMore(false);
       } else {
-        const r = await api.forum.posts(m.kind === 'keyword' ? { q: m.q } : {});
+        const r = await api.forum.posts(m.kind === 'keyword' ? { q: m.q } : m.kind === 'share' ? { share: true } : {});
         if (id !== reqId.current) return;
         setPosts(r.items);
         setHasMore(r.hasMore);
@@ -99,11 +100,11 @@ export function TalkArea() {
   }, [input, mode, changeMode]);
 
   const loadMore = async () => {
-    if (loadingMore || !hasMore || !posts.length || (mode.kind !== 'feed' && mode.kind !== 'keyword')) return;
+    if (loadingMore || !hasMore || !posts.length || (mode.kind !== 'feed' && mode.kind !== 'keyword' && mode.kind !== 'share')) return;
     const id = reqId.current;
     setLoadingMore(true);
     try {
-      const r = await api.forum.posts({ q: mode.kind === 'keyword' ? mode.q : undefined, before: posts[posts.length - 1].id });
+      const r = await api.forum.posts({ q: mode.kind === 'keyword' ? mode.q : undefined, share: mode.kind === 'share' || undefined, before: posts[posts.length - 1].id });
       if (id !== reqId.current) return;
       const seen = new Set(posts.map((p) => p.id));
       const next = [...posts, ...r.items.filter((p) => !seen.has(p.id))];
@@ -180,6 +181,7 @@ export function TalkArea() {
   );
 
   const statusText = loading ? '正在加载帖子…' : error ? '本次加载未完成' : mode.kind === 'feed' ? '最新帖子'
+    : mode.kind === 'share' ? '学习分享：搭子们申请 Bonus 的笔记、错题与方法总结'
     : mode.kind === 'keyword' ? `找到 ${posts.length}${hasMore ? '+' : ''} 条帖子 · 按命中关键词数排序`
     : `找到 ${total} 条帖子${total > posts.length ? `（显示前 ${posts.length} 条）` : ''} · ${mode.query.matchMode === 'fuzzy' ? '模糊匹配' : '精确匹配'} · 按符合条件数排序`;
 
@@ -240,6 +242,9 @@ export function TalkArea() {
 
       <div className="mt-4 mb-3 flex min-h-7 flex-wrap items-center gap-2 text-[13px] text-ink-3" aria-live="polite">
         <span>{statusText}</span>
+        {mode.kind === 'feed' && (
+          <button type="button" onClick={() => changeMode({ kind: 'share' })} className="text-brand-text underline-offset-2 hover:underline">只看学习分享</button>
+        )}
         {mode.kind !== 'feed' && (
           <button type="button" onClick={clearAll} className="text-brand-text underline-offset-2 hover:underline">返回全部帖子</button>
         )}
@@ -268,7 +273,9 @@ export function TalkArea() {
       ) : error && !posts.length ? (
         <Empty art={<Illustration name="mascot-empty" className="mb-4 size-24" />} title="帖子暂时没有加载出来" desc={error} action={<Button variant="primary" onClick={() => void load(mode)}>重新加载</Button>} />
       ) : posts.length === 0 ? (
-        mode.kind === 'feed' ? (
+        mode.kind === 'share' ? (
+          <Empty art={<Illustration name="mascot-cheer" className="mb-4 size-28" />} title="还没有学习分享" desc="绑定搭子后，发帖时打开「申请 Bonus」，审核通过可以给组合加分。" />
+        ) : mode.kind === 'feed' ? (
           <Empty art={<Illustration name="mascot-cheer" className="mb-4 size-28" />} title="聊天区还很安静" desc="发第一条帖子，分享你的校园生活吧。" />
         ) : (
           <Empty

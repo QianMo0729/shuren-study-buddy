@@ -13,6 +13,7 @@ import { CategoryTag, InterestButton } from '../components/PostCard';
 import { Cover, Nickname } from '../components/ProfileCard';
 import { ReportDialog, TakedownDialog } from '../components/moderation';
 import { Seal } from '../components/brand';
+import { isStaff } from '../../shared/roles';
 
 export function EventDetail() {
   const { id } = useParams();
@@ -123,7 +124,7 @@ export function EventDetail() {
                 </button>
               </>
             )}
-            {user?.role === 'admin' && !post.takenDown && (
+            {isStaff(user?.role) && !post.takenDown && (
               <Button variant="dangerOutline" size="sm" icon={<ShieldX size={14} />} onClick={() => setTakedown(true)}>
                 撤下帖子
               </Button>

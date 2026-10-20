@@ -119,7 +119,7 @@ export function ProfileCard({ card, onOpen, isAdmin, onTakedown, matchLabels, in
           <div className="mt-3 flex items-center justify-between gap-2 border-t border-dashed border-line-strong pt-2.5 text-[12.5px]">
             <span className="inline-flex min-w-0 items-center gap-1.5 text-ink-3">
               <StatusDot status={card.status} />
-              <span className="truncate">{status?.label}</span>
+              <span className="truncate">{card.hasBuddy && !card.isMe ? '已有搭子' : status?.label}</span>
             </span>
             {!card.isMe && card.overlapHours > 0 && (
               <span className="shrink-0 text-seal tabular" title="与你每周的共同学习时间">

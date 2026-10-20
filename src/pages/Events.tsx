@@ -13,6 +13,7 @@ import { Button, Empty, PageHeader, Skeleton } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { TakedownDialog } from '../components/moderation';
 import { Illustration } from '../components/brand';
+import { isStaff } from '../../shared/roles';
 
 /** embedded：嵌入「校园社区 · 招募」时不显示页面标题 */
 export function Events({ embedded = false }: { embedded?: boolean } = {}) {
@@ -122,7 +123,7 @@ export function Events({ embedded = false }: { embedded?: boolean } = {}) {
       ) : (
         <div className={cx('grid gap-3 transition-opacity md:grid-cols-2 xl:grid-cols-3', loading && 'opacity-60')}>
           {items.map((p) => (
-            <PostCard key={p.id} post={p} onOpen={() => nav(`/events/${p.id}`)} onChange={(x) => patch(p.id, x)} isAdmin={user?.role === 'admin'} onTakedown={() => setTakedown(p)} />
+            <PostCard key={p.id} post={p} onOpen={() => nav(`/events/${p.id}`)} onChange={(x) => patch(p.id, x)} isAdmin={isStaff(user?.role)} onTakedown={() => setTakedown(p)} />
           ))}
         </div>
       )}

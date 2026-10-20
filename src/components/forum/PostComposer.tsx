@@ -8,7 +8,10 @@ import { cx } from '../../lib/format';
 import { compressImage } from '../../lib/image';
 import { ease } from '../../lib/motion';
 import { useToast } from '../../lib/toast';
-import { Button, Spinner } from '../ui';
+import { Button, Spinner, Toggle } from '../ui';
+import { BONUS_MIN_CHARS, BONUS_MIN_CHARS_WITH_IMAGE, captionLength } from '../../../shared/activity';
+import type { BuddyStatus } from '../../../shared/types';
+import { Link } from 'react-router';
 import { Plate } from '../brand';
 
 export const TITLE_MAX = 60;
@@ -66,6 +69,18 @@ export function PostComposer({ post, onDone, onCancel, onBusyChange, collapsible
   const fileInput = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const submitting = useRef(false);
+  // Bonus：已绑定搭子、赛季进行中且已经开始计分时可以申请
+  const [buddy, setBuddy] = useState<BuddyStatus | null>(null);
+  const [bonus, setBonus] = useState(false);
+  useEffect(() => {
+    if (editing || !expanded) return;
+    let alive = true;
+    api.activity.me().then((s) => alive && setBuddy(s)).catch(() => {});
+    return () => { alive = false; };
+  }, [editing, expanded]);
+  const canClaim = !!buddy?.pair?.started && buddy.season.status === 'running' && !buddy.pair.ineligible;
+  const chars = captionLength(draft.body);
+  const bonusReady = chars >= BONUS_MIN_CHARS || (chars >= BONUS_MIN_CHARS_WITH_IMAGE && draft.images.length > 0);
 
   useEffect(() => {
     onBusyChange?.(uploading > 0 || sending);
@@ -109,9 +124,10 @@ export function PostComposer({ post, onDone, onCancel, onBusyChange, collapsible
     setSending(true);
     try {
       const payload = { title: draft.title.trim(), body, images: draft.images };
-      const r = post ? await api.forum.update(post.id, payload) : await api.forum.create(payload);
+      const r = post ? await api.forum.update(post.id, payload) : await api.forum.create({ ...payload, ...(canClaim && bonus ? { bonus: true } : {}) });
       if (!editing) {
         setDraft({ title: '', body: '', images: [] });
+        setBonus(false);
         writeDraft(user?.id, null);
         if (collapsible) setExpanded(false);
       }
@@ -220,6 +236,19 @@ export function PostComposer({ post, onDone, onCancel, onBusyChange, collapsible
               <Spinner />
             </div>
           ))}
+        </div>
+      )}
+
+      {!editing && canClaim && (
+        <div className="mt-3 rounded-md bg-paper-2/70 px-3 py-2.5">
+          <Toggle checked={bonus} onChange={setBonus} label="这是学习分享，申请 Bonus" />
+          {bonus && (
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+              需要原创、和学习有关，写明是你们两人一起完成或讨论的；正文至少 {BONUS_MIN_CHARS} 字，或至少 {BONUS_MIN_CHARS_WITH_IMAGE} 字并附一张笔记图
+              <span className={bonusReady ? 'text-brand-text' : 'text-accent-text'}>（现在 {chars} 字）</span>。每周最多申请一次，审核通过后给组合加分。
+              <Link to="/rules#bonus" className="ml-1 underline">规则</Link>
+            </p>
+          )}
         </div>
       )}
 
