@@ -87,11 +87,11 @@ export function ProfileCard({ card, onOpen, isAdmin, onTakedown, matchLabels, in
         <div className="px-3.5 pt-3 pb-3.5 sm:px-4 sm:pt-3.5 sm:pb-4">
           <div className="flex items-start justify-between gap-2">
             <motion.div layoutId={`nick-${card.id}`} transition={spring} className="min-w-0">
-              <Nickname name={card.nickname} size={19} />
+              {card.remarkName ? <span className="block truncate font-display text-[19px] text-ink">{card.remarkName}</span> : <Nickname name={card.nickname} size={19} />}
             </motion.div>
             {type && <Stamp text={type.glyph} size={24} className="mt-0.5" />}
           </div>
-          {sp && <p className="latin mt-0.5 truncate text-[13px] text-ink-3">{sp.latin}</p>}
+          {card.remarkName ? <p className="mt-0.5 truncate text-[12px] text-ink-3">原昵称：{card.nickname}</p> : sp && <p className="latin mt-0.5 truncate text-[13px] text-ink-3">{sp.latin}</p>}
 
           <p className="mt-2.5 truncate text-[13.5px] text-ink">
             {card.major || '专业未填'}

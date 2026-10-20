@@ -130,10 +130,18 @@ export interface MyProfile extends ProfileInput, ContentReviewState {
   stats: { views: number; favorites: number; contactViews: number };
 }
 
+/** 仅当前登录者可见的私人备注，绝不写入被备注人的公开资料。 */
+export interface PrivateNote {
+  remarkName: string;
+  note: string;
+  updatedAt: string;
+}
+
 /** 广场卡片 */
 export interface ProfileCard {
   id: number;
   nickname: string;
+  remarkName?: string;
   major: string;
   gender: string;
   grade: string;
@@ -203,8 +211,9 @@ export interface DeckResponse {
   state: RecommendationResponse['state'];
   missing: { key: string; label: string }[];
   eligibleCount: number;
-  /** 去掉已反馈对象后仍可推荐的人数 */
+  /** 今日名单中仍可查看的人数 */
   total: number;
+  daily: { date: string; limit: number; assigned: number; remaining: number; resetsAt: string };
   personalization: { samples: number; active: boolean; emphasis: string[] };
 }
 
@@ -217,6 +226,7 @@ export interface FeedbackResult {
 export interface FeedbackItem {
   targetId: number;
   nickname: string;
+  remarkName?: string;
   action: FeedbackAction;
   createdAt: string;
   /** 这条「不感兴趣」是解除配对时自动记下的 */
@@ -229,7 +239,7 @@ export type ContactState = 'none' | 'pending_outgoing' | 'pending_incoming' | 'a
 
 export interface ChatSummary {
   matchId: number;
-  other: { id: number; nickname: string; cover: string | null };
+  other: { id: number; nickname: string; cover: string | null; privateNote?: PrivateNote | null };
   status: 'active' | 'closed';
   lastMessage: { body: string; senderId: number | null; createdAt: string; kind: 'text' | 'system' } | null;
   unread: number;
@@ -326,7 +336,7 @@ export interface RecommendationResponse {
   items: ProfileCard[];
   total: number;
   eligibleCount: number;
-  state: 'ready' | 'incomplete' | 'unpublished' | 'unavailable' | 'no_overlap' | 'empty';
+  state: 'ready' | 'incomplete' | 'unpublished' | 'unavailable' | 'no_overlap' | 'empty' | 'daily_done';
   missing: { key: string; label: string }[];
 }
 
@@ -342,6 +352,7 @@ export interface MatchInfo {
 export interface PublicProfile extends ContentReviewState {
   id: number;
   nickname: string;
+  privateNote?: PrivateNote | null;
   gender: string;
   grade: string;
   major: string;

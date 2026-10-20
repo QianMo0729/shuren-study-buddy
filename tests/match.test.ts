@@ -12,7 +12,6 @@ import bcrypt from 'bcryptjs';
 import { emptyPersonality, emptyProfile } from '../shared/profileRules.ts';
 import type { DeckCard, DeckResponse, ProfileInput } from '../shared/types.ts';
 import { FEATURE_KEYS } from '../server/learning.ts';
-import { compareRecommendationCards } from '../server/recommendations.ts';
 
 async function startServer() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'study-buddy-match-'));
@@ -169,7 +168,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal(db.prepare('SELECT published FROM profiles WHERE user_id = ?').get(legacy.id)!.published, 1);
     storeProfile(legacy, { gender: 'female', grade: 'y1' });
     assert.equal((await api('/auth/me', legacy.cookie)).body.user.questionnaireComplete, true);
-    assert.ok(ids((await deck(viewer)).items).includes(legacy.id));
+    assert.ok(!ids((await deck(viewer)).items).includes(legacy.id), 'completing another profile does not refill today');
   });
 
   await t.test('hidden gender is redacted from every public card and profile while matching uses the actual answer', async () => {
@@ -243,7 +242,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal(db.prepare("SELECT status FROM matches WHERE id = ?").get(matchId)!.status, 'active');
   });
 
-  await t.test('disliked, liked and recently skipped people leave the deck; undo brings them back', async () => {
+  await t.test('feedback hides assigned people; saved-for-later never expires and undo restores only their assigned slot', async () => {
     reset();
     const viewer = createUser();
     const [disliked, liked, skipped, other] = Array.from({ length: 4 }, () => createUser());
@@ -260,11 +259,16 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     for (const [target, state] of [[disliked, 'disliked'], [liked, 'liked'], [skipped, 'skipped'], [other, 'none']] as const) {
       assert.equal((await api(`/profiles/${target.id}`, viewer.cookie)).body.profile.matchState, state);
     }
-    // Skips cool down for three days.
+    // Saved-for-later does not expire, even after its old three-day cooldown.
     db.prepare("UPDATE match_feedback SET updated_at = datetime('now', '-2 days') WHERE user_id = ? AND target_id = ?").run(viewer.id, skipped.id);
     assert.ok(!ids((await deck(viewer)).items).includes(skipped.id));
     db.prepare("UPDATE match_feedback SET updated_at = datetime('now', '-4 days') WHERE user_id = ? AND target_id = ?").run(viewer.id, skipped.id);
-    assert.ok(ids((await deck(viewer)).items).includes(skipped.id));
+    assert.ok(!ids((await deck(viewer)).items).includes(skipped.id));
+    assert.deepEqual((await api('/match/feedback?action=skip', viewer.cookie)).body.items.map((item: any) => item.targetId), [skipped.id]);
+    assert.equal((await api('/match/feedback?action=skip', other.cookie)).body.items.length, 0);
+    assert.equal(model(viewer)!.samples, 2, 'skip is not a negative preference signal');
+    db.prepare('UPDATE match_feedback SET features = (SELECT features FROM match_feedback WHERE user_id = ? AND target_id = ?) WHERE user_id = ? AND target_id = ?').run(viewer.id, liked.id, viewer.id, skipped.id);
+    assert.equal((await deck(viewer)).personalization.samples, 2, 'legacy skip feature snapshots are ignored as well');
 
     const list = await api('/match/feedback?action=dislike', viewer.cookie);
     assert.equal(list.status, 200);
@@ -368,7 +372,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal((await api(`/profiles/${apart.id}`, viewer.cookie)).body.profile.matchState, 'disliked');
   });
 
-  await t.test('consistent likes for common time raise its weight and reorder the deck, while a few feedbacks do not', async () => {
+  await t.test('learning updates preferences while today’s assigned order remains stable', async () => {
     reset();
     const viewer = createUser({ schedule: DAY_SLOTS, frequency: 'daily', duration: 'long' });
     // X: the same subject, style and habits, but only one shared slot. Y: lots of shared time, a different subject and style.
@@ -399,12 +403,12 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.ok(learned.weights.time > 2.4, `time weight rose above the prior (${learned.weights.time})`);
     assert.ok('bias' in learned.weights);
     const late = await deck(viewer);
-    assert.deepEqual(order(late), [y.id, x.id], 'the deck now favours common time');
+    assert.deepEqual(order(late), [x.id, y.id], 'feedback only changes future assignments');
     assert.equal(late.personalization.samples, 27);
     assert.equal(late.personalization.active, true);
     assert.ok(late.personalization.emphasis.includes('共同时间'), JSON.stringify(late.personalization));
     const yCard = late.items.find((item) => item.id === y.id)!;
-    assert.notEqual(yCard.rankScore, yCard.recommendation.score, 'rankScore blends the personal model');
+    assert.equal(yCard.rankScore, initial.items.find((item) => item.id === y.id)!.rankScore, 'today’s ranking score remains stable');
     // The plain ranked list ignores personal preferences.
     assert.deepEqual(order(await ranked(viewer)), [x.id, y.id]);
   });
@@ -484,44 +488,38 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.deepEqual((await api('/match/feedback?action=dislike', closed.cookie)).body.items, []);
   });
 
-  await t.test('exploration fills about 20% of the deck deterministically from ranks limit+1 to 3×limit', async () => {
+  await t.test('daily assignments cap all endpoints at five, survive concurrent refresh, and never refill', async () => {
     reset();
     const viewer = createUser({ schedule: DAY_SLOTS.slice(0, 40) });
-    const members = Array.from({ length: 32 }, (_, i) => createUser({ schedule: DAY_SLOTS.slice(0, (i % 16) + 1), interests: i % 3 ? ['reading'] : ['games'] }));
-    const list = await ranked(viewer);
-    assert.equal(list.items.length, 32);
-    assert.equal(list.total, 32);
-    assert.equal(list.eligibleCount, 32);
-    assert.deepEqual(ids(list.items), ids([...list.items].sort(compareRecommendationCards)));
-    for (const item of list.items) {
-      assert.equal(item.rankScore, item.recommendation.score);
-      assert.equal(item.explore, false);
-      assert.equal(item.recommendation.version, 'rules-v2');
-      assert.ok(Array.isArray(item.subjects));
+    Array.from({ length: 32 }, (_, i) => createUser({ schedule: DAY_SLOTS.slice(0, (i % 16) + 1), interests: i % 3 ? ['reading'] : ['games'] }));
+    const concurrent = await Promise.all(Array.from({ length: 8 }, (_, index) => index % 2 ? ranked(viewer, 100) : deck(viewer, 40)));
+    const first = concurrent[0];
+    for (const response of concurrent) assert.deepEqual(response, first);
+    assert.equal(first.items.length, 5);
+    assert.equal(first.daily.assigned, 5);
+    assert.equal(first.daily.remaining, 5);
+    assert.equal(first.items[4].explore, true);
+    assert.equal(first.items.filter((item) => item.explore).length, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM daily_recommendation_batches WHERE user_id = ?').get(viewer.id)!.n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM daily_recommendation_items WHERE user_id = ?').get(viewer.id)!.n, 5);
+    assert.deepEqual(ids((await deck(viewer, 1)).items), ids(first.items).slice(0, 1));
+    assert.deepEqual(ids((await deck(viewer, 1000)).items), ids(first.items));
+    assert.deepEqual((await api('/profiles/recommendations', viewer.cookie)).body.items.map((item: any) => item.id), ids(first.items));
+    for (const [index, item] of first.items.entries()) {
+      assert.equal((await feedback(viewer, item.id, (['like', 'dislike', 'skip'] as const)[index % 3])).status, 200);
     }
-    assert.ok(new Set(members.map((m) => m.id)).size === 32);
-
-    const first = await deck(viewer, 10);
-    assert.equal(first.items.length, 10);
-    const explored = first.items.map((item, index) => [item, index] as const).filter(([item]) => item.explore);
-    assert.deepEqual(explored.map(([, index]) => index), [4, 9]);
-    const rankedIds = ids(list.items);
-    assert.deepEqual(ids(first.items.filter((item) => !item.explore)), rankedIds.slice(0, 8));
-    const date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-    const expected = rankedIds.slice(10, 30)
-      .map((id) => ({ id, h: crypto.createHash('sha256').update(`${viewer.id}:${date}:${id}`).digest().readUInt32BE(0) }))
-      .sort((a, b) => a.h - b.h || a.id - b.id).slice(0, 2).map((entry) => entry.id);
-    assert.deepEqual(explored.map(([item]) => item.id), expected);
-    assert.deepEqual(await deck(viewer, 10), first, 'the same day gives the same deck');
-
-    const byDefault = await deck(viewer);
-    assert.equal(byDefault.items.length, 20);
-    assert.equal(byDefault.items.filter((item) => item.explore).length, 4);
-    const capped = await deck(viewer, 1000);
-    assert.equal(capped.items.length, 32, 'limit is capped at 40, and no exploration is needed when everything fits');
-    assert.equal(capped.items.filter((item) => item.explore).length, 0);
-    assert.equal((await deck(viewer, 1)).items.length, 1);
-    assert.equal((await ranked(viewer, 5)).items.length, 5);
+    const done = await deck(viewer);
+    assert.equal(done.state, 'daily_done');
+    assert.deepEqual(done.items, []);
+    assert.equal(done.daily.assigned, 5);
+    assert.equal(done.daily.remaining, 0);
+    createUser();
+    assert.equal((await ranked(viewer)).items.length, 0, 'new profiles cannot refill a spent day');
+    await api(`/match/feedback/${first.items[0].id}`, viewer.cookie, 'DELETE');
+    assert.deepEqual(ids((await deck(viewer)).items), [first.items[0].id], 'undo restores the same assigned person');
+    assert.equal((await deck(viewer)).daily.assigned, 5);
+    db.prepare('UPDATE profiles SET published = 0 WHERE user_id = ?').run(first.items[0].id);
+    assert.equal((await deck(viewer)).state, 'daily_done', 'withdrawal hides the last item without refill');
   });
 
   await t.test('deck responses never serialize identity, contact or activity fields', async () => {

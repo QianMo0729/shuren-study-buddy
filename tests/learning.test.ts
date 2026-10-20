@@ -95,7 +95,7 @@ test('stored snapshots are validated before training', () => {
   assert.deepEqual(parseFeatures(JSON.stringify({ ...x, gender: 1 })), x, 'unknown keys are dropped');
 });
 
-test('online updates move weights in the direction of the label, with skip weaker than dislike', () => {
+test('online updates learn only likes and dislikes; saved-for-later is neutral', () => {
   const prior = defaultPrior();
   const highTime = features({ time: 1 });
   const lowTime = features({ time: 0.1 });
@@ -104,8 +104,8 @@ test('online updates move weights in the direction of the label, with skip weake
   const disliked = onlineUpdate(prior, prior, lowTime, 'dislike');
   assert.ok(disliked.weights.time > prior.weights.time, 'disliking low-time candidates also raises the time weight');
   const skipped = onlineUpdate(prior, prior, lowTime, 'skip');
-  assert.ok(skipped.weights.time > prior.weights.time);
-  assert.ok(skipped.weights.time - prior.weights.time < disliked.weights.time - prior.weights.time);
+  assert.deepEqual(skipped, prior);
+  assert.deepEqual(onlineUpdate(disliked, prior, lowTime, 'skip'), disliked, 'skip does not apply even regularization');
   // Exact formula for one step: w ← w − η (g (x − 0.5) + λ (w − w_prior)), g = (p − y) × sampleWeight.
   const p = predict(prior, lowTime);
   assert.ok(Math.abs(disliked.weights.time - (prior.weights.time - ETA * (p * (0.1 - 0.5)))) < 1e-12);
@@ -173,6 +173,8 @@ test('global prior fitting learns site-wide preferences, stays near the default 
   assert.ok(fitted.weights.places > base.weights.places * 1.5, `places ${fitted.weights.places}`);
   assert.deepEqual(fitGlobalPrior(samples, base), fitted);
   assert.deepEqual(fitGlobalPrior([], base), base);
+  assert.deepEqual(fitGlobalPrior([{ features: features({ time: 0 }), action: 'skip' }], base), base);
+  assert.deepEqual(fitGlobalPrior(samples.filter((sample) => sample.action !== 'skip'), base), fitted, 'skip has no influence on the global prior');
   for (const key of FEATURE_KEYS) assert.ok(Number.isFinite(fitted.weights[key]));
 });
 

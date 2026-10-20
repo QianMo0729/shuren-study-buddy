@@ -174,8 +174,8 @@ test('private chat between mutually interested students', { timeout: 120_000 }, 
     assert.equal(summary.status, 'active');
     assert.equal(summary.unread, 3);
     assert.equal(summary.contactState, 'none');
-    assert.deepEqual(Object.keys(summary.other).sort(), ['cover', 'id', 'nickname']);
-    assert.deepEqual(summary.other, { id: a.id, nickname: a.nickname, cover: null });
+    assert.deepEqual(Object.keys(summary.other).sort(), ['cover', 'id', 'nickname', 'privateNote']);
+    assert.deepEqual(summary.other, { id: a.id, nickname: a.nickname, cover: null, privateNote: null });
     assert.equal(summary.lastMessage?.kind, 'text');
     assert.equal(summary.lastMessage?.senderId, a.id);
     assert.equal(await unreadBadge(b), 3);

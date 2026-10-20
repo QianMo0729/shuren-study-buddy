@@ -332,13 +332,19 @@ export function Tag({ children, tone = 'neutral', className }: { children: React
 
 // ---------------- Modal / Sheet ----------------
 
-function useLockBody(open: boolean) {
+let bodyLockCount = 0;
+let bodyOverflowBeforeLock = '';
+
+/** 嵌套弹窗与资料浮层共用计数，任意顺序卸载都不会留下滚动锁。 */
+export function useLockBody(open: boolean) {
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
+    if (bodyLockCount === 0) bodyOverflowBeforeLock = document.body.style.overflow;
+    bodyLockCount += 1;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = prev;
+      bodyLockCount -= 1;
+      if (bodyLockCount === 0) document.body.style.overflow = bodyOverflowBeforeLock;
     };
   }, [open]);
 }

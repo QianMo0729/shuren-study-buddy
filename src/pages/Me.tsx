@@ -364,6 +364,7 @@ function Notifications({ onRead }: { onRead: () => void }) {
 function Preferences() {
   return (
     <div className="space-y-4">
+      <Link to="/match/later" className="block rounded-xl bg-surface p-5 text-brand-text hover:underline">查看稍后再看的同学 →</Link>
       <FeedbackList action="like" />
       <FeedbackList action="dislike" />
       <ExclusionList />
@@ -433,7 +434,7 @@ function FeedbackList({ action }: { action: 'like' | 'dislike' }) {
                 <li key={p.targetId} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="min-w-0">
                     <Link to={`/u/${p.targetId}`} className="block truncate text-[14.5px] text-ink hover:underline">
-                      {p.nickname}
+                      {p.remarkName || p.nickname}{p.remarkName && <span className="ml-2 text-[12px] text-ink-3">{p.nickname}</span>}
                     </Link>
                     <p className="text-[12px] text-ink-3">{copy.note(p)}</p>
                   </div>

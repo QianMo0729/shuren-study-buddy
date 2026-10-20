@@ -28,13 +28,14 @@ export function MatchEmpty({ data, state, onRefresh, onReviewDisliked }: {
     unavailable: { title: '你的主页暂不参与推荐', desc: '请检查是否处于「暂时忙碌」状态，或主页是否需要修改后重新上传。调整后即可重新获取推荐。', action: '检查主页状态', to: '/me' },
     no_overlap: {
       title: '暂时还没有共同时间的搭子',
-      desc: `当前可参与匹配的 ${data?.eligibleCount ?? 0} 位同学与你没有共同空闲时段，或线上 / 线下、性别偏好不一致。可以多勾选几个空闲时段再来看看。`,
+      desc: `当前可参与匹配的 ${data?.eligibleCount ?? 0} 位同学与你没有共同空闲时段，或线上 / 线下、性别偏好不一致。可以调整空闲时段；北京时间明天零点会重新生成名单。`,
       action: '调整我的空闲时间',
       to: '/me/edit',
     },
-    empty: { title: '还在等待与你合拍的同学', desc: '暂时没有新的同学可以推荐。有新同学加入、或「稍后再看」的同学满 3 天后，会出现在这里；也可以先去社区逛逛。', action: '去校园社区', to: '/community' },
+    empty: { title: '今天暂时没有合适的推荐', desc: '今日名单中没有符合条件的新同学，北京时间明天零点重新推荐。也可以主动找同学，或查看稍后再看列表。', action: '主动找同学', to: '/match/search' },
+    daily_done: { title: '今天的推荐已看完', desc: '每天最多推荐 5 位，北京时间零点更新。稍后再看的同学会一直留在待看列表，等你回来处理；已下线或不再符合条件的同学不会补位。', action: '查看稍后再看', to: '/match/later' },
     ready: { title: '暂时没有推荐结果', desc: '可以稍后再来，或调整自己的学习安排。', action: '调整我的问卷', to: '/me/edit' },
-    exhausted: { title: '这一轮的推荐看完了', desc: '「稍后再看」的同学 3 天后会再次出现。补充学习性格和具体科目，能让推荐更准。', action: '完善问卷', to: '/me/edit' },
+    exhausted: { title: '今天的推荐已看完', desc: '每天最多推荐 5 位，北京时间零点更新。可以先去处理稍后再看的同学，或主动搜索学习搭子。', action: '查看稍后再看', to: '/match/later' },
   };
   const c = copy[state];
   return (
@@ -45,7 +46,7 @@ export function MatchEmpty({ data, state, onRefresh, onReviewDisliked }: {
       action={(
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="primary" onClick={() => nav(c.to)}>{c.action}</Button>
-          {onRefresh && (state === 'exhausted' || state === 'ready') && <Button onClick={onRefresh}>刷新推荐</Button>}
+          {onRefresh && state === 'ready' && <Button onClick={onRefresh}>刷新推荐</Button>}
           {onReviewDisliked && (state === 'exhausted' || state === 'empty') && <Button variant="ghost" onClick={onReviewDisliked}>查看不感兴趣的同学</Button>}
         </div>
       )}

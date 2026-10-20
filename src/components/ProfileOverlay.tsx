@@ -1,13 +1,13 @@
 import { motion } from 'motion/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AdvancedQuery, MatchInfo, PublicProfile, RecommendationInfo } from '../../shared/types';
 import { api } from '../lib/api';
 import { ease } from '../lib/motion';
-import { Button, useIsMobile } from './ui';
+import { Button, useIsMobile, useLockBody } from './ui';
 import { ProfileDetail } from './ProfileDetail';
 
-/** 主页浮层：桌面端居中展开；手机端从底部弹出。匹配页与社区的“找同学”检索共用。 */
+/** 主页浮层：桌面端居中展开；手机端从底部弹出。匹配、找同学与聊天共用。 */
 export function ProfileOverlay({ id, shared = false, match, searchQuery, keyword, recommendation, onClose, onChanged }: {
   id: number;
   /** 与卡片封面做共享元素动画（仅桌面端且卡片可见时） */
@@ -22,6 +22,8 @@ export function ProfileOverlay({ id, shared = false, match, searchQuery, keyword
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mobile = useIsMobile(768);
+  const dialog = useRef<HTMLDivElement>(null);
+  useLockBody(true);
   useEffect(() => {
     let active = true;
     setProfile(null);
@@ -30,12 +32,14 @@ export function ProfileOverlay({ id, shared = false, match, searchQuery, keyword
     return () => { active = false; };
   }, [id]);
   useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // 备注、举报等弹窗在上层时，Escape 只交给上层，保存中也不能关掉父浮层。
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (dialogs.item(dialogs.length - 1) === dialog.current) onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => {
-      document.body.style.overflow = prev;
       window.removeEventListener('keydown', onKey);
     };
   }, [onClose]);
@@ -52,6 +56,7 @@ export function ProfileOverlay({ id, shared = false, match, searchQuery, keyword
     <div className="fixed inset-0 z-[60] flex items-end justify-center md:items-center md:p-8">
       <motion.div className="absolute inset-0 bg-[#0c1415]/45" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
       <motion.div
+        ref={dialog}
         {...panel}
         className="relative h-[94dvh] w-full max-w-[1000px] overflow-y-auto overscroll-contain rounded-t-xl bg-surface shadow-lg md:h-auto md:max-h-[90dvh] md:rounded-lg md:p-7"
         role="dialog"

@@ -20,6 +20,8 @@ const NotFound = lazyPage(() => import('./pages/NotFound').then((m) => m.NotFoun
 const ProfilePage = lazyPage(() => import('./pages/ProfilePage').then((m) => m.ProfilePage));
 const Privacy = lazyPage(() => import('./pages/Privacy').then((m) => m.Privacy));
 const Match = lazyPage(() => import('./pages/Match').then((m) => m.Match));
+const MatchLater = lazyPage(() => import('./pages/Match').then((m) => m.MatchLater));
+const PeopleSearch = lazyPage(() => import('./pages/PeopleSearch').then((m) => m.PeopleSearch));
 const Community = lazyPage(() => import('./pages/Community').then((m) => m.Community));
 const ForumPostDetail = lazyPage(() => import('./pages/ForumPostDetail').then((m) => m.ForumPostDetail));
 const CheckinCamera = lazyPage(() => import('./pages/CheckinCamera').then((m) => m.CheckinCamera));
@@ -114,6 +116,8 @@ export function App() {
         <Route path="/privacy" element={<Page><Privacy /></Page>} />
         <Route path="/credits" element={<Page><Credits /></Page>} />
         <Route path="/square/*" element={<LegacySquare />} />
+        <Route path="/match/search/*" element={<RequireAuth><Page><PeopleSearch /></Page></RequireAuth>} />
+        <Route path="/match/later/*" element={<RequireAuth><Page><MatchLater /></Page></RequireAuth>} />
         <Route path="/match/*" element={<RequireAuth><Page><Match /></Page></RequireAuth>} />
         <Route path="/community" element={<RequireAuth><Page><Community /></Page></RequireAuth>} />
         <Route path="/community/posts/:id" element={<RequireAuth><Page><ForumPostDetail /></Page></RequireAuth>} />

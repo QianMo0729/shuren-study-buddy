@@ -313,6 +313,24 @@ test('questionnaire drafts preserve unpublished answers without changing live pr
     assert.equal((await read(owner.cookie)).body.draft, null);
   });
 
+  await t.test('major selection preserves unrecognized drafts and validates both save and direct publish', async () => {
+    const owner = createUser();
+    const old = { ...owner.form, major: '旧院系名称' };
+    const draft = await save(owner.cookie, old, 'demographics');
+    assert.equal(draft.status, 200);
+    assert.equal(draft.body.draft.form.major, old.major);
+    assert.equal((await api('/profiles/me', owner.cookie, 'PUT', { profile: old })).status, 400);
+    assert.equal((await read(owner.cookie)).body.draft.form.major, old.major);
+    db.prepare('UPDATE profiles SET data = ?, saved_at = datetime(\'now\') WHERE user_id = ?').run(JSON.stringify(old), owner.id);
+    const direct = await api('/profiles/me/publish', owner.cookie, 'POST', {});
+    assert.equal(direct.status, 400);
+    assert.ok(direct.body.missing.some((item: { key: string }) => item.key === 'major'));
+    const selected = await api('/profiles/me', owner.cookie, 'PUT', { profile: { ...old, major: '计科' } });
+    assert.equal(selected.status, 200);
+    assert.equal(selected.body.profile.major, '计算机科学与技术');
+    assert.equal((await api('/profiles/me/publish', owner.cookie, 'POST', {})).status, 200);
+  });
+
   await t.test('deleting an account removes its draft even though the numeric user row is retained', async () => {
     const owner = createUser();
     const other = createUser();
