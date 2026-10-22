@@ -87,7 +87,11 @@ export function Me() {
 
   return (
     <div>
-      <PageHeader title="我的" desc="个人设置：管理主页与问卷、推荐偏好、你发布的内容和账号。" />
+      <PageHeader
+        title="我的"
+        desc="管理主页与问卷、推荐偏好、你发布的内容和账号。"
+        actions={user && isStaff(user.role) ? <Link to="/admin" className="inline-flex h-9 items-center rounded-full bg-brand-soft px-4 text-[14px] font-semibold text-brand-text hover:bg-brand-soft/70">管理后台</Link> : undefined}
+      />
 
       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:gap-8">
         {/* 资料与问卷 */}

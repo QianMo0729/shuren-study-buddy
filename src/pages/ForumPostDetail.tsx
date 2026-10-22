@@ -77,7 +77,7 @@ export function ForumPostDetail() {
 
   return (
     <div className="mx-auto max-w-3xl pt-5 sm:pt-8">
-      <button type="button" onClick={back} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button type="button" onClick={back} className="-ml-1 mb-4 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} aria-hidden /> 校园社区
       </button>
 

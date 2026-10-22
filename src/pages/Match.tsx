@@ -6,7 +6,7 @@ import type { DeckCard, DeckResponse, FeedbackItem, PublicProfile } from '../../
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../lib/toast';
-import { Button, Empty, Segmented } from '../components/ui';
+import { Button, Empty, PageHeader, Segmented } from '../components/ui';
 import { CardSkeleton, ProfileCard } from '../components/ProfileCard';
 import { ProfileOverlay } from '../components/ProfileOverlay';
 import { DECK_HEIGHT, SwipeDeck } from '../components/SwipeDeck';
@@ -132,14 +132,15 @@ function MatchResults() {
 
   return (
     <LayoutGroup>
-      <header className="mb-5 border-b border-ink pt-5 pb-4 sm:mb-6 sm:pt-10 sm:pb-5">
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="font-display text-[30px] leading-[1.1] tracking-[-0.02em] text-ink sm:text-[46px]">匹配推荐</h1>
-          <Segmented options={[{ value: 'cards', label: '卡片' }, { value: 'list', label: '列表' }]} value={view} onChange={(v) => setView(v as View)} />
-        </div>
-        <p className="mt-2 max-w-[40em] text-[13.5px] text-ink-2 sm:text-[15px]">每天最多推荐 5 位，北京时间零点更新。双方都选「感兴趣」后，就能私聊。</p>
+      <PageHeader
+        title="找搭子"
+        className="mb-3!"
+        actions={<Segmented options={[{ value: 'cards', label: '卡片' }, { value: 'list', label: '列表' }]} value={view} onChange={(v) => setView(v as View)} />}
+      />
+      <div className="mb-5">
         <MatchTabs active="today" />
-      </header>
+        <p className="mt-2.5 text-[13px] text-ink-3">每天最多推荐 5 位，北京时间零点更新。双方都选「感兴趣」后，就能私聊。</p>
+      </div>
 
       {profileHint && (
         <Link to={profileHint.to} className="mb-4 flex items-center gap-3 rounded-md border border-brand/20 bg-brand-softer px-4 py-3 text-[14px] text-ink transition-colors hover:border-brand/40">
@@ -317,7 +318,20 @@ function RankedList({ onOpen }: { onOpen: (card: DeckCard) => void }) {
 
 export function MatchTabs({ active }: { active: 'today' | 'search' | 'later' }) {
   const links = [{ id: 'today', to: '/match', label: '今日推荐' }, { id: 'search', to: '/match/search', label: '找同学' }, { id: 'later', to: '/match/later', label: '稍后再看' }] as const;
-  return <nav aria-label="匹配功能" className="mt-4 flex flex-wrap gap-2">{links.map((link) => <Link key={link.id} to={link.to} aria-current={active === link.id ? 'page' : undefined} className={`rounded-md px-4 py-2 text-[14px] font-semibold ${active === link.id ? 'bg-brand text-white' : 'bg-surface text-ink-2 hover:bg-surface-2'}`}>{link.label}</Link>)}</nav>;
+  return (
+    <nav aria-label="匹配功能" className="grid h-9 max-w-md grid-cols-3 rounded-[10px] bg-paper-2 p-0.5">
+      {links.map((link) => (
+        <Link
+          key={link.id}
+          to={link.to}
+          aria-current={active === link.id ? 'page' : undefined}
+          className={`grid place-items-center rounded-[8px] text-[13.5px] ${active === link.id ? 'bg-surface font-semibold text-ink shadow-[0_2px_6px_rgba(28,35,32,0.12)]' : 'text-ink-2 hover:text-ink'}`}
+        >
+          {link.label}
+        </Link>
+      ))}
+    </nav>
+  );
 }
 
 /** 永久待办：这里只显示本人收藏为稍后再看且当前仍可访问的主页。 */
@@ -369,11 +383,11 @@ export function MatchLater() {
     finally { deciding.current = false; if (alive.current) setBusy(null); }
   };
   return <>
-    <header className="mb-5 border-b border-ink pt-5 pb-4 sm:pt-10 sm:pb-5">
-      <h1 className="font-display text-[30px] leading-[1.1] text-ink sm:text-[46px]">稍后再看{items?.length ? <span className="ml-3 text-[22px] text-ink-3">{items.length}</span> : null}</h1>
-      <p className="mt-2 text-[14px] text-ink-2">同学会一直留在这里，直到你处理或移除。只有你能看到这份名单。</p>
+    <PageHeader title="找搭子" className="mb-3!" />
+    <div className="mb-5">
       <MatchTabs active="later" />
-    </header>
+      <p className="mt-2.5 text-[13px] text-ink-3">同学会一直留在这里，直到你处理或移除。只有你能看到这份名单{items?.length ? `（${items.length} 位）` : ''}。</p>
+    </div>
     {error ? <Empty title="列表暂时没有加载成功" desc={error} action={<Button onClick={load}>重新加载</Button>} /> : !items ? <div className="skeleton h-48 rounded-md" /> : !items.length ? <Empty title="还没有稍后再看的同学" desc="在每日推荐中点「稍后再看」，就能把同学留到这里，下次继续了解。" action={<Button onClick={() => nav('/match')}>查看今日推荐</Button>} /> :
       <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">{items.slice(0, shown).map((item) => <li key={item.targetId} className="flex flex-wrap items-center justify-between gap-3 p-4">
         <Link className="min-w-0 truncate text-[16px] font-semibold text-ink hover:underline" to={`/match/later/u/${item.targetId}`}>{item.remarkName || item.nickname}{item.remarkName && <span className="ml-2 text-[13px] font-normal text-ink-3">{item.nickname}</span>}</Link>

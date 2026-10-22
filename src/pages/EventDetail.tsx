@@ -55,7 +55,7 @@ export function EventDetail() {
 
   return (
     <div className="mx-auto max-w-4xl pt-5 sm:pt-8">
-      <button onClick={() => nav('/community?tab=events')} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button onClick={() => nav('/community?tab=events')} className="-ml-1 mb-4 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 活动大厅
       </button>
 

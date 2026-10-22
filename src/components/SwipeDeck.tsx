@@ -151,7 +151,7 @@ export function SwipeDeck({ cards, onDecide, onOpen, onUndo, canUndo, undoing, a
         })}
       </div>
 
-      <div className="sticky bottom-[calc(58px+env(safe-area-inset-bottom)+6px)] z-10 mt-4 flex items-start justify-center gap-6 rounded-xl bg-paper/90 pt-2 pb-1 backdrop-blur-sm sm:gap-8 md:static md:mt-6 md:bg-transparent md:p-0 md:backdrop-blur-none">
+      <div className="sticky bottom-[var(--tabbar-space)] z-10 mt-4 flex items-start justify-center gap-6 rounded-xl bg-paper/90 pt-2 pb-1 backdrop-blur-sm sm:gap-8 md:static md:mt-6 md:bg-transparent md:p-0 md:backdrop-blur-none">
         <DeckButton label="感兴趣" hint="←" onClick={() => void commit('like')} disabled={!top} className="size-14 bg-brand text-white hover:bg-brand-2">
           <Heart size={24} strokeWidth={2.2} className="fill-current" />
         </DeckButton>

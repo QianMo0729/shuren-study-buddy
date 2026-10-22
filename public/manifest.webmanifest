@@ -1,0 +1,23 @@
+{
+  "id": "/today",
+  "name": "树仁搭子 · 学习搭子匹配",
+  "short_name": "树仁搭子",
+  "description": "树仁书院学生发展中心 · 找到同频的学习搭子，一起打卡学习。",
+  "lang": "zh-CN",
+  "start_url": "/today",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F3F1EB",
+  "theme_color": "#F3F1EB",
+  "categories": ["education", "social"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "拍照打卡", "url": "/community/checkin/new", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "消息", "url": "/messages", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

@@ -109,7 +109,7 @@ export function CheckinCamera() {
 
   return (
     <div className="mx-auto max-w-5xl pt-4 sm:pt-8">
-      <button type="button" onClick={back} className="-ml-1 mb-3 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button type="button" onClick={back} className="-ml-1 mb-3 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 打卡
       </button>
       <header className="mb-4 flex flex-wrap items-end justify-between gap-x-6 gap-y-1 border-b border-ink pb-4">

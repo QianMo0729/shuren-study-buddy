@@ -29,12 +29,13 @@ const ForumPostDetail = lazyPage(() => import('./pages/ForumPostDetail').then((m
 const CheckinCamera = lazyPage(() => import('./pages/CheckinCamera').then((m) => m.CheckinCamera));
 const CheckinDetail = lazyPage(() => import('./pages/CheckinDetail').then((m) => m.CheckinDetail));
 const Messages = lazyPage(() => import('./pages/Messages').then((m) => m.Messages));
+const Today = lazyPage(() => import('./pages/Today').then((m) => m.Today));
 
-/** 底部导航的四个分区：登录后趁空闲取回来，切换时不用等 */
-const MAIN_PAGES = [Match, Community, Messages, Me];
+/** 底部导航的四个分区与「我的」：登录后趁空闲取回来，切换时不用等 */
+const MAIN_PAGES = [Today, Match, Community, Messages, Me];
 
 // 直接打开某个分区时，主包一执行就开始取它的分块，不等登录状态返回
-({ match: Match, community: Community, messages: Messages, me: Me } as Record<string, { preload: () => void }>)[
+({ today: Today, match: Match, community: Community, messages: Messages, me: Me } as Record<string, { preload: () => void }>)[
   window.location.pathname.split('/')[1]
 ]?.preload();
 
@@ -43,7 +44,7 @@ function RequireAuth({ children, admin }: { children: ReactNode; admin?: boolean
   const loc = useLocation();
   if (loading) return <BootScreen />;
   if (!user) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
-  if (admin && !isStaff(user.role)) return <Navigate to="/match" replace />;
+  if (admin && !isStaff(user.role)) return <Navigate to="/today" replace />;
   return <>{children}</>;
 }
 
@@ -92,7 +93,7 @@ export function App() {
   const section = location.pathname.split('/')[1] || 'home';
   const { user } = useAuth();
 
-  // 已登录（或正在登录页，登录后就会进入匹配页）时，等浏览器空闲再预取主要分区
+  // 已登录（或正在登录页，登录后就会进入「今天」）时，等浏览器空闲再预取主要分区
   const warm = !!user || section === 'login';
   useEffect(() => {
     if (!warm) return;
@@ -119,6 +120,7 @@ export function App() {
         <Route path="/rules" element={<Page><Rules /></Page>} />
         <Route path="/credits" element={<Page><Credits /></Page>} />
         <Route path="/square/*" element={<LegacySquare />} />
+        <Route path="/today" element={<RequireAuth><Page><Today /></Page></RequireAuth>} />
         <Route path="/match/search/*" element={<RequireAuth><Page><PeopleSearch /></Page></RequireAuth>} />
         <Route path="/match/later/*" element={<RequireAuth><Page><MatchLater /></Page></RequireAuth>} />
         <Route path="/match/*" element={<RequireAuth><Page><Match /></Page></RequireAuth>} />

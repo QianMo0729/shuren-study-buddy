@@ -44,9 +44,9 @@ export function Community() {
 
   return (
     <div>
-      <PageHeader title="校园社区" desc="在聊天区分享校园生活，用实时拍照打卡记录学习，看看搭子榜，或者发起一场学习招募。" className="mb-0! border-b-0! pb-3!" />
-      <div className="sticky top-14 z-30 mb-5 border-b border-ink bg-paper">
-        <div role="tablist" aria-label="社区分区" className="flex gap-7" onKeyDown={onKeyDown}>
+      <PageHeader title="社区" className="mb-3!" />
+      <div className="glass sticky top-[var(--topbar-h)] z-30 -mx-4 mb-5 px-4 py-2 sm:-mx-6 sm:px-6 md:mx-0 md:px-0">
+        <div role="tablist" aria-label="社区分区" className="grid h-9 max-w-md grid-cols-4 rounded-[10px] bg-paper-2 p-0.5" onKeyDown={onKeyDown}>
           {TABS.map((t) => {
             const on = t.value === tab;
             return (
@@ -60,10 +60,10 @@ export function Community() {
                 aria-controls="community-panel"
                 tabIndex={on ? 0 : -1}
                 onClick={() => select(t.value)}
-                className={cx('relative py-3 text-[15px] transition-colors', on ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink')}
+                className={cx('relative rounded-[8px] text-[13.5px] transition-colors', on ? 'font-semibold text-ink' : 'text-ink-2 hover:text-ink')}
               >
-                {t.label}
-                {on && <motion.span layoutId="community-tab" transition={spring} className="absolute inset-x-0 -bottom-px h-[3px] bg-ink" />}
+                {on && <motion.span layoutId="community-tab" transition={spring} className="absolute inset-0 rounded-[8px] bg-surface shadow-[0_2px_6px_rgba(28,35,32,0.12)]" />}
+                <span className="relative">{t.label}</span>
               </button>
             );
           })}

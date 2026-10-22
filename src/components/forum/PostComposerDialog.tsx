@@ -73,7 +73,7 @@ export function PostComposerDialog({ onDone }: { onDone: (post: ForumPost) => vo
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? dialogId : undefined}
-          className="group fixed right-3 bottom-[calc(58px+env(safe-area-inset-bottom)+12px)] z-40 grid size-20 place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-text sm:right-5 md:bottom-[calc(env(safe-area-inset-bottom)+24px)] md:size-[84px] lg:right-8 motion-safe:transition-transform motion-safe:hover:-translate-y-1 motion-safe:active:scale-95"
+          className="group fixed right-3 bottom-[var(--tabbar-space)] z-40 grid size-20 place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-text sm:right-5 md:bottom-[calc(env(safe-area-inset-bottom)+24px)] md:size-[84px] lg:right-8 motion-safe:transition-transform motion-safe:hover:-translate-y-1 motion-safe:active:scale-95"
         >
           <PostCreateIcon />
         </button>,

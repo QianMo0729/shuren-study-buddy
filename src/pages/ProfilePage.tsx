@@ -22,7 +22,7 @@ export function ProfilePage() {
 
   return (
     <div className="pt-5 sm:pt-8">
-      <button onClick={() => (history.length > 1 ? nav(-1) : nav('/match'))} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button onClick={() => (history.length > 1 ? nav(-1) : nav('/match'))} className="-ml-1 mb-4 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 返回
       </button>
       {error ? (

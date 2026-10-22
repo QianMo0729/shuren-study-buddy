@@ -39,7 +39,7 @@ export function Landing() {
     api.meta().then(setMeta).catch(() => {});
   }, []);
 
-  const go = () => nav(user ? '/match' : '/login');
+  const go = () => nav(user ? '/today' : '/login');
   // 第一次来的同学没有密码：入口直接通向「用学号激活」，而不是邮箱密码登录
   const activate = () => nav('/login?mode=activate');
   const counts = meta?.breakdown?.species ?? {};
@@ -55,11 +55,11 @@ export function Landing() {
         <nav className="flex items-center gap-6 text-[14px]">
           {user && (
             <>
-              <Link to="/match" className="hidden text-ink-2 hover:text-ink sm:inline">
-                匹配推荐
+              <Link to="/today" className="hidden text-ink-2 hover:text-ink sm:inline">
+                今天
               </Link>
-              <Link to="/community" className="hidden text-ink-2 hover:text-ink sm:inline">
-                校园社区
+              <Link to="/match" className="hidden text-ink-2 hover:text-ink sm:inline">
+                找搭子
               </Link>
             </>
           )}

@@ -70,10 +70,12 @@ if (config.isProd && fs.existsSync(dist)) {
   app.use(
     express.static(dist, {
       index: false,
-      // 带哈希的构建产物长期缓存；吉祥物等可替换的图片只缓存 1 小时
+      // 带哈希的构建产物长期缓存；吉祥物等可替换的图片只缓存 1 小时；sw.js 与清单不缓存
       setHeaders: (res, file) => {
         const hashed = /-[A-Za-z0-9_-]{8}\.\w+$/.test(file);
-        res.setHeader('Cache-Control', hashed ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
+        // Service Worker 与应用清单每次都要向服务器确认，发布新版本后才能尽快生效
+        const fresh = /[\\/](sw\.js|manifest\.webmanifest)$/.test(file);
+        res.setHeader('Cache-Control', fresh ? 'no-cache' : hashed ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
       },
     }),
   );

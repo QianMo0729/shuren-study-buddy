@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { MessageCircle } from 'lucide-react';
+import { Bell, ChevronRight, MessageCircle } from 'lucide-react';
 import type { ChatSummary } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
-import { Empty } from '../components/ui';
+import { Empty, PageHeader } from '../components/ui';
+import { useAuth } from '../lib/auth';
 import { Illustration } from '../components/brand';
 import { ChatWindow } from '../components/chat/ChatWindow';
 import { ConversationList } from '../components/chat/ConversationList';
@@ -19,6 +20,7 @@ const LIST_POLL_MS = 15_000;
 export function Messages() {
   const { matchId: param } = useParams();
   const nav = useNavigate();
+  const { user } = useAuth();
   const matchId = param && /^\d{1,15}$/.test(param) ? Number(param) : null;
   const chatOpen = param !== undefined;
   const [items, setItems] = useState<ChatSummary[] | null>(null);
@@ -71,27 +73,35 @@ export function Messages() {
 
   return (
     // 桌面端占满一屏（抵消外层底部留白），两栏各自滚动；手机端列表正常排版，聊天窗固定在顶栏与标签栏之间
-    <div className="md:-mb-24 md:flex md:h-[calc(100dvh-57px)] md:min-h-[540px] md:flex-col">
-      <header className={cx('mb-4 border-b border-ink pt-5 pb-4 sm:pt-10 sm:pb-5 md:mb-5 md:shrink-0 md:pt-8', chatOpen && 'hidden md:block')}>
-        <h1 className="font-display text-[30px] leading-[1.1] tracking-[-0.02em] text-ink sm:text-[40px]">私聊</h1>
-        <p className="mt-2 text-[14px] text-ink-2 sm:text-[15px]">只有互相感兴趣的同学才能私聊。聊得合适，再在聊天里决定是否交换联系方式。</p>
-      </header>
+    <div className="md:-mb-12 md:flex md:h-dvh md:min-h-[540px] md:flex-col">
+      <div className={cx('md:shrink-0', chatOpen && 'hidden md:block')}>
+        <PageHeader title="消息" className="mb-4!" />
+        <Link
+          to="/me?tab=notifications"
+          className="mb-4 flex h-[52px] items-center gap-3 rounded-2xl bg-surface px-4 text-[16px] text-ink hover:bg-surface-2 md:mb-5 md:max-w-[360px]"
+        >
+          <span className="grid size-[30px] place-items-center rounded-lg bg-accent text-white"><Bell size={17} strokeWidth={2} aria-hidden /></span>
+          <span className="flex-1">通知</span>
+          {!!user?.unread && <span className="text-[15px] text-ink-3 tabular">{user.unread > 99 ? '99+' : user.unread} 条未读</span>}
+          <ChevronRight size={18} className="text-ink-4" aria-hidden />
+        </Link>
+      </div>
 
       {empty ? (
         <Empty
           art={<Illustration name="mascot-empty" className="mb-4 size-24" />}
           title="还没有互相感兴趣的同学"
-          desc="去匹配推荐看看：你们都点了「感兴趣」，就能在这里聊天。"
-          action={<Link to="/match" className="inline-flex h-10 items-center rounded-md bg-brand px-4 text-[14px] font-semibold text-white hover:bg-brand-2">去匹配推荐</Link>}
+          desc="去「找搭子」看看：你们都点了「感兴趣」，就能在这里聊天。"
+          action={<Link to="/match" className="inline-flex h-10 items-center rounded-md bg-brand px-4 text-[14px] font-semibold text-white hover:bg-brand-2">去找搭子</Link>}
         />
       ) : (
-        <div className="md:flex md:min-h-0 md:flex-1 md:overflow-hidden md:rounded-md md:border md:border-line md:bg-surface md:mb-6">
-          <aside className={cx('overflow-hidden rounded-md border border-line bg-surface md:w-[320px] md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:border-r lg:w-[360px]', chatOpen && 'hidden md:block')}>
+        <div className="md:flex md:min-h-0 md:flex-1 md:overflow-hidden md:rounded-2xl md:border md:border-line md:bg-surface md:mb-6">
+          <aside className={cx('overflow-hidden rounded-2xl border border-line bg-surface md:w-[320px] md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:border-r lg:w-[360px]', chatOpen && 'hidden md:block')}>
             <ConversationList items={items} activeId={matchId} error={error} onRetry={() => void load()} />
           </aside>
           <section className={cx('md:flex md:min-w-0 md:flex-1 md:flex-col', !chatOpen && 'hidden md:flex')} aria-label="聊天">
             {chatOpen ? (
-              <div className="fixed inset-x-0 top-[57px] bottom-[calc(58px+env(safe-area-inset-bottom))] z-30 flex flex-col bg-paper md:static md:z-auto md:h-full md:min-h-0 md:flex-1">
+              <div className="fixed inset-x-0 top-[var(--topbar-h)] bottom-[var(--tabbar-space)] z-30 flex flex-col bg-paper md:static md:z-auto md:h-full md:min-h-0 md:flex-1">
                 {matchId !== null
                   ? <ChatWindow key={matchId} matchId={matchId} onActivity={scheduleReload} onGone={onGone} />
                   : <NotFoundChat />}
