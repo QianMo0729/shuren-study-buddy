@@ -30,6 +30,8 @@ const CheckinCamera = lazyPage(() => import('./pages/CheckinCamera').then((m) =>
 const CheckinDetail = lazyPage(() => import('./pages/CheckinDetail').then((m) => m.CheckinDetail));
 const Messages = lazyPage(() => import('./pages/Messages').then((m) => m.Messages));
 const Today = lazyPage(() => import('./pages/Today').then((m) => m.Today));
+const Buddy = lazyPage(() => import('./pages/Buddy').then((m) => m.Buddy));
+const MeSection = lazyPage(() => import('./pages/Me').then((m) => m.MeSection));
 
 /** 底部导航的四个分区与「我的」：登录后趁空闲取回来，切换时不用等 */
 const MAIN_PAGES = [Today, Match, Community, Messages, Me];
@@ -132,6 +134,8 @@ export function App() {
         <Route path="/messages/:matchId" element={<RequireAuth><Page><Messages /></Page></RequireAuth>} />
         <Route path="/u/:id" element={<RequireAuth><Page><ProfilePage /></Page></RequireAuth>} />
         <Route path="/me" element={<RequireAuth><Page><Me /></Page></RequireAuth>} />
+        <Route path="/buddy" element={<RequireAuth><Page><Buddy /></Page></RequireAuth>} />
+        <Route path="/me/:section" element={<RequireAuth><Page><MeSection /></Page></RequireAuth>} />
         <Route path="/me/edit" element={<RequireAuth><Page><EditProfile /></Page></RequireAuth>} />
         <Route path="/events" element={<Navigate to="/community?tab=events" replace />} />
         <Route path="/events/new" element={<RequireAuth><Page><EventForm /></Page></RequireAuth>} />

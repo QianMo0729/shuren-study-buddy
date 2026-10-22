@@ -10,7 +10,6 @@ import { CardSkeleton, ProfileCard } from '../components/ProfileCard';
 import { ProfileOverlay } from '../components/ProfileOverlay';
 import { MajorSelect, SubjectsInput } from '../components/profileForm';
 import { Button, Empty, Field, Input, Modal, PageHeader } from '../components/ui';
-import { MatchTabs } from './Match';
 
 /** 输入的是同学的 ID（系统昵称或末尾编号，如「白鹭KLM23」「KLM23」）时，直接按 ID 查找 */
 export const looksLikeId = (text: string) => /^[\p{Script=Han}]{0,6}\s*[A-Za-z]{3}\s*\d{2}$/u.test(text.normalize('NFKC').trim());
@@ -96,11 +95,7 @@ export function PeopleSearch() {
   };
 
   return <div className="pb-10">
-    <PageHeader title="找搭子" className="mb-3!" />
-    <div className="mb-5">
-      <MatchTabs active="search" />
-      <p className="mt-2.5 text-[13px] text-ink-3">按专业、学习科目和共同空闲时间主动查找，搜索不占用每日推荐名额。</p>
-    </div>
+    <PageHeader title="找同学" desc="按专业、学习科目和共同空闲时间主动查找，搜索不占用每日推荐名额。" />
 
     <form onSubmit={(event) => { event.preventDefault(); runSearch(); }} className="rounded-lg border border-line bg-surface p-4 sm:p-5">
       <Field label="自我介绍关键词或同学的 ID" hint="关键词只检索同学的自我介绍；已经认识的同学可以直接输入对方的 ID（如 白鹭KLM23）。专业和课程请使用下方筛选。">

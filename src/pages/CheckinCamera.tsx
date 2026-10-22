@@ -1,13 +1,14 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Camera, CameraOff, ChevronLeft, MapPin, ShieldCheck, SwitchCamera } from 'lucide-react';
+import { Camera, CameraOff, MapPin, ShieldCheck } from 'lucide-react';
+import { FlipIcon, PencilIcon, XIcon } from '../components/icons';
 import type { Checkin, CheckinStats, CheckinVisibility } from '../../shared/types';
 import { CAMPUS_PLACES, NO_LOCATION_LABEL, placeLabelFor } from '../../shared/campusPlaces';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { ease } from '../lib/motion';
 import { useToast } from '../lib/toast';
-import { Button, Field, Segmented, Spinner, Textarea, Toggle } from '../components/ui';
+import { Button, Field, Modal, Segmented, Spinner, Textarea } from '../components/ui';
 import { Stamp } from '../components/brand';
 import { checkinAlt } from '../components/checkin/CheckinCard';
 import { useCheckinSession } from '../components/checkin/useCheckinSession';
@@ -105,186 +106,189 @@ export function CheckinCamera() {
     }
   };
 
-  const back = () => nav('/community?tab=checkin');
+  const back = () => (window.history.state?.idx > 0 ? nav(-1) : nav('/community?tab=checkin'));
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [lastPhoto, setLastPhoto] = useState<string | null>(null);
+  // 左下角缩略图：自己最近一次打卡（拍完后换成这一张）
+  useEffect(() => {
+    let alive = true;
+    api.checkins.list({ scope: 'mine' }).then((r) => { if (alive && r.items[0]) setLastPhoto(r.items[0].image); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  if (done) {
+    return (
+      <div className="fixed inset-0 z-[60] overflow-y-auto bg-paper px-4 pt-[calc(env(safe-area-inset-top)+16px)] pb-[calc(env(safe-area-inset-bottom)+24px)]">
+        <p className="sr-only" role="status" aria-live="polite">{status}</p>
+        <Result result={done} onDone={back} onOpen={() => nav(`/community/checkins/${done.checkin.id}`, { replace: true })} />
+      </div>
+    );
+  }
 
   return (
-    <div className="mx-auto max-w-5xl pt-4 sm:pt-8">
-      <button type="button" onClick={back} className="-ml-1 mb-3 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
-        <ChevronLeft size={17} /> 打卡
-      </button>
-      <header className="mb-4 flex flex-wrap items-end justify-between gap-x-6 gap-y-1 border-b border-ink pb-4">
-        <h1 className="font-display text-[30px] leading-tight tracking-[-0.02em] text-ink sm:text-[40px]">拍照打卡</h1>
-        <p className="text-[14px] text-ink-2">现场拍摄，服务器盖章</p>
-      </header>
+    // 全屏黑底相机：顶部关闭与楼栋，中间取景（右下角实时水印），底部快门
+    <div className="fixed inset-0 z-[60] flex flex-col bg-[#0B0D0C] text-white">
       <p className="sr-only" role="status" aria-live="polite">{status}</p>
 
-      {done ? (
-        <Result result={done} onDone={back} onOpen={() => nav(`/community/checkins/${done.checkin.id}`, { replace: true })} />
-      ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:gap-8">
-          <div className="min-w-0">
-            {/* 保持视频挂载并参与布局；iPhone 恢复播放时不能从 display:none 状态启动。 */}
-            <div className="-mx-4 sm:mx-0">
-              <Viewfinder
-                videoRef={camera.videoRef}
-                width={camera.state.status === 'live' ? camera.state.width : 0}
-                height={camera.state.status === 'live' ? camera.state.height : 0}
-                live={live}
-                placeLabel={watermarkPlace}
-                clockOffset={session.offset}
-              >
-                {camera.state.status === 'error' ? (
-                  <div className="absolute inset-0 overflow-y-auto bg-surface">
-                    <CameraError title={camera.state.problem.title} desc={camera.state.problem.desc} onRetry={camera.state.problem.retry ? camera.retry : undefined} />
-                  </div>
-                ) : camera.state.status === 'blocked' ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center text-white">
-                    <Camera size={28} aria-hidden />
-                    <p className="text-[15px]">点击后开启相机画面</p>
-                    <Button type="button" onClick={camera.resumePreview} variant="primary">开启相机预览</Button>
-                  </div>
-                ) : !live && (
-                  <div className="absolute inset-0 grid place-items-center text-[14px] text-white/80">
-                    <span className="inline-flex items-center gap-2">
-                      <Spinner className="text-white/80" />
-                      {camera.state.status === 'paused' ? '页面在后台，相机已暂停' : '正在打开摄像头…'}
-                    </span>
-                  </div>
-                )}
-                <AnimatePresence>
-                  {flash > 0 && (
-                    <motion.div
-                      key={flash}
-                      className="pointer-events-none absolute inset-0 bg-white"
-                      initial={{ opacity: 0.85 }}
-                      animate={{ opacity: 0 }}
-                      transition={{ duration: 0.35, ease }}
-                    />
-                  )}
-                </AnimatePresence>
-                {busy && (
-                  <div className="absolute inset-0 grid place-items-center bg-[#0c1415]/45 text-[14px] text-white">
-                    <span className="inline-flex items-center gap-2"><Spinner className="text-white" />服务器盖章中…</span>
-                  </div>
-                )}
-              </Viewfinder>
-            </div>
+      <div className="flex h-11 shrink-0 items-center justify-between gap-3 px-4 mt-[calc(env(safe-area-inset-top)+10px)]">
+        <button type="button" onClick={back} aria-label="关闭" className="grid size-9 place-items-center rounded-full bg-white/14">
+          <XIcon size={16} width={2.4} />
+        </button>
+        <label className="relative flex h-9 min-w-0 items-center gap-1.5 rounded-full bg-white/14 px-3.5 text-[15px] font-semibold">
+          <MapPin size={15} aria-hidden className="shrink-0" />
+          <span className="truncate">{geoOn ? watermarkPlace : '不显示地点'}</span>
+          <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden className="shrink-0"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+          <span className="sr-only">水印上的地点</span>
+          <select
+            id={placeId}
+            value={geoOn ? selectedPlace : 'off'}
+            disabled={busy}
+            onChange={(e) => {
+              if (e.target.value === 'off') { setGeoOn(false); return; }
+              setGeoOn(true);
+              setSelectedPlace(e.target.value);
+            }}
+            className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+          >
+            <option value="">自动识别楼栋</option>
+            {PLACE_GROUPS.map((group) => (
+              <optgroup key={group} label={group}>
+                {CAMPUS_PLACES.filter((place) => place.group === group).map((place) => <option key={place.id} value={place.id}>{place.label}</option>)}
+              </optgroup>
+            ))}
+            <option value="off">不显示地点</option>
+          </select>
+        </label>
+        <button type="button" onClick={() => setNoteOpen(true)} aria-label="说明与可见范围" className="grid size-9 place-items-center rounded-full bg-white/14">
+          <PencilIcon size={17} width={2} />
+        </button>
+      </div>
 
-            {camera.state.status !== 'error' && (
-              <div>
-                <div className="mt-4 flex items-center justify-center gap-6">
-                  <span className="size-11" aria-hidden />
-                  <button
-                    type="button"
-                    onClick={() => void shoot()}
-                    disabled={!live || busy}
-                    aria-label="拍照并提交打卡"
-                    className="group grid size-[72px] place-items-center rounded-full border-[3px] border-ink bg-surface transition-transform active:scale-95 disabled:opacity-40"
-                  >
-                    <span className="size-[56px] rounded-full bg-brand transition-colors group-hover:bg-brand-2 group-disabled:bg-ink-4" />
-                  </button>
-                  {camera.canSwitch ? (
-                    <button
-                      type="button"
-                      onClick={camera.switchCamera}
-                      disabled={busy}
-                      aria-label={camera.facing === 'environment' ? '切换到前置摄像头' : '切换到后置摄像头'}
-                      title="切换摄像头"
-                      className="grid size-11 place-items-center rounded-full border border-line-strong bg-surface text-ink-2 transition-colors hover:text-ink disabled:opacity-40"
-                    >
-                      <SwitchCamera size={20} />
-                    </button>
-                  ) : (
-                    <span className="size-11" aria-hidden />
-                  )}
-                </div>
-                <div className="mt-2 text-center">
-                  <button type="button" onClick={camera.retry} disabled={busy} className="rounded-md px-3 py-2 text-[13px] text-ink-3 underline underline-offset-4 hover:text-ink disabled:opacity-40">重新开启相机</button>
-                </div>
+      <div className="mt-2.5 flex min-h-0 flex-1 items-center justify-center">
+        <div className="w-full">
+          {/* 保持视频挂载并参与布局；iPhone 恢复播放时不能从 display:none 状态启动。 */}
+          <Viewfinder
+            videoRef={camera.videoRef}
+            width={camera.state.status === 'live' ? camera.state.width : 0}
+            height={camera.state.status === 'live' ? camera.state.height : 0}
+            live={live}
+            placeLabel={watermarkPlace}
+            clockOffset={session.offset}
+          >
+            {camera.state.status === 'error' ? (
+              <div className="absolute inset-0 overflow-y-auto">
+                <CameraError title={camera.state.problem.title} desc={camera.state.problem.desc} onRetry={camera.state.problem.retry ? camera.retry : undefined} />
+              </div>
+            ) : camera.state.status === 'blocked' ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center">
+                <Camera size={28} aria-hidden />
+                <p className="text-[15px]">点击后开启相机画面</p>
+                <Button type="button" onClick={camera.resumePreview} variant="primary">开启相机预览</Button>
+              </div>
+            ) : !live && (
+              <div className="absolute inset-0 grid place-items-center text-[14px] text-white/80">
+                <span className="inline-flex items-center gap-2">
+                  <Spinner className="text-white/80" />
+                  {camera.state.status === 'paused' ? '页面在后台，相机已暂停' : '正在打开摄像头…'}
+                </span>
               </div>
             )}
-            {live && !session.ready && !busy && session.error && (
-              <p className="mt-2 text-center text-[13px] text-danger" role="alert">{session.error}</p>
-            )}
-          </div>
-
-          <div className="space-y-5">
-            <PhotoRules />
-
-            <Field label="谁可以看到" hint={visibility === 'all' ? '登录的同学都能看到（与你互相排除的人除外）。' : '只有和你互相感兴趣、正在私聊的搭子能看到。'}>
-              <Segmented options={VISIBILITY_OPTIONS} value={visibility} onChange={(v) => setVisibility(v as CheckinVisibility)} />
-            </Field>
-
-            <div>
-              <Toggle checked={geoOn} onChange={(value) => { if (!busy) setGeoOn(value); }} label="在水印上显示地点" />
-              {geoOn && (
-                <div className="mt-3">
-                  <label htmlFor={placeId} className="mb-1.5 block text-[14px] text-ink-2">所在楼栋</label>
-                  <select
-                    id={placeId}
-                    value={selectedPlace}
-                    onChange={(event) => setSelectedPlace(event.target.value)}
-                    disabled={busy}
-                    className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2.5 text-[16px] text-ink outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:opacity-50"
-                  >
-                    <option value="">自动识别楼栋</option>
-                    {PLACE_GROUPS.map((group) => (
-                      <optgroup key={group} label={group}>
-                        {CAMPUS_PLACES.filter((place) => place.group === group).map((place) => (
-                          <option key={place.id} value={place.id}>{place.label}</option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </div>
+            <AnimatePresence>
+              {flash > 0 && (
+                <motion.div key={flash} className="pointer-events-none absolute inset-0 bg-white" initial={{ opacity: 0.85 }} animate={{ opacity: 0 }} transition={{ duration: 0.35, ease }} />
               )}
-              <p className="mt-2 flex items-start gap-1.5 text-[13px] leading-relaxed text-ink-3">
-                <MapPin size={14} className="mt-[3px] shrink-0" aria-hidden />
-                <span>
-                  {!geoOn ? '不附带位置时，水印显示「未提供位置」。' : selectedPlace ? (
-                    <>水印地点：<span className="text-ink-2">{watermarkPlace}</span><span className="block">请确认是当前所在楼栋；水印会注明「手选」。</span></>
-                  ) : (
-                    <>
-                      {geo.state.status === 'off' && '相机准备好后获取位置，也可以先手选楼栋。'}
-                      {geo.state.status === 'locating' && '正在定位…也可以手选所在楼栋。'}
-                      {geo.state.status === 'ok' && <>
-                        水印地点：<span className="text-ink-2">{watermarkPlace}</span>
-                        {geo.location && <span className="block">定位精度约 ±{Math.ceil(geo.location.accuracy)} 米。</span>}
-                        {geo.resolution.precision !== 'building' && <span className="block">暂时无法确认具体楼栋，请从上方选择。一丹图书馆需手选确认。</span>}
-                      </>}
-                      {geo.state.status === 'error' && `${geo.state.message}。可手选楼栋；不选择则显示「未提供位置」。`}
-                    </>
-                  )}
-                  <span className="block">只把地点文字盖在照片上，不保存经纬度。</span>
-                  {geoOn && <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="mt-1 block text-[11px] underline underline-offset-2">楼栋地图 © OpenStreetMap contributors</a>}
-                </span>
-              </p>
-            </div>
-
-            <Field
-              label="说明"
-              optional
-              hint={captionLength(caption) >= activity.config.captionMin
-                ? '参加搭子打卡的话，这次打卡的说明已经够计分了。'
-                : `参加搭子打卡的话，写一句学了什么（至少 ${activity.config.captionMin} 个字）才计分${caption.trim() ? `，还差 ${activity.config.captionMin - captionLength(caption)} 个字` : ''}。`}
-            >
-              <Textarea
-                id={captionId}
-                aria-label="打卡说明"
-                value={caption}
-                maxLength={CAPTION_MAX}
-                onChange={(e) => setCaption(e.target.value.slice(0, CAPTION_MAX))}
-                placeholder="今天在学什么？例如：线代第三章习题"
-                className="min-h-20"
-              />
-            </Field>
-
-            <WhyLive />
-          </div>
+            </AnimatePresence>
+            {busy && (
+              <div className="absolute inset-0 grid place-items-center bg-black/45 text-[14px]">
+                <span className="inline-flex items-center gap-2"><Spinner className="text-white" />服务器盖章中…</span>
+              </div>
+            )}
+          </Viewfinder>
         </div>
-      )}
+      </div>
+
+      <p className="mt-3 shrink-0 px-6 text-center text-[13px] text-white/72">
+        {live && !session.ready && !busy && session.error
+          ? <span className="text-[#ff8a7a]" role="alert">{session.error}</span>
+          : <>拍下正在学习的自己和学习内容 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>}
+      </p>
+
+      <div className="mt-5 mb-[calc(env(safe-area-inset-bottom)+28px)] grid shrink-0 grid-cols-3 items-center">
+        <div className="flex justify-center">
+          {lastPhoto ? (
+            <Link to="/me/content?view=checkins" aria-label="我的打卡" className="size-11 overflow-hidden rounded-[10px] border-[1.5px] border-white/80">
+              <img src={fileUrl(lastPhoto)} alt="" className="h-full w-full object-cover" />
+            </Link>
+          ) : <span className="size-11" aria-hidden />}
+        </div>
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => void shoot()}
+            disabled={!live || busy}
+            aria-label="拍照并提交打卡"
+            className="size-[78px] rounded-full border-4 border-white p-1 transition-transform active:scale-95 disabled:opacity-40"
+          >
+            <span className="block h-full w-full rounded-full bg-white" />
+          </button>
+        </div>
+        <div className="flex justify-center">
+          {camera.canSwitch ? (
+            <button
+              type="button"
+              onClick={camera.switchCamera}
+              disabled={busy}
+              aria-label={camera.facing === 'environment' ? '切换到前置摄像头' : '切换到后置摄像头'}
+              className="grid size-11 place-items-center rounded-full bg-white/14 disabled:opacity-40"
+            >
+              <FlipIcon size={22} width={2} />
+            </button>
+          ) : (
+            <button type="button" onClick={camera.retry} disabled={busy} aria-label="重新开启相机" className="grid size-11 place-items-center rounded-full bg-white/14 disabled:opacity-40">
+              <FlipIcon size={22} width={2} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <Modal open={noteOpen} onClose={() => setNoteOpen(false)} title="说明与可见范围" size="md">
+        <div className="space-y-5 px-5 pt-2 pb-6 text-ink">
+          <Field
+            label="说明"
+            optional
+            hint={captionLength(caption) >= activity.config.captionMin
+              ? '参加搭子打卡的话，这次打卡的说明已经够计分了。'
+              : `参加搭子打卡的话，写一句学了什么（至少 ${activity.config.captionMin} 个字）才计分${caption.trim() ? `，还差 ${activity.config.captionMin - captionLength(caption)} 个字` : ''}。`}
+          >
+            <Textarea
+              id={captionId}
+              aria-label="打卡说明"
+              value={caption}
+              maxLength={CAPTION_MAX}
+              onChange={(e) => setCaption(e.target.value.slice(0, CAPTION_MAX))}
+              placeholder="今天在学什么？例如：线代第三章习题"
+              className="min-h-20"
+            />
+          </Field>
+          <Field label="谁可以看到" hint={visibility === 'all' ? '登录的同学都能看到（与你互相排除的人除外）。' : '只有和你互相感兴趣、正在私聊的搭子能看到。'}>
+            <Segmented options={VISIBILITY_OPTIONS} value={visibility} onChange={(v) => setVisibility(v as CheckinVisibility)} />
+          </Field>
+          {geoOn && <p className="text-[13px] leading-relaxed text-ink-3">{placeHint(geo, selectedPlace, watermarkPlace)}只把地点文字盖在照片上，不保存经纬度。</p>}
+          <PhotoRules />
+          <WhyLive />
+          <Button variant="primary" size="lg" className="w-full" onClick={() => setNoteOpen(false)}>完成</Button>
+        </div>
+      </Modal>
     </div>
   );
+}
+
+/** 地点说明：手选、定位中、定位结果或失败 */
+function placeHint(geo: ReturnType<typeof useGeoLabel>, selected: string, label: string) {
+  if (selected) return `水印地点：${label}（手选，请确认是当前所在楼栋）。`;
+  if (geo.state.status === 'locating' || geo.state.status === 'off') return '正在定位，也可以在顶部手选所在楼栋。';
+  if (geo.state.status === 'error') return `${geo.state.message}。可以在顶部手选楼栋。`;
+  return `水印地点：${label}${geo.location ? `，定位精度约 ±${Math.ceil(geo.location.accuracy)} 米` : ''}${geo.resolution.precision !== 'building' ? '；暂时无法确认具体楼栋，请在顶部手选' : ''}。`;
 }
 
 /** 计分打卡的照片要求（与规则页同一份文字） */

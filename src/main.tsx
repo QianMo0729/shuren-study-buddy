@@ -5,10 +5,9 @@ import { RouterProvider } from 'react-router/dom';
 import { MotionConfig, MotionGlobalConfig } from 'motion/react';
 import './styles.css';
 
-// 网页字体（按 unicode-range 切片、按需加载、本地托管，不依赖境外 CDN）。
+// 网页字体（按 unicode-range 切片、按需加载、本地托管，不依赖境外 CDN）。苹果设备优先用系统的苹方，其余设备用 MiSans。
 // 字体声明较长，异步加载，避免阻塞首屏；加载完成前先用系统字体显示。
 import('./fonts/misans.css');
-import('@chinese-fonts/dymh/dist/DouyinSansBold/result.css');
 import('@fontsource/source-sans-3/400-italic.css');
 import { App } from './App';
 import { AuthProvider } from './lib/auth';
