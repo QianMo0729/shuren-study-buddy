@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { isStaff, normalizeRole } from '../../shared/roles.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { REPORT_REASONS } from '../../shared/options.ts';
@@ -48,11 +49,11 @@ miscRouter.get('/files/:name', requireUser, (req, res) => {
   const owner = q.get<{ user_id: number; kind: string }>('SELECT user_id, kind FROM uploads WHERE name = ?', name);
   if (!owner) throw new HttpError(404, '文件不存在');
   const uid = req.user!.id;
-  if (uid !== owner.user_id && req.user!.role !== 'admin' && owner.kind !== 'photo' && owner.kind !== 'timetable') {
+  if (uid !== owner.user_id && !isStaff(req.user!.role) && owner.kind !== 'photo' && owner.kind !== 'timetable') {
     // 社区图片、打卡照片等由各自模块判断可见性
     const allowed = fileAccessFor(owner.kind)?.({ id: uid, role: req.user!.role }, owner.user_id, name) ?? false;
     if (!allowed) throw new HttpError(404, '文件不存在');
-  } else if (uid !== owner.user_id && req.user!.role !== 'admin') {
+  } else if (uid !== owner.user_id && !isStaff(req.user!.role)) {
     const row = getProfileRow(owner.user_id);
     const data = row ? parseData(row) : null;
     if (!row?.published || row.taken_down || !data || !hasPrivacyConsent(data)
@@ -135,15 +136,32 @@ function landingStats() {
   return { types, topPlans, categories, species };
 }
 
+// 这些数字要读全部已发布的主页，而首页不需要登录就能访问：结果保留一分钟，不随访问量重复计算
+const LANDING_TTL_MS = 60_000;
+let landing: { at: number; breakdown: ReturnType<typeof landingStats>; stats: { profiles: number; posts: number; users: number } } | null = null;
+
+function landingData() {
+  const now = Date.now();
+  if (!landing || now - landing.at >= LANDING_TTL_MS) {
+    landing = {
+      at: now,
+      breakdown: landingStats(),
+      stats: {
+        profiles: q.get<{ n: number }>('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0')!.n,
+        posts: q.get<{ n: number }>("SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND status = 'open'")!.n,
+        users: q.get<{ n: number }>('SELECT COUNT(*) n FROM users WHERE activated = 1')!.n,
+      },
+    };
+  }
+  return landing;
+}
+
 miscRouter.get('/meta', (req, res) => {
+  const { breakdown, stats } = landingData();
   res.json({
-    breakdown: landingStats(),
+    breakdown,
     allowedDomains: config.allowedDomains,
     devMode: isLocalDevRequest(req),
-    stats: {
-      profiles: q.get<{ n: number }>('SELECT COUNT(*) n FROM profiles WHERE published = 1 AND taken_down = 0')!.n,
-      posts: q.get<{ n: number }>("SELECT COUNT(*) n FROM posts WHERE deleted = 0 AND taken_down = 0 AND status = 'open'")!.n,
-      users: q.get<{ n: number }>('SELECT COUNT(*) n FROM users WHERE activated = 1')!.n,
-    },
+    stats,
   });
 });

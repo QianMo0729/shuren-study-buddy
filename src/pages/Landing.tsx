@@ -7,7 +7,7 @@ import { useAuth } from '../lib/auth';
 import { cx } from '../lib/format';
 import { ease } from '../lib/motion';
 import { Button } from '../components/ui';
-import { Plate, Stamp, Wordmark } from '../components/brand';
+import { Plate, Stamp, Wordmark, IcpNotice } from '../components/brand';
 import { CampusPhoto, useCredits } from '../components/credits';
 
 const CN_DIGITS = '〇一二三四五六七八九';
@@ -23,7 +23,7 @@ const NOTES = [
   '「匹配推荐」一次弹出一张卡片。契合度同时看两边：TA 是否符合你的期待，你是否也符合 TA 的期待；时间、学习内容和学习性格占比最高。',
   '你可以选「感兴趣」「不感兴趣」或「稍后再看」。每天最多推荐 5 位，系统根据感兴趣与不感兴趣调整次日排序；稍后再看会保存在独立清单中，不感兴趣的同学不会再出现，也不会收到任何提示。',
   '只有双方都选了「感兴趣」，才会出现在「私聊」里。先聊聊学习安排，觉得合适再在聊天中申请交换联系方式，双方确认后才会显示。',
-  '「校园社区」里有聊天区、打卡区和招募。聊天区可以发帖分享生活；社区搜索只查帖子；在匹配页的「找同学」中，可按专业、课程、时间等条件主动检索。',
+  '「社区」里有帖子、打卡、学习分享和招募，右上角可以搜索帖子；在「找搭子」的「找同学」中，可按专业、课程、时间等条件主动检索，也可以直接输入同学的 ID。',
   '打卡只能用网页实时拍照，不能上传相册图片。服务器收到照片后，在右下角逐像素盖上位置与北京时间，水印颜色随背景深浅自动取黑或白。',
   '学发定期查看新发布和修改过的内容。违规的主页、帖子或打卡会被撤下，当事人会收到写明时间与原因的邮件。',
   '图版取自公有领域的博物学著作，照片取自维基共享资源，出处列在文末。',
@@ -39,7 +39,7 @@ export function Landing() {
     api.meta().then(setMeta).catch(() => {});
   }, []);
 
-  const go = () => nav(user ? '/match' : '/login');
+  const go = () => nav(user ? '/today' : '/login');
   // 第一次来的同学没有密码：入口直接通向「用学号激活」，而不是邮箱密码登录
   const activate = () => nav('/login?mode=activate');
   const counts = meta?.breakdown?.species ?? {};
@@ -55,11 +55,11 @@ export function Landing() {
         <nav className="flex items-center gap-6 text-[14px]">
           {user && (
             <>
-              <Link to="/match" className="hidden text-ink-2 hover:text-ink sm:inline">
-                匹配推荐
+              <Link to="/today" className="hidden text-ink-2 hover:text-ink sm:inline">
+                今天
               </Link>
-              <Link to="/community" className="hidden text-ink-2 hover:text-ink sm:inline">
-                校园社区
+              <Link to="/match" className="hidden text-ink-2 hover:text-ink sm:inline">
+                找搭子
               </Link>
             </>
           )}
@@ -201,17 +201,23 @@ export function Landing() {
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-[1180px] flex-col gap-6 px-5 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-4">
-            <img src="/assets/brand/shuren-lockup.png" alt="南方科技大学树仁书院" className="h-10 w-auto dark:hidden" />
-            <img src="/assets/brand/shuren-mark-white.png" alt="南方科技大学树仁书院" className="hidden h-10 w-auto opacity-80 dark:block" />
+            {/* 浅色、深色各一张，只显示其一：懒加载的图片在隐藏时不会下载 */}
+            <img src="/assets/brand/shuren-lockup.png" alt="南方科技大学树仁书院" loading="lazy" decoding="async" className="h-10 w-auto dark:hidden" />
+            <img src="/assets/brand/shuren-mark-white.png" alt="南方科技大学树仁书院" loading="lazy" decoding="async" className="hidden h-10 w-auto opacity-80 dark:block" />
             <p className="text-[15px] leading-relaxed font-bold text-ink-2">
               居高怀仁　止于至善
               <br />
-              <span className="font-sans text-[13px] text-ink-3">由树仁书院学生发展中心维护</span>
+              <span className="font-sans text-[13px] text-ink-3">由树仁书院学生发展中心维护 · <IcpNotice /></span>
             </p>
           </div>
-          <Link to="/credits" className="text-[14px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
-            图版与照片出处
-          </Link>
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
+            <Link to="/rules" className="text-[14px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
+              搭子打卡活动规则
+            </Link>
+            <Link to="/credits" className="text-[14px] text-ink-2 underline decoration-line-strong underline-offset-4 hover:text-ink hover:decoration-ink">
+              图版与照片出处
+            </Link>
+          </div>
         </div>
       </footer>
     </div>

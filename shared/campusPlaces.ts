@@ -1,6 +1,6 @@
 // 打卡地点目录：来源、数据许可和处理方法见 data/campusPlaces.sources.json。
-// 使用 WGS84 原始建筑轮廓；有定位误差或邻楼歧义时不猜楼名。
-// 修改名称后须重新生成水印点阵字形。服务器只保存地点文字，不保存经纬度。
+// 使用 WGS84 原始建筑轮廓；有定位误差或邻楼歧义时不猜楼名。地点只由定位决定，不能手选。
+// 修改名称后须重新生成水印点阵字形。经纬度只用来核对搭子两人是否在同一处（见 server/scoring.ts）。
 import buildings from './data/campusBuildings.json';
 
 /** GeoJSON 顺序：[经度, 纬度]。 */
@@ -38,14 +38,14 @@ export const CAMPUS = {
   radiusM: 1200,
 } as const;
 
-/** 3 馆、3 教学楼、46 栋宿舍；一丹无独立核验轮廓，仅允许手选。 */
-export const CAMPUS_PLACES = buildings.places as CampusPlace[];
+/** 3 馆、3 教学楼、46 栋宿舍，全部按建筑轮廓自动识别；一丹是南科大中心的东翼（中心其余部分不算一丹）。 */
+// JSON 里的坐标会被推断成 number[]，不是 [经度, 纬度] 元组，所以先转成 unknown；数据形状由 tests/campus-places.test.ts 检查
+export const CAMPUS_PLACES = buildings.places as unknown as CampusPlace[];
 const CAMPUS_BOUNDARY = buildings.campusBoundary as Coordinate[];
 const BY_ID = new Map(CAMPUS_PLACES.map((place) => [place.id, place]));
 
 export const NO_LOCATION_LABEL = '未提供位置';
 export const OFF_CAMPUS_LABEL = '校外';
-export const MANUAL_LOCATION_SUFFIX = '（手选）';
 export const MAX_BUILDING_ACCURACY_M = 20;
 /** 保留旧导出以兼容调用者；此值现在是上限，绝不再向外扩大建筑范围。 */
 export const MAX_ACCURACY_TOLERANCE_M = MAX_BUILDING_ACCURACY_M;
@@ -141,17 +141,7 @@ export function resolveLocation(loc: GeoInput | null): ResolvedLocation {
   return coarse(candidates.length ? 'ambiguous' : 'outside-buildings');
 }
 
-/** 合法手选优先，并明确标明来源；无效 ID 不得进入照片水印。 */
-export function placeLabelFor(loc: GeoInput | null, placeId?: string | null): string {
-  const selected = getCampusPlace(placeId);
-  if (selected) return `${CAMPUS.short}·${selected.label}${MANUAL_LOCATION_SUFFIX}`;
-  return resolveLocation(loc).label;
-}
-
-/** 自动及手选文字都须包含，确保服务器点阵字体覆盖全部名称与标记。 */
+/** 水印可能出现的全部地点文字，确保服务器点阵字体覆盖全部名称。 */
 export function allPlaceLabels(): string[] {
-  return [NO_LOCATION_LABEL, OFF_CAMPUS_LABEL, CAMPUS.name, ...CAMPUS_PLACES.flatMap((p) => {
-    const label = `${CAMPUS.short}·${p.label}`;
-    return [label, `${label}${MANUAL_LOCATION_SUFFIX}`];
-  })];
+  return [NO_LOCATION_LABEL, OFF_CAMPUS_LABEL, CAMPUS.name, ...CAMPUS_PLACES.map((p) => `${CAMPUS.short}·${p.label}`)];
 }

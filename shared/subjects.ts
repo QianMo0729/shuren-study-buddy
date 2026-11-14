@@ -86,9 +86,16 @@ function contains(long: string, short: string): boolean {
 }
 
 /** 参与包含关系判断的写法：自身、完整名称，以及足够长的等价叫法（太短的简称如「数分」容易误中「函数分析」） */
+const containableOf = new WeakMap<SubjectForm, string[]>();
 function containable(form: SubjectForm): string[] {
-  const longEnough = (alias: string) => (/^[\x20-\x7e]+$/.test(alias) ? alias.length >= 4 : alias.length >= 3);
-  return [...new Set([form.key, form.canonical, ...form.aliases.filter(longEnough)])];
+  // 同一个科目会和很多科目比较，写法列表只算一次
+  let out = containableOf.get(form);
+  if (!out) {
+    const longEnough = (alias: string) => (/^[\x20-\x7e]+$/.test(alias) ? alias.length >= 4 : alias.length >= 3);
+    out = [...new Set([form.key, form.canonical, ...form.aliases.filter(longEnough)])];
+    containableOf.set(form, out);
+  }
+  return out;
 }
 
 /**

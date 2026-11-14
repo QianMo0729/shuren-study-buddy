@@ -7,6 +7,8 @@ import './db.ts';
 import './matches.ts';
 import './community.ts';
 import { adminRouter } from './routes/admin.ts';
+import { adminActivityRouter } from './routes/adminActivity.ts';
+import { activityRouter } from './routes/activity.ts';
 import { authRouter } from './routes/auth.ts';
 import { miscRouter } from './routes/misc.ts';
 import { postRouter } from './routes/posts.ts';
@@ -19,6 +21,8 @@ import { forumRouter } from './routes/forum.ts';
 import { checkinRouter } from './routes/checkins.ts';
 import { timetableRouter } from './routes/timetables.ts';
 import { startUploadMaintenance } from './uploads.ts';
+import { startAuditMaintenance } from './audits.ts';
+import './buddies.ts';
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -41,7 +45,8 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '8mb' }));
-app.use(loadUser);
+// 只有接口需要识别登录状态；静态文件不必为每个请求查一次会话
+app.use('/api', loadUser);
 
 app.use('/api/auth', authRouter);
 app.use('/api/profiles', profileRouter);
@@ -53,6 +58,8 @@ app.use('/api/notes', notesRouter);
 app.use('/api/forum', forumRouter);
 app.use('/api/checkins', checkinRouter);
 app.use('/api/timetables', timetableRouter);
+app.use('/api/activity', activityRouter);
+app.use('/api/admin', adminActivityRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', miscRouter);
 app.use('/api', (_req, _res, next) => next(new HttpError(404, '接口不存在')));
@@ -63,13 +70,19 @@ if (config.isProd && fs.existsSync(dist)) {
   app.use(
     express.static(dist, {
       index: false,
-      // 带哈希的构建产物长期缓存；吉祥物等可替换的图片只缓存 1 小时
+      // 带哈希的构建产物长期缓存；吉祥物等可替换的图片只缓存 1 小时；sw.js 与清单不缓存
       setHeaders: (res, file) => {
         const hashed = /-[A-Za-z0-9_-]{8}\.\w+$/.test(file);
-        res.setHeader('Cache-Control', hashed ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
+        // Service Worker 与应用清单每次都要向服务器确认，发布新版本后才能尽快生效
+        const fresh = /[\\/](sw\.js|manifest\.webmanifest)$/.test(file);
+        res.setHeader('Cache-Control', fresh ? 'no-cache' : hashed ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
       },
     }),
   );
+  // 构建产物里没有的文件返回 404 而不是首页：发布新版本后，旧页面请求已被替换的分块时能明确失败，前端据此刷新到新版本
+  app.use('/assets', (_req, res) => {
+    res.status(404).type('text/plain').send('Not found');
+  });
   app.get(/.*/, (_req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(dist, 'index.html'));
@@ -85,6 +98,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 startUploadMaintenance();
+startAuditMaintenance();
 
 app.listen(config.port, config.host, () => {
   console.log(`\n🌳 树仁学发 · 学习搭子 API 已启动：http://${config.host}:${config.port}`);

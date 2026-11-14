@@ -1,15 +1,18 @@
 import { Router } from 'express';
 import type { ModerationTargetType, ReportTargetType } from '../../shared/types.ts';
-import { HttpError, requireAdmin } from '../auth.ts';
+import { HttpError, requireAdmin, requireStaff } from '../auth.ts';
 import { reviewState as autoReviewState } from '../autoModeration.ts';
 import { getSetting, iso, q, setSetting, tx } from '../db.ts';
 import { sendTakedownMail } from '../mail.ts';
 import { beijingTime, notify } from '../notify.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
+import { ensureWeeklySamples } from '../audits.ts';
+import { touchScores } from '../scoring.ts';
 import { reportTargetFor } from '../social.ts';
 
 export const adminRouter = Router();
-adminRouter.use(requireAdmin);
+// 管理员与审核员都能处理内容；改设置、查看用户名单只有管理员能做
+adminRouter.use(requireStaff);
 
 const count = (sql: string, ...p: any[]) => q.get<{ n: number }>(sql, ...p)!.n;
 
@@ -112,6 +115,8 @@ const pendingOf = (type: CommunityType) =>
 const beijingDate = (d = new Date()) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 
 adminRouter.get('/overview', (_req, res) => {
+  // 上一周结束后第一次打开后台时生成抽检名单，待办数才准确
+  ensureWeeklySamples();
   const pendingContent = { forum_post: pendingOf('forum_post'), comment: pendingOf('comment'), checkin: pendingOf('checkin') };
   res.json({
     stats: {
@@ -126,13 +131,18 @@ adminRouter.get('/overview', (_req, res) => {
       // 含社区帖子、评论、打卡与私聊消息的举报
       openReports: count("SELECT COUNT(*) n FROM reports WHERE status = 'open'"),
       takedowns30d: count("SELECT COUNT(*) n FROM moderation_logs WHERE action = 'takedown' AND created_at > datetime('now', '-30 day')"),
+      // 搭子打卡活动
+      buddyPairs: count("SELECT COUNT(*) n FROM buddy_pairs WHERE status = 'active'"),
+      pendingAudits: count("SELECT COUNT(*) n FROM checkin_audits a JOIN checkins c ON c.id = a.checkin_id WHERE a.status = 'pending' AND c.deleted = 0"),
+      openAppeals: count("SELECT COUNT(*) n FROM checkin_appeals WHERE status = 'open'"),
+      pendingBonus: count("SELECT COUNT(*) n FROM bonus_claims b JOIN buddy_pairs p ON p.id = b.pair_id AND p.status = 'active' WHERE b.status = 'pending'"),
     },
     pendingContent,
     review: reviewState(),
   });
 });
 
-adminRouter.put('/settings', (req, res) => {
+adminRouter.put('/settings', requireAdmin, (req, res) => {
   const days = Math.max(1, Math.min(90, Math.floor(Number(req.body?.cycleDays) || 7)));
   setSetting('review_cycle_days', String(days));
   res.json({ review: reviewState() });
@@ -328,6 +338,8 @@ adminRouter.post('/takedown', async (req, res) => {
     'INSERT INTO moderation_logs (admin_id, action, target_type, target_id, target_user_id, target_label, reason, email_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     req.user!.id, 'takedown', type, id, t.userId, t.label, reason, emailStatus,
   );
+  // 被撤下的打卡不再计分
+  touchScores();
   res.json({ ok: true, emailStatus, time });
 });
 
@@ -345,6 +357,7 @@ adminRouter.post('/restore', (req, res) => {
       req.user!.id, 'restore', type, id, t.userId, t.label,
     );
   });
+  touchScores();
   res.json({ ok: true });
 });
 
@@ -366,6 +379,7 @@ adminRouter.post('/approve', (req, res) => {
        auto_held = 0, risk_reasons = '[]' WHERE ${key} = ?${extra}`, id,
     ).changes);
   });
+  touchScores();
   res.json({ ok: true, count: changed });
 });
 
@@ -461,7 +475,7 @@ adminRouter.get('/logs', (_req, res) => {
   });
 });
 
-adminRouter.get('/users', (req, res) => {
+adminRouter.get('/users', requireAdmin, (req, res) => {
   const kw = keyword(req.query.q);
   const rows = q.all<any>(
     `SELECT u.id, u.email, u.role, u.created_at, u.last_login_at, p.nickname, p.data, p.published, p.taken_down

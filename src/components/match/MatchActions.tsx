@@ -117,7 +117,7 @@ export function MatchBar({ actions, inOverlay }: { actions: MatchActionsState; i
           'z-30 border-t border-line bg-surface/95 px-4 pt-3 backdrop-blur-md md:hidden',
           inOverlay
             ? 'sticky bottom-0 -mx-5 mt-8 pb-[calc(0.75rem+env(safe-area-inset-bottom))]'
-            : 'fixed inset-x-0 bottom-[calc(58px+env(safe-area-inset-bottom))] pb-3',
+            : 'fixed inset-x-0 bottom-[var(--tabbar-space)] pb-3',
         )}
         aria-label="对这位同学的选择"
         role="group"

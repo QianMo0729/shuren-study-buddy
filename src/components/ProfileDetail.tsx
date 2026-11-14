@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { CalendarClock, ChevronLeft, ChevronRight, Clock3, Flag, Link2, Pencil, ShieldX, Star, UserRoundX, X } from 'lucide-react';
 import { collegeOf } from '../../shared/majors';
 import {
@@ -25,6 +25,8 @@ import { MatchBar, MatchButtons, MatchCelebrationFor, useMatchActions } from './
 import { MoreMenu } from './match/MoreMenu';
 import { PersonalityScale } from './match/PersonalityScale';
 import { PrivateNote } from './PrivateNote';
+import { isStaff } from '../../shared/roles';
+import { BuddyButton } from './buddy/BuddyActions';
 
 export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, searchQuery, keyword, recommendation }: { profile: PublicProfile; onClose?: () => void; onChanged?: () => void; inOverlay?: boolean; match?: MatchInfo; searchQuery?: AdvancedQuery; keyword?: string; recommendation?: RecommendationInfo }) {
   const { user } = useAuth();
@@ -108,6 +110,7 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               <StatusDot status={profile.status} />
               {optionLabel(STATUSES, profile.status)}
               {profile.publishedAt && <span>· {timeAgo(profile.publishedAt)}上传</span>}
+              <BuddyBadge profile={profile} />
             </p>
             <motion.h2 layoutId={inOverlay ? `nick-${profile.id}` : undefined} transition={spring} className="mt-1.5">
               {privateNote?.remarkName ? <span className="font-display text-[32px] break-words">{privateNote.remarkName}</span> : <Nickname name={profile.nickname} size={32} />}
@@ -170,9 +173,10 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
                 <Flag size={16} />
               </IconButton>
               <MoreMenu items={[{ label: '排除这位同学', icon: <UserRoundX size={15} aria-hidden />, tone: 'danger', onSelect: () => setExcluding(true) }]} />
+              {profile.buddy && <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto"><BuddyButton relation={profile.buddy} userId={profile.id} nickname={profile.nickname} onChanged={onChanged} /></div>}
             </>
           )}
-          {user?.role === 'admin' && !profile.isMe && (
+          {isStaff(user?.role) && !profile.isMe && (
             <Button variant="dangerOutline" size="sm" icon={<ShieldX size={14} />} onClick={() => setTakedown(true)} className="ml-auto">
               撤下此主页
             </Button>
@@ -397,4 +401,23 @@ function deadlineText(date: string) {
   const days = Math.round((target - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86_400_000);
   const label = `${y} 年 ${m} 月 ${d} 日`;
   return days > 0 ? `${label}（还有 ${days} 天）` : days === 0 ? `${label}（就是今天）` : label;
+}
+
+/**
+ * 主页上的搭子：两人都同意公开时显示搭子是谁（点开是对方主页），否则别人只看到「已有搭子」。
+ * 自己的主页上也显示，方便确认别人看到的样子。
+ */
+function BuddyBadge({ profile }: { profile: PublicProfile }) {
+  const chip = 'ml-1 inline-flex min-w-0 items-center rounded-[4px] bg-paper-2 px-1.5 py-px text-[12px] text-ink-2';
+  const buddy = profile.publicBuddy;
+  if (buddy) {
+    // 看自己搭子的主页时，下面已经有「你的学习搭子」
+    if (profile.buddy?.state === 'bound') return null;
+    return (
+      <Link to={`/u/${buddy.id}`} className={cx(chip, 'hover:text-ink')}>
+        <span className="shrink-0">搭子：</span><span className="max-w-[10em] truncate">{buddy.nickname}</span>
+      </Link>
+    );
+  }
+  return !profile.isMe && profile.buddy?.otherHasBuddy ? <span className={chip}>已有搭子</span> : null;
 }

@@ -1,13 +1,14 @@
 import { Router } from 'express';
+import { isStaff, normalizeRole } from '../../shared/roles.ts';
 import { POST_CATEGORIES, optionLabel } from '../../shared/options.ts';
 import type { Post } from '../../shared/types.ts';
 import { HttpError, requireUser } from '../auth.ts';
-import { isExcluded } from '../connections.ts';
+import { excludedIds, isExcluded } from '../connections.ts';
 import { hasPrivacyConsent } from '../../shared/profileRules.ts';
 import { iso, q, tx } from '../db.ts';
 import { applyAutoModeration, reviewState } from '../autoModeration.ts';
 import { notify } from '../notify.ts';
-import { getProfileRow, parseData } from '../profiles.ts';
+import { getProfileRow, sharedProfile } from '../profiles.ts';
 import { expand, tokenize } from '../search.ts';
 import { registerReportTarget } from '../social.ts';
 
@@ -32,11 +33,22 @@ interface PostRow {
   taken_down: number;
   takedown_reason: string | null;
   deleted: number;
+  /** 由 POST_SELECT 一并查出；没有时 toPost 单独查询 */
+  interest_count?: number;
+  interested?: number;
 }
+
+/** 招募连同报名人数、当前用户是否已报名一起查出，列表不必逐条再查。第一个参数是当前用户 id */
+const POST_SELECT = `SELECT p.*,
+  (SELECT COUNT(*) FROM post_interests i WHERE i.post_id = p.id) AS interest_count,
+  EXISTS (SELECT 1 FROM post_interests i WHERE i.post_id = p.id AND i.user_id = ?) AS interested
+  FROM posts p`;
+
+type Author = ReturnType<typeof author>;
 
 function author(userId: number) {
   const row = getProfileRow(userId);
-  const d = row ? parseData(row) : null;
+  const d = row ? sharedProfile(row) : null;
   // 与主页接口同一条件：主页撤回、被撤下或撤回隐私同意之后，招募里只剩系统昵称，不再带出资料里的任何内容
   const visible = !!row && !!d && !!row.published && !row.taken_down && hasPrivacyConsent(d);
   return {
@@ -49,9 +61,10 @@ function author(userId: number) {
   };
 }
 
-export function toPost(r: PostRow, viewerId: number, withUsers = false): Post {
-  const interestCount = q.get<{ n: number }>('SELECT COUNT(*) n FROM post_interests WHERE post_id = ?', r.id)!.n;
-  const interested = !!q.get('SELECT 1 FROM post_interests WHERE post_id = ? AND user_id = ?', r.id, viewerId);
+/** authorOf：列表里同一位作者只解析一次 */
+export function toPost(r: PostRow, viewerId: number, withUsers = false, authorOf: (userId: number) => Author = author): Post {
+  const interestCount = r.interest_count ?? q.get<{ n: number }>('SELECT COUNT(*) n FROM post_interests WHERE post_id = ?', r.id)!.n;
+  const interested = r.interested !== undefined ? !!r.interested : !!q.get('SELECT 1 FROM post_interests WHERE post_id = ? AND user_id = ?', r.id, viewerId);
   const post: Post = {
     id: r.id,
     title: r.title,
@@ -67,7 +80,7 @@ export function toPost(r: PostRow, viewerId: number, withUsers = false): Post {
     interestCount,
     interested,
     isMine: r.user_id === viewerId,
-    author: author(r.user_id),
+    author: authorOf(r.user_id),
     ...reviewState(r),
     takenDown: !!r.taken_down && !r.auto_held,
     takedownReason: r.auto_held ? null : r.takedown_reason,
@@ -131,8 +144,9 @@ postRouter.get('/', (req, res) => {
   const tokens = tokenize(String(req.query.q ?? ''));
   const category = String(req.query.category ?? '');
   const scope = String(req.query.scope ?? '');
-  let rows = q.all<PostRow>('SELECT * FROM posts WHERE deleted = 0 ORDER BY created_at DESC LIMIT 500');
-  rows = rows.filter((r) => !isExcluded(uid, r.user_id));
+  let rows = q.all<PostRow>(`${POST_SELECT} WHERE p.deleted = 0 ORDER BY p.created_at DESC LIMIT 500`, uid);
+  const excluded = excludedIds(uid);
+  rows = rows.filter((r) => !excluded.has(r.user_id));
   rows = rows.filter((r) => (scope === 'mine' ? r.user_id === uid : !r.taken_down));
   if (scope === 'interested') {
     const ids = new Set(q.all<{ post_id: number }>('SELECT post_id FROM post_interests WHERE user_id = ?', uid).map((x) => x.post_id));
@@ -160,7 +174,13 @@ postRouter.get('/', (req, res) => {
     if (a.s !== b.s) return b.s - a.s;
     return b.r.created_at.localeCompare(a.r.created_at);
   });
-  res.json({ items: scored.map((x) => toPost(x.r, uid)) });
+  const authors = new Map<number, Author>();
+  const authorOf = (userId: number) => {
+    let a = authors.get(userId);
+    if (!a) authors.set(userId, (a = author(userId)));
+    return a;
+  };
+  res.json({ items: scored.map((x) => toPost(x.r, uid, false, authorOf)) });
 });
 
 postRouter.post('/', (req, res) => {
@@ -186,7 +206,7 @@ postRouter.post('/', (req, res) => {
 postRouter.get('/:id', (req, res) => {
   const uid = req.user!.id;
   const row = q.get<PostRow>('SELECT * FROM posts WHERE id = ? AND deleted = 0', Number(req.params.id));
-  if (!row || (req.user!.role !== 'admin' && isExcluded(uid, row.user_id)) || (row.taken_down && row.user_id !== uid && req.user!.role !== 'admin')) throw new HttpError(404, '帖子不存在或已下线');
+  if (!row || (!isStaff(req.user!.role) && isExcluded(uid, row.user_id)) || (row.taken_down && row.user_id !== uid && !isStaff(req.user!.role))) throw new HttpError(404, '帖子不存在或已下线');
   res.json({ post: toPost(row, uid, true) });
 });
 

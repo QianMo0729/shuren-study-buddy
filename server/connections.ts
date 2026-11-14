@@ -21,10 +21,19 @@ CREATE TABLE IF NOT EXISTS exclusions (
   PRIMARY KEY(user_id, target_id),
   CHECK(user_id <> target_id)
 );
+CREATE INDEX IF NOT EXISTS idx_exclusions_target ON exclusions(target_id);
+CREATE INDEX IF NOT EXISTS idx_contact_request_requester ON contact_requests(requester_id);
 `);
 
 export function isExcluded(a: number, b: number): boolean {
   return !!q.get('SELECT 1 FROM exclusions WHERE (user_id = ? AND target_id = ?) OR (user_id = ? AND target_id = ?)', a, b, b, a);
+}
+
+/** 与 userId 互相排除（任一方向）的全部同学。列表接口一次查完，不必逐行调用 isExcluded */
+export function excludedIds(userId: number): Set<number> {
+  return new Set(q.all<{ id: number }>(
+    'SELECT target_id AS id FROM exclusions WHERE user_id = ? UNION SELECT user_id FROM exclusions WHERE target_id = ?', userId, userId,
+  ).map((r) => r.id));
 }
 
 function profileData(id: number): any {

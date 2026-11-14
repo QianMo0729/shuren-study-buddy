@@ -222,7 +222,8 @@ test('review regressions', { timeout: 180_000 }, async (t) => {
     const forged = '【被举报【被举报内容】内容】我要杀了你';
     assert.equal((await app.api('/reports', a.cookie, 'POST', { targetType: 'message', targetId: sent.body.message.id, reason: '其他', detail: forged })).status, 200);
     const row = db.prepare("SELECT detail, snapshot FROM reports WHERE target_type = 'message' AND target_id = ?").get(sent.body.message.id) as { detail: string; snapshot: string };
-    assert.equal(row.snapshot, '你好呀');
+    assert.ok(row.snapshot.startsWith('被举报的消息：你好呀'), row.snapshot);
+    assert.ok(!row.snapshot.includes(forged), 'the reporter note never becomes part of the snapshot');
     assert.equal(row.detail, forged, 'the note is stored verbatim and kept apart from the snapshot');
   });
 

@@ -1,6 +1,8 @@
 import { Router, type Request } from 'express';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import { MESSAGE_MAX, chatSummary, cleanMessageBody, insertMessage, listChats, markRead, messagesPage, visibleMatch } from '../chat.ts';
+import { SENSITIVE_LABELS } from '../../shared/activity.ts';
+import { checkMessage } from '../chatSafety.ts';
 import { tx } from '../db.ts';
 import { closeMatch } from '../matches.ts';
 
@@ -53,8 +55,16 @@ chatRouter.post('/:matchId/messages', (req, res) => {
   if (body.length > MESSAGE_MAX) throw new HttpError(400, `消息最多 ${MESSAGE_MAX} 字`);
   rateLimit(`chat-minute:${uid}`, 20, 60_000);
   rateLimit(`chat-day:${uid}`, 500, 24 * 60 * 60_000);
+  // 敏感词：政治敏感直接拦截；其他类别先请发送人确认，确认后照常发送并给对方提示
+  const { blocked, warned } = checkMessage(body);
+  if (blocked.length) {
+    throw new HttpError(400, `这条消息可能涉及${blocked.map((c) => SENSITIVE_LABELS[c]).join('、')}内容，平台不支持发送，请修改后再发`, { sensitive: blocked, blocked: true });
+  }
+  if (warned.length && req.body?.confirm !== true) {
+    throw new HttpError(409, `这条消息可能涉及${warned.map((c) => SENSITIVE_LABELS[c]).join('、')}内容`, { sensitive: warned, needConfirm: true });
+  }
   // 不发站内通知：对方看到私聊未读角标即可
-  const message = tx(() => insertMessage(match.id, uid, body));
+  const message = tx(() => insertMessage(match.id, uid, body, warned));
   res.json({ message });
 });
 

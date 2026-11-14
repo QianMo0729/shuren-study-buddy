@@ -1,19 +1,23 @@
-import { PendingReviewBadge, PendingReviewNotice } from '../components/ReviewStatus';
-import { motion } from 'motion/react';
-import { useCallback, useEffect, useId, useState } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
-import { Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert, Sparkles } from 'lucide-react';
-import { STUDY_TYPES } from '../../shared/options';
-import type { Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
+import { PendingReviewBadge } from '../components/ReviewStatus';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert } from 'lucide-react';
+import { GRADES } from '../../shared/options';
+import { speciesOfNickname } from '../../shared/species';
+import type { BuddyStatus, Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { cx, dateTime, timeAgo } from '../lib/format';
-import { spring } from '../lib/motion';
+import { cx, timeAgo } from '../lib/format';
 import { useToast } from '../lib/toast';
-import { Button, ConfirmDialog, Empty, Field, Input, Modal, PageHeader, Segmented, Skeleton, Tag } from '../components/ui';
-import { Cover, Nickname, ProfileCard } from '../components/ProfileCard';
+import { Button, ConfirmDialog, Empty, Field, GroupList, Input, Modal, PageHeader, Segmented, Skeleton, Tag } from '../components/ui';
+import { Plate, IcpNotice } from '../components/brand';
+import { useBack } from '../components/Shell';
+import { AlertIcon, BookIcon, Chevron, GridIcon, PeopleIcon, ShieldIcon, SlidersIcon } from '../components/icons';
+import { useCached } from '../lib/cache';
+import { ProfileCard, splitNickname } from '../components/ProfileCard';
 import { PostCard } from '../components/PostCard';
-import { Illustration, Seal } from '../components/brand';
+import { Illustration } from '../components/brand';
+import { ROLE_LABELS, isStaff } from '../../shared/roles';
 
 const TABS = [
   { id: 'notifications', label: '通知' },
@@ -46,201 +50,236 @@ function preview(s: string, n = 60) {
 }
 
 export function Me() {
-  const { user, refresh } = useAuth();
+  const [params] = useSearchParams();
+  const raw = params.get('tab');
+  // 旧链接：/me?tab=xxx → /me/xxx；旧的「匹配请求」已并入私聊
+  if (raw === 'connections') return <Navigate to="/messages" replace />;
+  if (raw) {
+    const legacy = LEGACY_TABS[raw];
+    const tab = legacy?.tab ?? (TABS.some((t) => t.id === raw) ? raw : 'notifications');
+    const view = params.get('view') ?? legacy?.view;
+    return <Navigate to={`/me/${tab}${view ? `?view=${view}` : ''}`} replace />;
+  }
+  return <MeHome />;
+}
+
+/** 「我的」：头像与资料、我的内容数量、设置列表、退出登录 */
+function MeHome() {
+  const { user, logout } = useAuth();
   const toast = useToast();
   const nav = useNavigate();
-  const tabsId = useId();
-  const [params, setParams] = useSearchParams();
-  const raw = params.get('tab') ?? 'notifications';
-  const legacy = LEGACY_TABS[raw];
-  const tab = legacy?.tab ?? (TABS.some((t) => t.id === raw) ? raw : 'notifications');
-  const viewParam = params.get('view') ?? legacy?.view ?? '';
-  const view = CONTENT_VIEWS.some((v) => v.value === viewParam) ? viewParam : 'forum';
+  const done = useBack('/today');
   const [profile, setProfile] = useState<MyProfile | null>(null);
-  const [missing, setMissing] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [unpub, setUnpub] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [counts, setCounts] = useState<{ forum: string; checkins: number; events: number; favorites: number } | null>(null);
+  const { data: buddy } = useCached<BuddyStatus>('activity:me', () => api.activity.me());
 
-  const load = useCallback(
-    () =>
-      api.myProfile().then((r) => {
-        setProfile(r.profile);
-        setMissing(r.missing.length);
-        setLoadError(null);
-      }),
-    [],
-  );
+  const load = useCallback(() => api.myProfile().then((r) => { setProfile(r.profile); setLoadError(null); }), []);
+  useEffect(() => { load().catch((e) => setLoadError(errorText(e))); }, [load]);
   useEffect(() => {
-    load().catch((e) => setLoadError(errorText(e)));
-  }, [load]);
+    let live = true;
+    Promise.all([
+      api.forum.posts({ mine: true }).catch(() => ({ items: [], hasMore: false })),
+      api.checkins.stats().catch(() => ({ total: 0 })),
+      api.posts({ scope: 'mine' }).catch(() => ({ items: [] })),
+      api.favorites().catch(() => ({ items: [] })),
+    ]).then(([f, c, e, fav]) => {
+      if (live) setCounts({ forum: f.hasMore ? `${f.items.length}+` : String(f.items.length), checkins: c.total, events: e.items.length, favorites: fav.items.length });
+    });
+    return () => { live = false; };
+  }, []);
 
-  // 旧的「匹配请求」已并入私聊
-  if (raw === 'connections') return <Navigate to="/messages" replace />;
-
-  const status = !profile ? null : profile.reviewPending ? 'pending' : profile.takenDown ? 'down' : profile.published ? 'live' : 'draft';
-  const type = STUDY_TYPES.find((t) => t.value === profile?.studyType);
-  const sparse = !!profile && (!profile.subjects.length || Object.values(profile.personality).every((v) => !v));
-  const goTab = (id: string) => setParams({ tab: id }, { replace: true });
+  const status = !profile ? null : profile.takenDown ? 'down' : profile.reviewPending ? 'pending' : profile.published ? 'live' : 'draft';
+  const latin = profile ? speciesOfNickname(profile.nickname)?.latin : undefined;
+  const staff = !!user && isStaff(user.role);
 
   return (
-    <div>
-      <PageHeader title="我的" desc="个人设置：管理主页与问卷、推荐偏好、你发布的内容和账号。" />
-
-      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:gap-8">
-        {/* 资料与问卷 */}
-        <section aria-labelledby={`${tabsId}-profile`} className="lg:sticky lg:top-20 lg:h-fit">
-          <h2 id={`${tabsId}-profile`} className="sr-only">资料与问卷</h2>
-          {loadError && !profile ? (
-            <div className="rounded-xl bg-surface p-5">
-              <p className="text-[14px] text-ink-2">主页信息加载失败：{loadError}</p>
-              <Button size="sm" className="mt-3" onClick={() => load().catch((e) => setLoadError(errorText(e)))}>
-                重试
-              </Button>
-            </div>
-          ) : !profile ? (
-            <Skeleton className="h-[380px] rounded-xl" />
-          ) : (
-            <div className="overflow-hidden rounded-xl bg-surface">
-              <div className="h-24 border-b border-line sm:h-32">
-                <Cover id={profile.userId} nickname={profile.nickname} cover={profile.photos[0] ?? null} studyType={profile.studyType} className="h-full w-full" />
-              </div>
-              <div className="p-5">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <Nickname name={profile.nickname} size={20} />
-                    <p className="mt-0.5 truncate text-[13px] text-ink-3">{user?.email}</p>
-                  </div>
-                  {type && <Seal char={type.glyph} tone={type.tone} size={28} />}
-                </div>
-                <div className="mt-3">
-                  {status === 'live' && <Tag tone="brand">已发布 · 正在参与匹配推荐</Tag>}
-                  {status === 'draft' && <Tag>未发布{missing ? `，问卷还差 ${missing} 项必填` : ''}</Tag>}
-                  {status === 'pending' && <PendingReviewBadge />}
-                  {status === 'down' && <Tag tone="danger">已被管理员撤下</Tag>}
-                </div>
-                {status === 'pending' && <div className="mt-3"><PendingReviewNotice /></div>}
-                {status === 'down' && (
-                  <p className="mt-3 flex gap-2 text-[13.5px] leading-relaxed text-ink-2">
-                    <ShieldAlert size={15} className="mt-1 shrink-0 text-danger" aria-hidden />
-                    <span>
-                      {dateTime(profile.takenDownAt)} 撤下，原因：{profile.takedownReason}。可修改内容，恢复展示需由管理员处理。
-                    </span>
-                  </p>
-                )}
-                {status === 'draft' && (
-                  <p className="mt-3 text-[13px] leading-relaxed text-ink-3">发布主页后，系统才会为你推荐同学，其他同学也才能在推荐中看到你。</p>
-                )}
-                {sparse && status !== 'down' && (
-                  <Link to="/me/edit#personality" className="mt-3 flex items-center gap-2 rounded-lg bg-paper-2/70 px-3 py-2 text-[13px] text-ink-2 hover:bg-paper-2">
-                    <Sparkles size={14} className="shrink-0 text-brand-text" aria-hidden />
-                    补充学习性格与具体科目，推荐更准
-                  </Link>
-                )}
-
-                <dl className="mt-5 grid grid-cols-3 border-y border-line py-3 text-center">
-                  {[
-                    { n: profile.stats.views, l: '主页被浏览' },
-                    { n: profile.stats.favorites, l: '被收藏' },
-                    { n: profile.stats.contactViews, l: '交换联系方式' },
-                  ].map((s, i) => (
-                    <div key={s.l} className={cx('flex flex-col-reverse', i > 0 && 'border-l border-line')}>
-                      <dt className="mt-0.5 text-[12px] text-ink-3">{s.l}</dt>
-                      <dd className="text-[20px] font-semibold text-ink tabular">{s.n}</dd>
-                    </div>
-                  ))}
-                </dl>
-
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <Button variant="primary" onClick={() => nav('/me/edit')}>
-                    编辑问卷与资料
-                  </Button>
-                  {status === 'live' || status === 'pending' ? (
-                    <Button onClick={() => nav(`/u/${profile.userId}`)}>查看我的主页</Button>
-                  ) : (
-                    <Button onClick={() => nav('/me/edit')}>{status === 'down' ? '修改内容' : '去发布'}</Button>
-                  )}
-                </div>
-                {(status === 'live' || status === 'pending') && (
-                  <button type="button" onClick={() => setUnpub(true)} className="mt-3 w-full text-center text-[13px] text-ink-3 hover:text-danger">
-                    暂时撤回主页
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* 标签页 */}
-        <div className="min-w-0">
-          <div className="-mx-4 flex gap-6 overflow-x-auto border-b border-line px-4 no-scrollbar sm:mx-0 sm:px-0" role="tablist" aria-label="个人设置">
-            {TABS.map((t) => {
-              const on = tab === t.id;
-              return (
-                <button
-                  key={t.id}
-                  id={`${tabsId}-tab-${t.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={on}
-                  aria-controls={`${tabsId}-panel`}
-                  tabIndex={on ? 0 : -1}
-                  onClick={() => goTab(t.id)}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-                    e.preventDefault();
-                    const i = TABS.findIndex((x) => x.id === tab);
-                    const next = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length];
-                    goTab(next.id);
-                    document.getElementById(`${tabsId}-tab-${next.id}`)?.focus();
-                  }}
-                  className={cx('relative flex shrink-0 items-center gap-1.5 py-2.5 text-[14.5px] transition-colors', on ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink')}
-                >
-                  {t.label}
-                  {t.id === 'notifications' && !!user?.unread && (
-                    <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold text-white tabular" aria-label={`${user.unread} 条未读`}>
-                      {user.unread}
-                    </span>
-                  )}
-                  {on && <motion.span layoutId="me-tab" transition={spring} className="absolute inset-x-0 -bottom-px h-[2px] bg-ink" />}
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-5" role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-tab-${tab}`}>
-            {tab === 'notifications' && <Notifications onRead={refresh} />}
-            {tab === 'preferences' && <Preferences />}
-            {tab === 'content' && (
-              <div>
-                <div className="-mx-4 mb-4 overflow-x-auto px-4 no-scrollbar sm:mx-0 sm:px-0">
-                  <Segmented className="w-max" options={CONTENT_VIEWS} value={view} onChange={(v) => setParams({ tab: 'content', view: v }, { replace: true })} />
-                </div>
-                {view === 'forum' && <MyForumPosts />}
-                {view === 'checkins' && <MyCheckins />}
-                {view === 'events' && <MyPosts scope="mine" />}
-                {view === 'interested' && <MyPosts scope="interested" />}
-                {view === 'favorites' && <Favorites />}
-              </div>
-            )}
-            {tab === 'settings' && <AccountSettings />}
-          </div>
-        </div>
+    <div className="mx-auto max-w-[560px] pt-[env(safe-area-inset-top)] md:pt-8">
+      <div className="flex h-11 items-center justify-end md:hidden">
+        <button type="button" onClick={done} className="-mr-2 h-11 px-2 text-[17px] font-semibold text-brand-text">完成</button>
       </div>
 
+      <div className="flex flex-col gap-[22px]">
+        {loadError && !profile ? (
+          <div className="rounded-2xl bg-surface p-5">
+            <p className="text-[15px] text-ink-2">资料加载失败：{loadError}</p>
+            <Button size="sm" className="mt-3" onClick={() => load().catch((e) => setLoadError(errorText(e)))}>重试</Button>
+          </div>
+        ) : !profile ? (
+          <Skeleton className="h-52 rounded-2xl" />
+        ) : (
+          <div className="flex flex-col items-center gap-2">
+            <Plate nickname={profile.nickname} photo={profile.photos[0] ?? null} className="size-[92px] overflow-hidden rounded-full bg-mat" pad="0" fit="cover" />
+            <div className="flex flex-col items-center gap-px">
+              <h1 className="text-[24px] font-bold text-ink">{profile.nickname}</h1>
+              {latin && <p className="latin text-[13px] text-ink-3">{latin}</p>}
+              <CopyId id={profile.nickname} />
+              <p className="mt-0.5 text-[15px] text-ink-3">{[buddy?.shurenSource === 'roster' && buddy.shurenMember === 'yes' ? '树仁书院' : '', profile.major, GRADES.find((g) => g.value === profile.grade)?.label, staff ? ROLE_LABELS[user!.role] : ''].filter(Boolean).join(' · ')}</p>
+            </div>
+            <Link to="/me/edit" className="flex h-[34px] items-center rounded-full bg-brand-soft px-4 text-[15px] font-semibold text-brand-text">编辑资料与问卷</Link>
+            {status !== 'live' && (
+              <p className="px-6 text-center text-[13px] text-ink-3">
+                {status === 'draft' ? '主页还没有发布，发布后才会出现在推荐里。' : status === 'pending' ? '主页等待审核，通过后公开。' : `主页已被管理员撤下：${profile.takedownReason ?? ''}`}
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-4 rounded-2xl bg-surface py-3">
+          {[
+            { n: counts?.forum, l: '帖子', view: 'forum' },
+            { n: counts?.checkins, l: '打卡', view: 'checkins' },
+            { n: counts?.events, l: '招募', view: 'events' },
+            { n: counts?.favorites, l: '收藏', view: 'favorites' },
+          ].map((c) => (
+            <Link key={c.l} to={`/me/content?view=${c.view}`} className="flex flex-col items-center gap-0.5 text-ink">
+              <span className="text-[20px] font-bold tabular">{c.n ?? '–'}</span>
+              <span className="text-[12px] text-ink-3">{c.l}</span>
+            </Link>
+          ))}
+        </div>
+
+        <GroupList>
+          <MeRow to="/buddy" icon={<PeopleIcon size={20} width={2} />} value={buddyValue(buddy)}>我的搭子</MeRow>
+        </GroupList>
+
+        <GroupList>
+          <MeRow to="/me/preferences" icon={<SlidersIcon size={20} width={2} />}>推荐偏好</MeRow>
+          <MeRow to="/me/edit" icon={<GridIcon size={20} width={2} />} value={profile ? `${profile.schedule.length} 个空闲时段` : undefined}>我的空闲时间</MeRow>
+          <MeRow to="/me/settings" icon={<ShieldIcon size={20} width={2} />}>账号与隐私</MeRow>
+        </GroupList>
+
+        <GroupList>
+          <MeRow to="/rules" icon={<BookIcon size={20} width={2} />}>活动规则</MeRow>
+          {staff && <MeRow to="/admin" icon={<AlertIcon size={20} width={2} />}>管理后台</MeRow>}
+        </GroupList>
+
+        <GroupList>
+          <button
+            type="button"
+            onClick={async () => {
+              try { await logout(); nav('/'); } catch (e) { toast.error('退出失败', errorText(e)); }
+            }}
+            className="h-[46px] w-full text-[17px] text-danger"
+          >
+            退出登录
+          </button>
+        </GroupList>
+      </div>
+    </div>
+  );
+}
+
+/** 「我的搭子」一行右侧：搭子的昵称、累计积分和名次；没有搭子时显示邀请 */
+function buddyValue(status: BuddyStatus | undefined): string | undefined {
+  if (!status) return undefined;
+  if (!status.pair) {
+    const incoming = status.invites.filter((i) => i.direction === 'incoming').length;
+    return incoming ? `${incoming} 个邀请` : '还没有绑定';
+  }
+  const parts = [splitNickname(status.pair.partner.nickname).word];
+  if (status.score?.through) parts.push(`${status.score.total} 分`);
+  if (status.rank) parts.push(`第 ${status.rank.rank} 名`);
+  return parts.join(' · ');
+}
+
+/** 自己的 ID（系统昵称）：已经认识的同学可以在「找同学」里输入它找到你 */
+function CopyId({ id }: { id: string }) {
+  const toast = useToast();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(id);
+      toast.success('ID 已复制', '发给同学，对方在「找同学」里粘贴就能找到你。');
+    } catch {
+      toast.info(`我的 ID：${id}`, '没能自动复制，请长按选中后复制。');
+    }
+  };
+  return (
+    <button type="button" onClick={() => void copy()} className="mt-1 inline-flex h-7 items-center gap-1 rounded-full bg-paper-2 px-3 text-[13px] text-ink-2">
+      复制我的 ID
+    </button>
+  );
+}
+
+function MeRow({ to, icon, value, children }: { to: string; icon: ReactNode; value?: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="flex h-[46px] items-center gap-3 px-4 text-ink active:bg-paper">
+      <span className="text-brand-text">{icon}</span>
+      <span className="flex-1 text-[17px]">{children}</span>
+      {value && <span className="text-[15px] text-ink-3">{value}</span>}
+      <Chevron />
+    </Link>
+  );
+}
+
+const SECTION_TITLES: Record<string, string> = { notifications: '通知', preferences: '推荐偏好', content: '我的内容', settings: '账号与隐私' };
+
+/** 「我的」里点进去的分页：通知、推荐偏好、我的内容、账号与隐私 */
+export function MeSection() {
+  const { refresh } = useAuth();
+  const { pathname } = useLocation();
+  const [params, setParams] = useSearchParams();
+  const section = pathname.split('/')[2] ?? '';
+  const viewParam = params.get('view') ?? '';
+  const view = CONTENT_VIEWS.some((v) => v.value === viewParam) ? viewParam : 'forum';
+  if (!SECTION_TITLES[section]) return <Navigate to="/me" replace />;
+
+  return (
+    <div className="mx-auto max-w-[640px]">
+      <PageHeader title={SECTION_TITLES[section]} />
+      {section === 'notifications' && <Notifications onRead={refresh} />}
+      {section === 'preferences' && <Preferences />}
+      {section === 'content' && (
+        <div>
+          <div className="-mx-4 mb-4 overflow-x-auto px-4 no-scrollbar sm:mx-0 sm:px-0">
+            <Segmented className="w-max" options={CONTENT_VIEWS} value={view} onChange={(v) => setParams({ view: v }, { replace: true })} />
+          </div>
+          {view === 'forum' && <MyForumPosts />}
+          {view === 'checkins' && <MyCheckins />}
+          {view === 'events' && <MyPosts scope="mine" />}
+          {view === 'interested' && <MyPosts scope="interested" />}
+          {view === 'favorites' && <Favorites />}
+        </div>
+      )}
+      {section === 'settings' && (
+        <div className="flex flex-col gap-6">
+          <ProfileVisibility />
+          <AccountSettings />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 暂时撤回已发布的主页（原在「我的」首页） */
+function ProfileVisibility() {
+  const { refresh } = useAuth();
+  const toast = useToast();
+  const [profile, setProfile] = useState<MyProfile | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => api.myProfile().then((r) => setProfile(r.profile)).catch(() => {}), []);
+  useEffect(() => { void load(); }, [load]);
+  if (!profile || !(profile.published || profile.reviewPending) || profile.takenDown) return null;
+  return (
+    <section>
+      <h3 className="text-[15px] font-semibold text-ink">主页</h3>
+      <p className="mt-1 text-[14px] text-ink-3">撤回后你不会出现在推荐中，其他同学也打不开你的主页；资料会保留，随时可以重新发布。</p>
+      <Button size="sm" className="mt-3" onClick={() => setOpen(true)}>暂时撤回主页</Button>
       <ConfirmDialog
-        open={unpub}
+        open={open}
         title="暂时撤回主页？"
         desc="撤回后你不会再出现在其他同学的匹配推荐中，他们也打不开你的主页。资料会保留，随时可以重新发布。"
         confirmText="撤回"
         loading={busy}
-        onCancel={() => setUnpub(false)}
+        onCancel={() => setOpen(false)}
         onConfirm={async () => {
           setBusy(true);
           try {
             await api.unpublish();
             await Promise.all([load(), refresh()]);
             toast.success('主页已撤回');
-            setUnpub(false);
+            setOpen(false);
           } catch (e) {
             toast.error('操作失败', errorText(e));
           } finally {
@@ -248,7 +287,7 @@ export function Me() {
           }
         }}
       />
-    </div>
+    </section>
   );
 }
 
@@ -550,8 +589,8 @@ function MyForumPosts() {
       <Empty
         art={<Illustration name="mascot-empty" className="mb-4 size-24" />}
         title="还没有发过帖子"
-        desc="在校园社区的聊天区分享学习和生活，认识更多同学。"
-        action={<Button variant="primary" onClick={() => nav('/community')}>去聊天区发帖</Button>}
+        desc="在社区分享学习和生活，认识更多同学。"
+        action={<Button variant="primary" onClick={() => nav('/community')}>去社区发帖</Button>}
       />
     );
   return (
@@ -647,7 +686,7 @@ function MyCheckins() {
                 </p>
                 {c.reviewPending ? <PendingReviewBadge /> : c.takenDown && <TakenDownNote reason={c.takedownReason} what="打卡" />}
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
-                  <span>{c.reviewPending ? '审核通过后展示' : c.takenDown ? '仅本人和管理员可见' : c.visibility === 'buddies' ? '仅搭子可见' : '所有同学可见'}</span>
+                  <span>{c.reviewPending ? '审核通过后展示' : c.takenDown ? '仅本人和管理员可见' : c.visibility === 'buddies' ? '仅私聊的同学可见' : '所有同学可见'}</span>
                   <span className="inline-flex items-center gap-1">
                     <Heart size={12} aria-hidden /> <span className="sr-only">点赞</span>
                     {c.likeCount}
@@ -751,7 +790,7 @@ function AccountSettings() {
         <h3 className="text-[15px] font-semibold text-ink">登录邮箱</h3>
         <p className="mt-1 text-[15px] break-all text-ink">
           {user?.email}
-          {user?.role === 'admin' && <Tag tone="brand" className="ml-2">管理员</Tag>}
+          {user && isStaff(user.role) && <Tag tone="brand" className="ml-2">{ROLE_LABELS[user.role]}</Tag>}
         </p>
         <p className="mt-1 text-[13.5px] text-ink-3">邮箱用于校园身份验证，不能修改；只有在私聊中双方同意交换联系方式、且你选择了展示校园邮箱时，才会让对方看到。</p>
       </section>
@@ -769,7 +808,7 @@ function AccountSettings() {
       </section>
 
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface p-5">
-        <p className="text-[14px] text-ink-2">树仁搭子由树仁书院学生发展中心维护。</p>
+        <p className="text-[14px] text-ink-2">树仁搭子由树仁书院学生发展中心维护。<br /><IcpNotice className="text-[13px] text-ink-3" /></p>
         <Link to="/" className="text-[14px] text-brand-text hover:underline">
           查看首页
         </Link>

@@ -1,7 +1,7 @@
 import { PendingReviewNotice } from '../components/ReviewStatus';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ChevronLeft, ExternalLink, Flag, Lock, MapPin, ShieldX, Trash2 } from 'lucide-react';
+import { Ban, ChevronLeft, ExternalLink, Flag, Lock, MapPin, ShieldX, Trash2 } from 'lucide-react';
 import type { Checkin } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -13,6 +13,8 @@ import { AuthorLine } from '../components/forum/AuthorLine';
 import { Comments } from '../components/forum/Comments';
 import { LikeButton } from '../components/forum/LikeButton';
 import { CheckinPhoto } from '../components/checkin/CheckinCard';
+import { isStaff } from '../../shared/roles';
+import { InvalidNotice, InvalidateDialog } from '../components/checkin/Invalidation';
 
 /** 打卡详情：大图、说明、地点与服务器时间、点赞、评论、举报、本人删除、管理员撤下 */
 export function CheckinDetail() {
@@ -27,6 +29,7 @@ export function CheckinDetail() {
   const [deleting, setDeleting] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [takingDown, setTakingDown] = useState(false);
+  const [invalidating, setInvalidating] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -67,11 +70,11 @@ export function CheckinDetail() {
   }
 
   const c = checkin;
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isStaff(user?.role);
 
   return (
     <div className="mx-auto max-w-5xl pt-5 sm:pt-8">
-      <button type="button" onClick={back} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button type="button" onClick={back} className="-ml-1 mb-4 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 打卡
       </button>
 
@@ -80,6 +83,7 @@ export function CheckinDetail() {
           这条打卡已被管理员撤下{c.takedownReason ? `，原因：${c.takedownReason}` : ''}。只有{c.isMine ? '你' : '作者'}和管理员能看到。
         </p>
       )}
+      <InvalidNotice checkin={c} onChanged={() => void load()} />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-8">
         <figure className="min-w-0">
@@ -109,7 +113,7 @@ export function CheckinDetail() {
             <div className="flex gap-3">
               <dt className="w-16 shrink-0 text-ink-3">可见范围</dt>
               <dd className="inline-flex items-center gap-1 text-ink">
-                {c.visibility === 'buddies' ? <><Lock size={13} className="text-ink-3" aria-hidden />仅搭子</> : '所有同学'}
+                {c.visibility === 'buddies' ? <><Lock size={13} className="text-ink-3" aria-hidden />仅私聊的同学</> : '所有同学'}
               </dd>
             </div>
           </dl>
@@ -129,6 +133,11 @@ export function CheckinDetail() {
                     举报
                   </Button>
                 )
+              )}
+              {isAdmin && !c.invalid && (
+                <Button variant="ghost" size="sm" icon={<Ban size={14} />} className="text-ink-3 hover:text-danger" onClick={() => setInvalidating(true)}>
+                  判无效
+                </Button>
               )}
               {isAdmin && !c.takenDown && (
                 <Button variant="dangerOutline" size="sm" icon={<ShieldX size={14} />} onClick={() => setTakingDown(true)}>
@@ -154,7 +163,7 @@ export function CheckinDetail() {
         open={confirmDelete}
         tone="danger"
         title="删除这次打卡？"
-        desc="删除后其他同学将看不到这张照片，也不再计入连续打卡天数；当天的打卡次数不会因此恢复。"
+        desc="删除后其他同学将看不到这张照片，也不再计入连续打卡天数。如果这是当天的第一次打卡，删掉后当天就不能再计分了（删掉重拍不能换一次）。"
         confirmText="删除"
         loading={deleting}
         onCancel={() => setConfirmDelete(false)}
@@ -173,6 +182,9 @@ export function CheckinDetail() {
         }}
       />
       <ReportDialog open={reporting} onClose={() => setReporting(false)} targetType="checkin" targetId={c.id} />
+      {isAdmin && invalidating && (
+        <InvalidateDialog checkinId={c.id} label={`${c.author.nickname} 的打卡 · ${c.stampText}`} onClose={() => setInvalidating(false)} onDone={() => { setInvalidating(false); void load(); }} />
+      )}
       {isAdmin && (
         <TakedownDialog
           open={takingDown}

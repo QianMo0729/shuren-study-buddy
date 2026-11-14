@@ -3,7 +3,7 @@ import { hasPrivacyConsent, missingFields, pickProfileInput } from '../../shared
 import type { DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import { isExcluded } from '../connections.ts';
-import { iso, q } from '../db.ts';
+import { iso, q, tx } from '../db.ts';
 import { sendMatchMail } from '../mail.ts';
 import { feedbackOf, recordFeedback, removeFeedback } from '../matches.ts';
 import {
@@ -66,10 +66,14 @@ matchRouter.post('/feedback', (req, res) => {
   }
 
   const features = action === 'skip' ? null : featuresBetween(viewer.data, target.data);
-  const before = feedbackOf(uid, targetId);
-  const previous = before ? { features: parseFeatures(before.features), action: before.action } : undefined;
-  const result = recordFeedback(uid, targetId, action, features ?? {});
-  learnFromFeedback(uid, features, action, previous);
+  // 记录反馈与更新个人偏好模型在同一个事务里提交：一次滑卡只落一次盘
+  const result = tx(() => {
+    const before = feedbackOf(uid, targetId);
+    const previous = before ? { features: parseFeatures(before.features), action: before.action } : undefined;
+    const recorded = recordFeedback(uid, targetId, action, features ?? {});
+    learnFromFeedback(uid, features, action, previous);
+    return recorded;
+  });
 
   if (result.newlyMatched && result.matchId) {
     const me = ensureProfile(uid).nickname;
@@ -86,11 +90,12 @@ matchRouter.delete('/feedback/:targetId', (req, res) => {
   const uid = req.user!.id;
   const targetId = targetIdOf(req.params.targetId);
   rateLimit(`match-feedback:${uid}`, 300, 86_400_000);
-  const before = feedbackOf(uid, targetId);
-  if (before) {
+  tx(() => {
+    const before = feedbackOf(uid, targetId);
+    if (!before) return;
     removeFeedback(uid, targetId);
     unlearnFeedback(uid, parseFeatures(before.features), before.action);
-  }
+  });
   res.json({ ok: true });
 });
 

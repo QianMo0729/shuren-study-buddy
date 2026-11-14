@@ -77,20 +77,21 @@ const scoredHours = (commonSlots: number[]) => commonSlots.reduce((sum, slot) =>
 
 const wantsGender = (p: ProfileInput) => (p.buddyGender === 'male' || p.buddyGender === 'female' ? p.buddyGender : null);
 
-function commonSlotsOf(a: ProfileInput, b: ProfileInput): number[] {
-  const other = new Set(slots(b));
-  return slots(a).filter((slot) => other.has(slot));
+/** 性别偏好、线上/线下互斥：不需要比较时间就能判断的两项硬条件 */
+function preferenceConflict(a: ProfileInput, b: ProfileInput): 'gender' | 'format' | null {
+  const wantA = wantsGender(a);
+  const wantB = wantsGender(b);
+  if ((wantA && b.gender !== wantA) || (wantB && a.gender !== wantB)) return 'gender';
+  const formats = new Set([a.studyFormat, b.studyFormat]);
+  return formats.has('offline') && formats.has('online') ? 'format' : null;
 }
 
 /** 双向硬条件：性别偏好、线上/线下互斥、有效时间必须有交集。任一不满足即不推荐 */
 export function hardFilter(a: ProfileInput, b: ProfileInput): null | { reason: 'gender' | 'format' | 'time' } {
-  const wantA = wantsGender(a);
-  const wantB = wantsGender(b);
-  if ((wantA && b.gender !== wantA) || (wantB && a.gender !== wantB)) return { reason: 'gender' };
-  const formats = new Set([a.studyFormat, b.studyFormat]);
-  if (formats.has('offline') && formats.has('online')) return { reason: 'format' };
-  if (!commonSlotsOf(a, b).length) return { reason: 'time' };
-  return null;
+  const conflict = preferenceConflict(a, b);
+  if (conflict) return { reason: conflict };
+  const other = new Set(slots(b));
+  return slots(a).some((slot) => other.has(slot)) ? null : { reason: 'time' };
 }
 
 // ---------- 学习内容：具体科目 ----------
@@ -142,18 +143,15 @@ function mbtiOf(raw: string): string | null {
 }
 
 /** E/I、J/P 各 1 分，S/N、T/F 各 0.5 分，满分 3 */
-function mbtiSimilarity(a: ProfileInput, b: ProfileInput): number | null {
-  const x = mbtiOf(a.mbti);
-  const y = mbtiOf(b.mbti);
+function mbtiSimilarity(x: string | null, y: string | null): number | null {
   if (!x || !y) return null;
   return (Number(x[0] === y[0]) + Number(x[3] === y[3]) + 0.5 * Number(x[1] === y[1]) + 0.5 * Number(x[2] === y[2])) / 3;
 }
 
 const DISLIKE_SHORT: Record<string, string> = { social: '过度社交', silent: '全程沉默', late: '迟到爽约' };
 
-/** a 的雷区（dislikeTags）是否可能被 b 触及 */
-function dislikeHits(a: ProfileInput, b: ProfileInput): { tag: string; why: string }[] {
-  const tags = new Set(list(a.dislikeTags));
+/** 雷区（dislikeTags）是否可能被 b 触及 */
+function dislikeHits(tags: Set<string>, b: ProfileInput): { tag: string; why: string }[] {
   const talk = trait(b, 'talk');
   const social = trait(b, 'social');
   const punctual = trait(b, 'punctual');
@@ -181,20 +179,20 @@ interface PersonalityDirection {
 }
 
 /** s(A←B)：B 的学习性格满足 A 的程度 */
-function personalityToward(a: ProfileInput, b: ProfileInput): PersonalityDirection {
+function personalityToward(a: PreparedProfile, b: PreparedProfile): PersonalityDirection {
   const scores: number[] = [];
   for (const item of SIMILAR_ITEMS) {
-    const x = trait(a, item.key);
-    const y = trait(b, item.key);
+    const x = trait(a.profile, item.key);
+    const y = trait(b.profile, item.key);
     if (x !== null && y !== null) scores.push(1 - Math.abs(x - y) / 4);
   }
-  const need = trait(a, 'needSupervision');
-  const give = trait(b, 'giveSupervision');
+  const need = trait(a.profile, 'needSupervision');
+  const give = trait(b.profile, 'giveSupervision');
   if (need !== null && give !== null) scores.push(1 - Math.max(0, need - give) / 4);
   const likert = scores.length ? scores.reduce((sum, n) => sum + n, 0) / scores.length : null;
-  const mbti = mbtiSimilarity(a, b);
+  const mbti = mbtiSimilarity(a.mbti, b.mbti);
   let value = likert !== null ? (mbti !== null ? 0.8 * likert + 0.2 * mbti : likert) : mbti;
-  const hits = dislikeHits(a, b);
+  const hits = dislikeHits(a.dislikeTags, b.profile);
   if (hits.length) value = (value ?? 0.5) * 0.6 ** hits.length;
   return { value, info: likert !== null ? 1 : value !== null ? 0.5 : 0, items: scores.length, mbti, hits };
 }
@@ -211,18 +209,10 @@ function styleSimilarity(x: string, y: string): number | null {
 const styleLabel = (value: string) => optionLabel(STUDY_TYPES, value);
 
 /** s(A←B)：A 期望的地点（没填期望则用 A 自己的地点）与 B 实际地点 */
-function placesToward(a: ProfileInput, b: ProfileInput): { value: number | null; shared: string[]; any: boolean; fromExpectation: boolean } {
-  // 选了「期望对方的地点」选项时用期望；没选时用自己常去的地点。补充文字只是追加，不会取代自己的地点
-  const hasExpectedChoice = list(a.expectedPlaces).some((value) => PLACE_VALUES.has(value));
-  const wanted = hasExpectedChoice
-    ? answerSet(a.expectedPlaces, PLACE_VALUES, 'other', a.expectedPlacesOther, true)
-    : answerSet(a.places, PLACE_VALUES, 'other', a.placesOther, true);
-  const extra = normalizeText(a.expectedPlacesOther);
-  if (!hasExpectedChoice && extra && !wanted.values.has(`other:${extra}`)) {
-    wanted.values.add(`other:${extra}`);
-    wanted.count += 1;
-  }
-  const actual = answerSet(b.places, PLACE_VALUES, 'other', b.placesOther, true);
+function placesToward(a: PreparedProfile, b: PreparedProfile): { value: number | null; shared: string[]; any: boolean; fromExpectation: boolean } {
+  const wanted = a.wantedPlaces;
+  const hasExpectedChoice = a.placesFromExpectation;
+  const actual = b.actualPlaces;
   if (!wanted.count || !actual.count) return { value: null, shared: [], any: false, fromExpectation: hasExpectedChoice };
   if (wanted.values.has('choice:any') || actual.values.has('choice:any')) return { value: 1, shared: [], any: true, fromExpectation: hasExpectedChoice };
   const shared = common(wanted, actual);
@@ -241,6 +231,58 @@ function durationSimilarity(x: string, y: string): number | null {
   if (!DURATION_ORDER.includes(x) || !DURATION_ORDER.includes(y)) return null;
   if (x === y) return 1;
   return Math.abs(DURATION_ORDER.indexOf(x) - DURATION_ORDER.indexOf(y)) === 1 ? 0.6 : 0.3;
+}
+
+// ---------- 只取决于本人答案的派生量 ----------
+
+/**
+ * 一份问卷里只取决于本人答案、与对方无关的量：有效时间格、科目的标准写法、各题的选项集合等。
+ * 推荐要把同一份问卷与很多人比较，这些量先算好一次，不必每比较一对就重算；
+ * 准备好之后问卷不能再改动（改了要重新 prepareProfile）。
+ */
+export interface PreparedProfile {
+  profile: ProfileInput;
+  /** 有效时间格：去重、合法、升序 */
+  slots: number[];
+  slotSet: Set<number>;
+  goals: AnswerSet;
+  subjects: Subject[];
+  deadlineDay: number | null;
+  mbti: string | null;
+  dislikeTags: Set<string>;
+  /** 我希望对方在的地点：选了「期望对方的地点」时用期望，否则用自己常去的地点 */
+  wantedPlaces: AnswerSet;
+  placesFromExpectation: boolean;
+  actualPlaces: AnswerSet;
+  interests: AnswerSet;
+}
+
+export function prepareProfile(p: ProfileInput): PreparedProfile {
+  const ownSlots = slots(p);
+  // 选了「期望对方的地点」选项时用期望；没选时用自己常去的地点。补充文字只是追加，不会取代自己的地点
+  const placesFromExpectation = list(p.expectedPlaces).some((value) => PLACE_VALUES.has(value));
+  const wantedPlaces = placesFromExpectation
+    ? answerSet(p.expectedPlaces, PLACE_VALUES, 'other', p.expectedPlacesOther, true)
+    : answerSet(p.places, PLACE_VALUES, 'other', p.placesOther, true);
+  const extra = normalizeText(p.expectedPlacesOther);
+  if (!placesFromExpectation && extra && !wantedPlaces.values.has(`other:${extra}`)) {
+    wantedPlaces.values.add(`other:${extra}`);
+    wantedPlaces.count += 1;
+  }
+  return {
+    profile: p,
+    slots: ownSlots,
+    slotSet: new Set(ownSlots),
+    goals: answerSet(p.planTags, GOAL_VALUES, '其他', p.goalOther),
+    subjects: subjectsOf(p),
+    deadlineDay: dayNumber(p.goalDeadline),
+    mbti: mbtiOf(p.mbti),
+    dislikeTags: new Set(list(p.dislikeTags)),
+    wantedPlaces,
+    placesFromExpectation,
+    actualPlaces: answerSet(p.places, PLACE_VALUES, 'other', p.placesOther, true),
+    interests: answerSet(p.interests, INTEREST_VALUES, 'other', p.interestsOther),
+  };
 }
 
 // ---------- 汇总 ----------
@@ -287,13 +329,11 @@ function timePart(a: ProfileInput, b: ProfileInput, commonSlots: number[], overl
   };
 }
 
-function contentPart(a: ProfileInput, b: ProfileInput): Part {
-  const goalsA = answerSet(a.planTags, GOAL_VALUES, '其他', a.goalOther);
-  const goalsB = answerSet(b.planTags, GOAL_VALUES, '其他', b.goalOther);
-  const goalOverlap = overlap(goalsA, goalsB);
-  const sharedGoals = common(goalsA, goalsB);
-  const subjectsA = subjectsOf(a);
-  const subjectsB = subjectsOf(b);
+function contentPart(a: PreparedProfile, b: PreparedProfile): Part {
+  const goalOverlap = overlap(a.goals, b.goals);
+  const sharedGoals = common(a.goals, b.goals);
+  const subjectsA = a.subjects;
+  const subjectsB = b.subjects;
   const matchedA = subjectsA.filter((x) => subjectsB.some((y) => sameSubject(x, y)));
   const matchedB = subjectsB.filter((y) => subjectsA.some((x) => sameSubject(x, y)));
   const sharedSubjects = Math.min(matchedA.length, matchedB.length);
@@ -329,8 +369,8 @@ function contentPart(a: ProfileInput, b: ProfileInput): Part {
   if (value !== null && !sharedSubjects && sharedGoals.length) {
     reasons.push({ text: `近期目标相同：${choiceLabels(sharedGoals, PLAN_PRESETS.map((p) => ({ value: p, label: p }))).join('、')}`, weight: 0.8 });
   }
-  const dayA = dayNumber(a.goalDeadline);
-  const dayB = dayNumber(b.goalDeadline);
+  const dayA = a.deadlineDay;
+  const dayB = b.deadlineDay;
   if (value !== null && dayA !== null && dayB !== null && (sharedSubjects || sharedGoals.length)) {
     const gap = Math.abs(dayA - dayB);
     if (gap <= 21) {
@@ -345,9 +385,11 @@ function contentPart(a: ProfileInput, b: ProfileInput): Part {
   return { forMe: value, forThem: value, detail, reasons, cautions };
 }
 
-function personalityPart(a: ProfileInput, b: ProfileInput): Part {
-  const me = personalityToward(a, b);
-  const them = personalityToward(b, a);
+function personalityPart(preparedA: PreparedProfile, preparedB: PreparedProfile): Part {
+  const a = preparedA.profile;
+  const b = preparedB.profile;
+  const me = personalityToward(preparedA, preparedB);
+  const them = personalityToward(preparedB, preparedA);
   if (me.value === null && them.value === null) {
     return { forMe: null, forThem: null, info: 0, detail: '一方或双方未填写学习性格与 MBTI，此项按中性计入。' };
   }
@@ -407,7 +449,9 @@ function stylePart(a: ProfileInput, b: ProfileInput): Part {
   };
 }
 
-function placesPart(a: ProfileInput, b: ProfileInput): Part {
+function placesPart(preparedA: PreparedProfile, preparedB: PreparedProfile): Part {
+  const a = preparedA.profile;
+  const b = preparedB.profile;
   // 硬条件已排除「线下 × 线上」；只要有一方只接受线上，两人就会在线上学习，地点不再构成限制
   if (a.studyFormat === 'online' || b.studyFormat === 'online') {
     return {
@@ -419,8 +463,8 @@ function placesPart(a: ProfileInput, b: ProfileInput): Part {
       }],
     };
   }
-  const me = placesToward(a, b);
-  const them = placesToward(b, a);
+  const me = placesToward(preparedA, preparedB);
+  const them = placesToward(preparedB, preparedA);
   if (me.value === null || them.value === null) return { forMe: null, forThem: null, detail: '一方或双方缺少可比较的学习地点，此项按中性计入。' };
   const reasons: Note[] = [];
   const cautions: Note[] = [];
@@ -456,9 +500,9 @@ function rhythmPart(a: ProfileInput, b: ProfileInput): Part {
   };
 }
 
-function interestsPart(a: ProfileInput, b: ProfileInput): Part {
-  const x = answerSet(a.interests, INTEREST_VALUES, 'other', a.interestsOther);
-  const y = answerSet(b.interests, INTEREST_VALUES, 'other', b.interestsOther);
+function interestsPart(a: PreparedProfile, b: PreparedProfile): Part {
+  const x = a.interests;
+  const y = b.interests;
   const value = overlap(x, y);
   if (value === null) return { forMe: null, forThem: null, detail: '一方或双方未填写兴趣，此项按中性计入。' };
   const shared = common(x, y);
@@ -488,17 +532,25 @@ const tierOf = (score: number, coverage: number, dimensions: RecommendationDimen
  * 总分取两个方向的调和平均：只有双方都满意才会高分。
  */
 export function recommendationFor(a: ProfileInput, b: ProfileInput): RecommendationInfo | null {
-  if (hardFilter(a, b)) return null;
-  const commonSlots = commonSlotsOf(a, b);
+  return recommendationBetween(prepareProfile(a), prepareProfile(b));
+}
+
+/** 与 recommendationFor 相同，使用已经准备好的问卷（见 prepareProfile） */
+export function recommendationBetween(preparedA: PreparedProfile, preparedB: PreparedProfile): RecommendationInfo | null {
+  const a = preparedA.profile;
+  const b = preparedB.profile;
+  if (preferenceConflict(a, b)) return null;
+  const commonSlots = preparedA.slots.filter((slot) => preparedB.slotSet.has(slot));
+  if (!commonSlots.length) return null;
   const overlapHours = slotsHours(commonSlots);
   const parts: Record<DimensionKey, Part> = {
     time: timePart(a, b, commonSlots, overlapHours),
-    content: contentPart(a, b),
-    personality: personalityPart(a, b),
+    content: contentPart(preparedA, preparedB),
+    personality: personalityPart(preparedA, preparedB),
     style: stylePart(a, b),
-    places: placesPart(a, b),
+    places: placesPart(preparedA, preparedB),
     rhythm: rhythmPart(a, b),
-    interests: interestsPart(a, b),
+    interests: interestsPart(preparedA, preparedB),
   };
   const dimensions: RecommendationDimension[] = DIMENSION_ORDER.map((key) => {
     const part = parts[key];
@@ -544,7 +596,7 @@ export function recommendationFor(a: ProfileInput, b: ProfileInput): Recommendat
 }
 
 /** 稳定排序：契合度 ↓、信息覆盖 ↓、共同小时 ↓、用户 id ↑，与数据库顺序和刷新无关 */
-export function compareRecommendationCards(a: ProfileCard, b: ProfileCard): number {
+export function compareRecommendationCards(a: Pick<ProfileCard, 'id' | 'recommendation'>, b: Pick<ProfileCard, 'id' | 'recommendation'>): number {
   const left = a.recommendation!;
   const right = b.recommendation!;
   return right.score - left.score || right.coverage - left.coverage || right.overlapHours - left.overlapHours || a.id - b.id;

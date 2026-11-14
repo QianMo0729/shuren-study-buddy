@@ -29,6 +29,18 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       chunkSizeWarningLimit: 900,
+      // 字体已按 unicode-range 切片、用到才下载。小切片若被内联进 CSS，就成了每位访客都要下载的固定体积
+      assetsInlineLimit: (file) => (/\.woff2?$/.test(file) ? false : undefined),
+      rollupOptions: {
+        output: {
+          // 框架代码单独成块：发布新版本时它的内容不变，回访的同学不用重新下载。图标合成一块，不让每个共用的图标各占一个请求
+          manualChunks: (id) =>
+            /node_modules\/(react|react-dom|react-router|scheduler|motion|motion-dom|motion-utils|framer-motion)\//.test(id) ? 'vendor'
+              : id.includes('node_modules/lucide-react/') ? 'icons' : undefined,
+          // 多个页面共用的小模块（单个图标等）并入相邻分块，不各自占一个请求
+          experimentalMinChunkSize: 4096,
+        },
+      },
     },
   };
 });

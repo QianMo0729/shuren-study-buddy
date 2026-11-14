@@ -13,6 +13,7 @@ import { CategoryTag, InterestButton } from '../components/PostCard';
 import { Cover, Nickname } from '../components/ProfileCard';
 import { ReportDialog, TakedownDialog } from '../components/moderation';
 import { Seal } from '../components/brand';
+import { isStaff } from '../../shared/roles';
 
 export function EventDetail() {
   const { id } = useParams();
@@ -54,7 +55,7 @@ export function EventDetail() {
 
   return (
     <div className="mx-auto max-w-4xl pt-5 sm:pt-8">
-      <button onClick={() => nav('/community?tab=events')} className="-ml-1 mb-4 inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
+      <button onClick={() => nav('/community?tab=events')} className="-ml-1 mb-4 hidden md:inline-flex items-center gap-0.5 text-[14px] text-ink-2 hover:text-ink">
         <ChevronLeft size={17} /> 活动大厅
       </button>
 
@@ -123,7 +124,7 @@ export function EventDetail() {
                 </button>
               </>
             )}
-            {user?.role === 'admin' && !post.takenDown && (
+            {isStaff(user?.role) && !post.takenDown && (
               <Button variant="dangerOutline" size="sm" icon={<ShieldX size={14} />} onClick={() => setTakedown(true)}>
                 撤下帖子
               </Button>

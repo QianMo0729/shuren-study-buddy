@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CAMPUS, CAMPUS_PLACES, MAX_BUILDING_ACCURACY_M, NO_LOCATION_LABEL, OFF_CAMPUS_LABEL,
-  allPlaceLabels, getCampusPlace, isValidGeo, placeLabelFor, resolveLocation,
+  allPlaceLabels, getCampusPlace, isValidGeo, resolveLocation,
 } from '../shared/campusPlaces.ts';
 
 test('source catalog covers three libraries, teaching buildings, and individual dorms without fabricated missing numbers', () => {
@@ -16,6 +16,9 @@ test('source catalog covers three libraries, teaching buildings, and individual 
   for (const place of CAMPUS_PLACES) {
     assert.match(place.sourceUrl, /^https:\/\//);
     if (place.automatic) assert.ok(place.polygon && place.polygon.length >= 3, place.id);
+    for (const ring of [place.polygon ?? [], ...(place.holes ?? [])]) {
+      for (const point of ring) assert.ok(point.length === 2 && point.every(Number.isFinite), `${place.id}: [经度, 纬度]`);
+    }
     const result = resolveLocation({ lat: place.lat, lng: place.lng, accuracy: 5 });
     assert.equal(result.placeId, place.automatic ? place.id : null, place.id);
   }
@@ -56,25 +59,32 @@ test('building courtyards are excluded and poor GPS precision cannot widen recog
   }
 });
 
-test('Yidan stays manual only until its independent footprint is verified', () => {
+test('Yidan is the east wing of SUSTech Center; the rest of the center is not Yidan', () => {
   const yidan = getCampusPlace('yidan-library')!;
-  assert.equal(yidan.automatic, false);
-  assert.equal(resolveLocation({ lat: yidan.lat, lng: yidan.lng, accuracy: 1 }).placeId, null);
-  assert.equal(placeLabelFor(null, yidan.id), '南科大·一丹图书馆（手选）');
+  assert.equal(yidan.automatic, true);
+  assert.equal(resolveLocation({ lat: yidan.lat, lng: yidan.lng, accuracy: 5 }).label, `${CAMPUS.short}·一丹图书馆`);
+  // 社区导航里标注的一丹点位落在东翼内
+  assert.equal(resolveLocation({ lat: 22.60036695712506, lng: 113.9931979856845, accuracy: 5 }).placeId, 'yidan-library');
+  // 南科大中心西侧不是一丹
+  assert.equal(resolveLocation({ lat: 22.59998770717294, lng: 113.9923345196037, accuracy: 5 }).label, CAMPUS.name);
+  // 台阶形内院在楼外
+  const courtyard = yidan.holes![0];
+  const inCourtyard = {
+    lng: courtyard.reduce((sum, point) => sum + point[0], 0) / courtyard.length,
+    lat: courtyard.reduce((sum, point) => sum + point[1], 0) / courtyard.length,
+    accuracy: 1,
+  };
+  assert.equal(resolveLocation(inCourtyard).placeId, null);
 });
 
-test('manual building IDs are validated and are visibly distinguished from GPS labels', () => {
-  assert.equal(placeLabelFor(null, 'dorm-15'), '南科大·学生宿舍15栋（手选）');
-  const lynn = getCampusPlace('lynn-library')!;
-  const location = { lat: lynn.lat, lng: lynn.lng, accuracy: 5 };
-  assert.equal(placeLabelFor(location, 'dorm-15'), '南科大·学生宿舍15栋（手选）');
+test('building lookups only accept catalogue IDs and every label is listed for the watermark font', () => {
   for (const invalid of ['__proto__', 'constructor', '<script>', '南科大·伪造地点', 'dorm-15 ', '']) {
     assert.equal(getCampusPlace(invalid), undefined);
-    assert.equal(placeLabelFor(null, invalid), NO_LOCATION_LABEL);
-    assert.equal(placeLabelFor(location, invalid), '南科大·琳恩图书馆');
   }
   assert.equal(getCampusPlace({ id: 'dorm-15' }), undefined);
-  for (const place of CAMPUS_PLACES) assert.ok(allPlaceLabels().includes(placeLabelFor(null, place.id)));
+  assert.ok(!allPlaceLabels().some((label) => label.includes('手选')), 'places can no longer be picked by hand');
+  for (const place of CAMPUS_PLACES) assert.ok(allPlaceLabels().includes(`${CAMPUS.short}·${place.label}`));
+  assert.ok(allPlaceLabels().includes(NO_LOCATION_LABEL));
 });
 
 test('invalid coordinates and distant positions never become campus buildings', () => {

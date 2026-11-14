@@ -1,7 +1,8 @@
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ArrowDown, ChevronLeft, Copy, Flag, HeartOff, NotebookPen, UserRound, UserRoundX } from 'lucide-react';
+import { ArrowDown, ChevronLeft, Copy, Flag, Handshake, HeartOff, MessageSquareWarning, NotebookPen, UserRound, UserRoundX } from 'lucide-react';
+import { SENSITIVE_LABELS, type SensitiveCategory } from '../../../shared/activity';
 import type { ChatMessage, ChatSummary } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -10,6 +11,7 @@ import { Button, ConfirmDialog, Modal, Skeleton } from '../ui';
 import { ReportDialog } from '../moderation';
 import { ProfileOverlay } from '../ProfileOverlay';
 import { PrivateNoteDialog } from '../PrivateNote';
+import { BuddyBar, useBuddyActions } from '../buddy/BuddyActions';
 import { ChatAvatar } from './ChatAvatar';
 import { ChatMenu, type ChatMenuItem } from './ChatMenu';
 import { Composer } from './Composer';
@@ -17,8 +19,12 @@ import { ContactCard } from './ContactCard';
 import { MessageBubble, SystemNote } from './MessageBubble';
 import { needsSeparator, separatorTime } from './format';
 
-/** 页面可见时每 4 秒拉一次新消息 */
+/**
+ * 页面可见时轮询新消息：刚有消息往来时每 4 秒一次；会话安静下来以后逐步放慢，
+ * 收到新消息、自己发言或回到页面时恢复。
+ */
 const POLL_MS = 4000;
+const pollDelay = (quietMs: number) => (quietMs < 60_000 ? POLL_MS : quietMs < 5 * 60_000 ? 8000 : 15_000);
 const errorText = (cause: unknown) => (cause instanceof ApiError ? cause.message : '网络连接失败，请稍后重试');
 
 type Pending = { key: number; body: string; createdAt: string };
@@ -60,6 +66,8 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
   const [sheet, setSheet] = useState<ChatMessage | null>(null);
   const [confirm, setConfirm] = useState<'close' | 'exclude' | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  /** 命中需要提醒的敏感词：等发送人确认后再发 */
+  const [sensitive, setSensitive] = useState<{ body: string; labels: string[]; resolve: (ok: boolean) => void } | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   /** 下一次渲染后如何调整滚动位置：贴底，或在顶部插入旧消息后保持原位 */
@@ -72,6 +80,10 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
   const readUpTo = useRef(0);
   const sending = useRef(0);
   const polling = useRef(false);
+  /** 最近一次有消息往来（或打开会话、回到页面）的时间，决定轮询的间隔 */
+  const lastActivity = useRef(Date.now());
+  /** 立即按最新的间隔重新安排下一次轮询 */
+  const reschedule = useRef(() => {});
   const olderLoading = useRef(false);
   const alive = useRef(true);
   const tempKey = useRef(0);
@@ -123,6 +135,7 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
           const known = new Set(messagesRef.current.map((m) => m.id));
           const fresh = r.messages.filter((m) => !known.has(m.id));
           if (fresh.length) {
+            lastActivity.current = Date.now();
             if (nearBottom()) anchor.current = 'bottom';
             else if (fresh.some((m) => !m.mine)) setNewBelow(true);
             setMessages((list) => merge(list, r.messages));
@@ -164,20 +177,26 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
     let stopped = false;
     let timer = 0;
     const loop = () => {
+      window.clearTimeout(timer);
       timer = window.setTimeout(async () => {
         if (document.visibilityState === 'visible') await poll();
         if (!stopped) loop();
-      }, POLL_MS);
+      }, pollDelay(Date.now() - lastActivity.current));
     };
+    lastActivity.current = Date.now();
+    reschedule.current = loop;
     loop();
     const onVisibility = () => {
       if (document.visibilityState !== 'visible') return;
+      lastActivity.current = Date.now();
       markRead();
       void poll();
+      loop();
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       stopped = true;
+      reschedule.current = () => {};
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
@@ -237,23 +256,28 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
   };
 
   // ---------- 发送 ----------
-  const send = async (body: string): Promise<boolean> => {
+  const send = async (body: string, confirmSensitive = false): Promise<boolean> => {
     const key = ++tempKey.current;
     anchor.current = 'bottom';
     stick.current = true;
     setNewBelow(false);
     setPending((list) => [...list, { key, body, createdAt: new Date().toISOString() }]);
+    lastActivity.current = Date.now();
+    reschedule.current();
     sending.current += 1;
     let ok = false;
+    let needConfirm: string[] | null = null;
     try {
-      const r = await api.chat.send(matchId, body);
+      const r = await api.chat.send(matchId, body, confirmSensitive);
       if (alive.current) {
         anchor.current = 'bottom';
         setMessages((list) => merge(list, [r.message]));
       }
       ok = true;
     } catch (cause) {
-      if (alive.current) toast.error('发送失败', errorText(cause));
+      if (cause instanceof ApiError && cause.status === 409 && cause.data?.needConfirm) {
+        needConfirm = (cause.data.sensitive as SensitiveCategory[]).map((c) => SENSITIVE_LABELS[c] ?? c);
+      } else if (alive.current) toast.error('发送失败', errorText(cause));
     } finally {
       sending.current -= 1;
       if (alive.current) {
@@ -263,6 +287,10 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
         onActivityRef.current();
       }
     }
+    if (needConfirm && alive.current) {
+      const labels = needConfirm;
+      return new Promise<boolean>((resolve) => setSensitive({ body, labels, resolve }));
+    }
     return ok;
   };
 
@@ -270,6 +298,18 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
     setReport({ type, id });
     setReportOpen(true);
   };
+
+  /** 举报这段对话：以对方最近的一条消息为准，附带前后各 20 条 */
+  const reportConversation = () => {
+    const last = [...messagesRef.current].reverse().find((m) => !m.mine && m.kind === 'text');
+    if (!last) {
+      toast.error('对方还没有发过消息', '可以在菜单里举报这位同学');
+      return;
+    }
+    openReport('message', last.id);
+  };
+
+  const buddy = useBuddyActions(() => { void poll(); onActivityRef.current(); });
 
   const copy = async (text: string) => {
     try {
@@ -342,11 +382,14 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
 
   const other = summary.other;
   const closed = summary.status === 'closed';
+  const bound = summary.buddy?.state === 'bound';
   const menu: ChatMenuItem[] = [
     { label: '查看主页', icon: UserRound, onSelect: () => setProfileOpen(true) },
     { label: '私人备注', icon: NotebookPen, onSelect: () => setNoteOpen(true) },
+    ...(!closed && summary.buddy?.state === 'none' ? [{ label: '邀请成为学习搭子', icon: Handshake, onSelect: () => buddy.invite(other.id, other.nickname) }] : []),
     ...(closed ? [] : [{ label: '解除配对', icon: HeartOff, onSelect: () => setConfirm('close') }]),
     { label: '排除这位同学', icon: UserRoundX, onSelect: () => setConfirm('exclude'), danger: true },
+    { label: '举报这段对话', icon: MessageSquareWarning, onSelect: reportConversation, danger: true },
     { label: '举报这位同学', icon: Flag, onSelect: () => openReport('profile', other.id), danger: true },
   ];
 
@@ -370,6 +413,7 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
           message={m}
           onActions={() => setSheet(m)}
           onReport={m.mine ? undefined : () => openReport('message', m.id)}
+          onReportFlagged={!m.mine && m.flags?.length ? () => openReport('message', m.id) : undefined}
         />,
       );
     }
@@ -390,13 +434,15 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
           <ChatAvatar nickname={other.nickname} cover={other.cover} className="size-9" />
           <span className="min-w-0">
             <span className="block truncate font-display text-[17px] leading-tight text-ink">{other.privateNote?.remarkName || other.nickname}</span>
-            <span className="block truncate text-[12px] text-ink-3">{other.privateNote?.remarkName ? `原昵称：${other.nickname} · ` : ''}{closed ? '配对已解除' : '你们互相感兴趣'}</span>
+            <span className="block truncate text-[12px] text-ink-3">{other.privateNote?.remarkName ? `原昵称：${other.nickname} · ` : ''}{closed ? '配对已解除' : bound ? '你们是学习搭子' : '你们互相感兴趣'}</span>
           </span>
         </button>
         <ChatMenu items={menu} />
       </header>
 
+      {!closed && summary.buddy && <BuddyBar relation={summary.buddy} nickname={other.nickname} onChanged={() => { void poll(); onActivityRef.current(); }} />}
       {!closed && <ContactCard other={other} contactState={summary.contactState} onChanged={() => void poll()} />}
+      {buddy.dialog}
 
       <div className="relative min-h-0 flex-1">
         <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain bg-paper px-2 py-3 sm:px-4">
@@ -445,14 +491,16 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
         onClose={() => setReportOpen(false)}
         targetType={report.type}
         targetId={report.id}
-        // 举报「这位同学」不会附带聊天内容；想让管理员看到某条消息，要举报那一条
-        note={report.type === 'profile' ? <>想让管理员看到某一条消息？<span className="[@media(pointer:coarse)]:hidden">把鼠标移到那条消息上，点旁边的小旗。</span><span className="hidden [@media(pointer:coarse)]:inline">长按那条消息，选「举报这条消息」。</span></> : undefined}
+        // 举报「这位同学」不会附带聊天内容；举报消息会附带前后各 20 条，管理员只能看到这一段
+        note={report.type === 'profile'
+          ? <>想让管理员看到聊天内容？在菜单里选「举报这段对话」，或<span className="[@media(pointer:coarse)]:hidden">把鼠标移到某条消息上，点旁边的小旗。</span><span className="hidden [@media(pointer:coarse)]:inline">长按某条消息，选「举报这条消息」。</span></>
+          : '举报时会把这条消息和它前后各 20 条对话一起提交，只有管理员能看到，用于核实。'}
       />
 
       <ConfirmDialog
         open={confirm === 'close'}
         title="解除配对？"
-        desc="解除后聊天会关闭，双方都不能再发送消息，也不再互相展示联系方式；之后不会再向你推荐这位同学。对方不会收到通知，但会在聊天里看到「配对已解除」。想恢复时，可以在「我的 → 推荐偏好」把 TA 放回推荐，双方再次选「感兴趣」后重新配对。"
+        desc="解除后聊天会关闭，双方都不能再发送消息，也不再互相展示联系方式；如果你们绑定了学习搭子，绑定会一并解除、搭子积分清零；之后不会再向你推荐这位同学。对方不会收到通知，但会在聊天里看到「配对已解除」。想恢复时，可以在「我的 → 推荐偏好」把 TA 放回推荐，双方再次选「感兴趣」后重新配对。"
         confirmText="解除配对"
         tone="danger"
         loading={confirmBusy}
@@ -462,12 +510,25 @@ export function ChatWindow({ matchId, onActivity, onGone }: {
       <ConfirmDialog
         open={confirm === 'exclude'}
         title="排除这位同学？"
-        desc="排除后，双方将不再出现在彼此的匹配结果中，联系方式交换也会停止，这段聊天会关闭并从双方的私聊列表中隐藏。对方不会收到提示；你可以在「我的」中取消排除。"
+        desc="排除后，双方将不再出现在彼此的匹配结果中，联系方式交换也会停止，这段聊天会关闭并从双方的私聊列表中隐藏；已绑定的学习搭子也会解除。对方不会收到被排除的提示；你可以在「我的」中取消排除。"
         confirmText="确认排除"
         tone="danger"
         loading={confirmBusy}
         onCancel={() => { if (!confirmBusy) setConfirm(null); }}
         onConfirm={() => void exclude()}
+      />
+
+      <ConfirmDialog
+        open={!!sensitive}
+        title="确认发送这条消息？"
+        desc={sensitive ? `这条消息可能涉及${sensitive.labels.join('、')}内容。请文明交流；发出后对方会看到提示，也可以举报。` : ''}
+        confirmText="仍然发送"
+        onCancel={() => { sensitive?.resolve(false); setSensitive(null); }}
+        onConfirm={() => {
+          const pendingSend = sensitive;
+          setSensitive(null);
+          if (pendingSend) void send(pendingSend.body, true).then(pendingSend.resolve);
+        }}
       />
 
       {noteOpen && <PrivateNoteDialog key={other.id} targetId={other.id} nickname={other.nickname} value={other.privateNote ?? null} onClose={() => setNoteOpen(false)} onSaved={(privateNote) => {

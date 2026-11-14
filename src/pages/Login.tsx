@@ -37,8 +37,7 @@ export function Login() {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousScreen = useRef(`${mode}:identity`);
   const [step, setStep] = useState<Step>('identity');
-  const [studentId, setStudentId] = useState('');
-  const [email, setEmail] = useState(() => normalizeStudentEmail(params.get('email')) ?? '');
+  const [studentId, setStudentId] = useState(() => normalizeStudentEmail(params.get('email'))?.split('@')[0] ?? '');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -53,9 +52,8 @@ export function Login() {
   const [now, setNow] = useState(Date.now());
   const validStudentId = /^[0-9]{8}$/.test(studentId);
   const fullEmail = `${studentId}@${STUDENT_EMAIL_DOMAIN}`;
-  const normalizedEmail = normalizeStudentEmail(email);
-  const recipient = mode === 'activate' ? fullEmail : normalizedEmail ?? email.trim().toLowerCase();
-  const cooldownKey = `${mode}:${recipient}`;
+  const normalizedEmail = normalizeStudentEmail(fullEmail);
+  const cooldownKey = `${mode}:${fullEmail}`;
   const cooldown = Math.max(0, Math.ceil(((deadlines[cooldownKey] ?? 0) - now) / 1000));
   const next = safeNext(params.get('next'));
   const disabled = loading || busy !== null;
@@ -65,7 +63,7 @@ export function Login() {
   const titles = { login: '欢迎回到树仁搭子', activate: step === 'password' ? '设置你的登录密码' : '激活你的搭子账号', reset: '重新设置登录密码' };
 
   useEffect(() => {
-    if (!loading && user && mode !== 'reset') nav(mode === 'activate' || !user.questionnaireComplete ? '/me/edit?onboarding=1' : next || '/match', { replace: true });
+    if (!loading && user && mode !== 'reset') nav(mode === 'activate' || !user.questionnaireComplete ? '/me/edit?onboarding=1' : next || '/today', { replace: true });
   }, [user, loading, mode, nav, next]);
 
   useEffect(() => {
@@ -131,7 +129,7 @@ export function Login() {
     setNotice(null);
     try {
       const result = mode === 'activate' ? await api.requestActivationCode(studentId) : await api.requestResetCode(normalizedEmail!);
-      setSentAddress(recipient);
+      setSentAddress(fullEmail);
       setCode('');
       setDevCode(import.meta.env.DEV ? result.devCode ?? null : null);
       setDeadlines((values) => ({ ...values, [cooldownKey]: Date.now() + 60_000 }));
@@ -173,7 +171,6 @@ export function Login() {
         const result = await api.verifyActivationCode(studentId, code);
         setSetupToken(result.setupToken);
         setVerifiedEmail(result.email);
-        setEmail(result.email);
         setCode('');
         setDevCode(null);
         setStep('password');
@@ -261,17 +258,14 @@ export function Login() {
                   <p className="mt-1 break-all text-[14px] text-ink">{verifiedEmail}</p>
                   <button type="button" onClick={restartVerification} disabled={disabled} className="mt-1 text-[12.5px] text-ink-3 underline">重新验证邮箱</button>
                 </div>
-              ) : mode === 'activate' ? (
-                <Field label="学号" hint={step === 'identity' ? '只需输入 8 位学号，验证码将发送到对应学校邮箱。' : undefined}>
+              ) : (
+                <Field label={mode === 'activate' ? '学号' : '学校邮箱'} hint={mode === 'activate' && step === 'identity' ? '只需输入 8 位学号，验证码将发送到对应学校邮箱。' : undefined}>
                   <div className="flex h-11 items-center overflow-hidden rounded-md border border-line-strong bg-surface transition-[border-color,box-shadow] focus-within:border-brand focus-within:shadow-[0_0_0_3px_var(--brand-soft)]">
                     <Mail size={17} className="ml-3 shrink-0 text-ink-3" aria-hidden />
-                    <input value={studentId} onChange={(event) => { setStudentId(event.target.value.replace(/[^0-9]/g, '').slice(0, 8)); setError(null); }} aria-label="8 位学号" aria-describedby="school-email-domain" name="studentId" type="text" inputMode="numeric" autoComplete="username" pattern="[0-9]{8}" maxLength={8} required disabled={disabled || step === 'code'} placeholder="请输入你的学号" className="tabular h-full min-w-0 flex-1 bg-transparent px-2.5 text-[16px] text-ink outline-none disabled:opacity-60 sm:text-[15px]" />
+                    {/* Pasting or autofilling a full address keeps only the digits, so saved logins from the old full-email form still work. */}
+                    <input value={studentId} onChange={(event) => { setStudentId(event.target.value.replace(/[^0-9]/g, '').slice(0, 8)); setError(null); }} aria-label="8 位学号" aria-describedby="school-email-domain" name="studentId" type="text" inputMode="numeric" autoComplete="username" pattern="[0-9]{8}" maxLength={8} required disabled={disabled || step === 'code'} placeholder={mode === 'activate' ? '请输入你的学号' : '学号'} className="tabular h-full min-w-0 flex-1 bg-transparent px-2.5 text-[16px] text-ink outline-none disabled:opacity-60 sm:text-[15px]" />
                     <span id="school-email-domain" className="shrink-0 border-l border-line px-2 text-[11px] text-ink-3 sm:px-3 sm:text-[13px]">@{STUDENT_EMAIL_DOMAIN}</span>
                   </div>
-                </Field>
-              ) : (
-                <Field label="学校邮箱">
-                  <Input value={email} onChange={(event) => { setEmail(event.target.value); setError(null); }} aria-label="学校邮箱" name="email" type="email" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck={false} required disabled={disabled || (mode === 'reset' && step === 'code')} placeholder="请输入学校邮箱" leading={<Mail size={17} aria-hidden />} />
                 </Field>
               )}
 
@@ -279,7 +273,7 @@ export function Login() {
                 <Field label="邮箱验证码" aside={<button type="button" onClick={sendCode} disabled={disabled || cooldown > 0} className="tabular text-[12.5px] text-brand-text hover:underline disabled:text-ink-4 disabled:no-underline">{busy === 'send' ? '发送中…' : cooldown > 0 ? `${cooldown}s 后重新发送` : '重新发送验证码'}</button>}>
                   <Input value={code} onChange={(event) => { setCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 6)); setError(null); }} aria-label="6 位邮箱验证码" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required disabled={disabled} placeholder="输入 6 位验证码" className="tabular tracking-[0.2em] placeholder:tracking-normal" />
                   <p className="mt-2.5 text-[13px] leading-relaxed text-ink-2" role="status">{mode === 'activate' ? `请查收 ${sentAddress} 的邮件，验证码 10 分钟内有效。已激活过的学号不会收到验证码，请直接登录。` : `如果 ${sentAddress} 对应已激活账号，将收到验证码，10 分钟内有效。`}</p>
-                  <button type="button" onClick={restartVerification} disabled={disabled} className="mt-1 text-[12.5px] text-brand-text underline">{mode === 'activate' ? '修改学号' : '修改邮箱'}</button>
+                  <button type="button" onClick={restartVerification} disabled={disabled} className="mt-1 text-[12.5px] text-brand-text underline">修改学号</button>
                   {devCode && import.meta.env.DEV && <p className="mt-2.5 flex items-center gap-2 rounded-lg bg-paper-2 px-3 py-2 text-[13px] text-ink-2">开发模式验证码 <b className="font-semibold tracking-wider tabular">{devCode}</b><button type="button" disabled={disabled} className="ml-auto underline" onClick={() => setCode(devCode)}>填入</button></p>}
                 </Field>
               )}

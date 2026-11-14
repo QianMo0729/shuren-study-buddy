@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS forum_comments (
   reviewed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_forum_comments_target ON forum_comments(target_type, target_id, id);
+CREATE INDEX IF NOT EXISTS idx_forum_comments_user ON forum_comments(user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS forum_likes (
   target_type TEXT NOT NULL CHECK(target_type IN ('post', 'checkin')),

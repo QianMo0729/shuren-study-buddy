@@ -1,8 +1,11 @@
 import { Router, type Request } from 'express';
+import { isStaff } from '../../shared/roles.ts';
 import type { ForumTargetType, MatchInfo } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import { q, tx } from '../db.ts';
 import { applyAutoModeration } from '../autoModeration.ts';
+import { assertPostEditable, createClaim, withdrawClaimOfPost } from '../bonus.ts';
+import { touchScores } from '../scoring.ts';
 import {
   FORUM_LIMITS, type ForumPostRow, type ForumCommentRow, type Viewer, authorResolver, excerpt, getCommentRow, getPostRow,
   notExcludedSql, postVisibleTo, toForumComment, toForumPost, toForumPosts,
@@ -103,10 +106,13 @@ forumRouter.get('/posts', (req, res) => {
   const uid = viewer.id;
   rateLimit(`forum-list:${uid}`, 240, 60_000);
   const mine = req.query.mine === '1' || req.query.mine === 'true';
+  // 只看学习分享（申请了 Bonus、未被驳回的帖子）
+  const share = req.query.share === '1' || req.query.share === 'true';
   const before = parseId(req.query.before);
   const tokens = tokenize(String(req.query.q ?? '').slice(0, 100));
   const size = FORUM_LIMITS.pageSize;
-  const mineSql = mine ? ' AND p.user_id = ?' : '';
+  const mineSql = (mine ? ' AND p.user_id = ?' : '')
+    + (share ? " AND EXISTS (SELECT 1 FROM bonus_claims b WHERE b.post_id = p.id AND b.status IN ('pending', 'approved'))" : '');
   const mineParams = mine ? [uid] : [];
 
   if (!tokens.length) {
@@ -151,6 +157,8 @@ forumRouter.post('/posts', (req, res) => {
   ensureProfile(uid); // 作者以系统昵称展示
   const id = tx(() => {
     const id = Number(q.run('INSERT INTO forum_posts (user_id, title, body, images) VALUES (?, ?, ?, ?)', uid, p.title, p.body, JSON.stringify(p.images)).lastInsertRowid);
+    // 申请 Bonus 的学习分享：条件不满足时整个发帖回滚，并告诉作者差在哪里
+    if (req.body?.bonus === true) createClaim(uid, id, p.body, p.images);
     applyAutoModeration('forum_posts', id, `${p.title}\n${p.body}`);
     return id;
   });
@@ -176,6 +184,7 @@ forumRouter.put('/posts/:id', (req, res) => {
   rateLimit(`forum-edit:${uid}`, 30, 3600_000);
   const row = ownPost(parseId(req.params.id), uid);
   const p = sanitizePost(req.body, uid);
+  assertPostEditable(row.id, p.body, p.images);
   tx(() => {
     q.run("UPDATE forum_posts SET title = ?, body = ?, images = ?, updated_at = datetime('now') WHERE id = ?", p.title, p.body, JSON.stringify(p.images), row.id);
     applyAutoModeration('forum_posts', row.id, `${p.title}\n${p.body}`);
@@ -185,7 +194,11 @@ forumRouter.put('/posts/:id', (req, res) => {
 
 forumRouter.delete('/posts/:id', (req, res) => {
   const row = ownPost(parseId(req.params.id), req.user!.id);
-  q.run('UPDATE forum_posts SET deleted = 1 WHERE id = ?', row.id);
+  tx(() => {
+    q.run('UPDATE forum_posts SET deleted = 1 WHERE id = ?', row.id);
+    withdrawClaimOfPost(row.id);
+  });
+  touchScores();
   res.json({ ok: true });
 });
 
@@ -248,7 +261,7 @@ function target(req: Request, readOnly: boolean) {
   const t = contentTargetFor(type);
   const uid = req.user!.id;
   if (!t || !id) throw new HttpError(404, '内容不存在或已删除');
-  const ok = t.canView(uid, id) || (readOnly && t.ownerOf(id) !== null && (t.ownerOf(id) === uid || req.user!.role === 'admin'));
+  const ok = t.canView(uid, id) || (readOnly && t.ownerOf(id) !== null && (t.ownerOf(id) === uid || isStaff(req.user!.role)));
   if (!ok) throw new HttpError(404, '内容不存在或已删除');
   return { type, id, t, uid };
 }

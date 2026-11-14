@@ -9,8 +9,10 @@ import { AdvancedSearch, PROFILE_FIELDS, activeCount, fieldLabel } from '../comp
 import { CardSkeleton, ProfileCard } from '../components/ProfileCard';
 import { ProfileOverlay } from '../components/ProfileOverlay';
 import { MajorSelect, SubjectsInput } from '../components/profileForm';
-import { Button, Empty, Field, Input, Modal } from '../components/ui';
-import { MatchTabs } from './Match';
+import { Button, Empty, Field, Input, Modal, PageHeader } from '../components/ui';
+
+/** 输入的是同学的 ID（系统昵称或末尾编号，如「白鹭KLM23」「KLM23」）时，直接按 ID 查找 */
+export const looksLikeId = (text: string) => /^[\p{Script=Han}]{0,6}\s*[A-Za-z]{3}\s*\d{2}$/u.test(text.normalize('NFKC').trim());
 
 const initialQuery = (): AdvancedQuery => ({
   criteria: ['major', 'subjects', 'overlap'].map((field) => ({ field: field as CriterionField, mode: 'must', values: [] })),
@@ -56,7 +58,9 @@ export function PeopleSearch() {
     setLoading(true);
     setError('');
     try {
-      const result = await api.advancedSearch({ ...applied.query, keyword: applied.keyword });
+      const result = looksLikeId(applied.keyword)
+        ? await api.lookup(applied.keyword).then((r) => ({ items: r.items, total: r.items.length }))
+        : await api.advancedSearch({ ...applied.query, keyword: applied.keyword });
       if (id !== requestId.current) return;
       setItems(result.items);
       setTotal(result.total);
@@ -91,15 +95,11 @@ export function PeopleSearch() {
   };
 
   return <div className="pb-10">
-    <header className="mb-5 border-b border-ink pt-5 pb-4 sm:pt-10 sm:pb-5">
-      <h1 className="font-display text-[30px] leading-[1.1] text-ink sm:text-[46px]">找同学</h1>
-      <p className="mt-2 text-[14px] text-ink-2">按专业、学习科目和共同空闲时间主动查找，搜索不占用每日推荐名额。</p>
-      <MatchTabs active="search" />
-    </header>
+    <PageHeader title="找同学" desc="按专业、学习科目和共同空闲时间主动查找，搜索不占用每日推荐名额。" />
 
     <form onSubmit={(event) => { event.preventDefault(); runSearch(); }} className="rounded-lg border border-line bg-surface p-4 sm:p-5">
-      <Field label="自我介绍关键词" hint="关键词只检索同学的自我介绍；专业和课程请使用下方筛选。">
-        <Input aria-label="搜索同学的自我介绍" value={keyword} onChange={(event) => setKeyword(event.target.value)} maxLength={100} leading={<Search size={16} />} placeholder="例如：早起、图书馆、一起复习" enterKeyHint="search" />
+      <Field label="自我介绍关键词或同学的 ID" hint="关键词只检索同学的自我介绍；已经认识的同学可以直接输入对方的 ID（如 白鹭KLM23）。专业和课程请使用下方筛选。">
+        <Input aria-label="搜索同学的自我介绍或 ID" value={keyword} onChange={(event) => setKeyword(event.target.value)} maxLength={100} leading={<Search size={16} />} placeholder="例如：早起、图书馆，或 白鹭KLM23" enterKeyHint="search" />
       </Field>
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Field label="专业" hint={modeHint('major')}><MajorSelect value={criterion('major')?.values[0] ?? ''} onChange={(value) => setValues('major', value ? [value] : [])} placeholder="不限专业" allowClear /></Field>
@@ -122,9 +122,10 @@ export function PeopleSearch() {
     <Modal open={subjectsOpen} onClose={() => setSubjectsOpen(false)} title="选择学习科目 / 考试" size="lg"><div className="p-4 sm:p-5"><SubjectsInput value={criterion('subjects')?.values ?? []} onChange={(values) => setValues('subjects', values)} max={8} /><div className="mt-4 flex justify-end gap-2"><Button onClick={() => setValues('subjects', [])}>不限科目</Button><Button variant="primary" onClick={() => setSubjectsOpen(false)}>完成选择</Button></div></div></Modal>
     {advanced && <div id="people-advanced" className="mt-3 rounded-lg border border-line"><AdvancedSearch query={query} onChange={setQuery} onSearch={() => runSearch()} onReset={reset} busy={loading} fields={PROFILE_FIELDS} title="同学高级筛选" /></div>}
 
-    <p className="mt-5 mb-3 text-[13px] text-ink-3" aria-live="polite">{loading ? '正在查找同学…' : error ? '本次搜索未完成' : `找到 ${total} 位同学${count ? ` · ${count} 项筛选条件` : ''}${applied.keyword ? ` · 自我介绍包含「${applied.keyword}」` : ''}`}</p>
+    <p className="mt-5 mb-3 text-[13px] text-ink-3" aria-live="polite">{loading ? '正在查找同学…' : error ? '本次搜索未完成' : looksLikeId(applied.keyword) ? `按 ID「${applied.keyword}」找到 ${total} 位同学` : `找到 ${total} 位同学${count ? ` · ${count} 项筛选条件` : ''}${applied.keyword ? ` · 自我介绍包含「${applied.keyword}」` : ''}`}</p>
     {loading ? <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 4 }, (_, index) => <CardSkeleton key={index} />)}</div>
       : error ? <Empty title="暂时无法查找同学" desc={error} action={<Button onClick={() => void load()}>重试</Button>} />
+      : !items.length && looksLikeId(applied.keyword) ? <Empty title="没有找到这个 ID" desc="请确认 ID 是否输入正确。对方的主页需要已经发布；把对方排除了的话也搜不到。" />
       : !items.length ? <Empty title="没有找到符合条件的同学" desc="可以减少筛选条件，换一个自我介绍关键词，或在高级筛选中调整匹配方式。" action={<Button onClick={() => setAdvanced(true)}>调整筛选</Button>} />
       : <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">{items.map((card, index) => <ProfileCard key={card.id} card={card} index={index} matchLabels={(key) => fieldLabel(key.split(':')[1] ?? key)} onOpen={() => nav({ pathname: `/match/search/u/${card.id}`, search: location.search })} />)}</div>}
 

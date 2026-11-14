@@ -4,7 +4,9 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Lock, X } from 'lucide-react';
+import { Link, useLocation } from 'react-router';
 import { cx } from '../lib/format';
+import { MeAvatar, isTabRoot } from './Shell';
 import { ease, spring } from '../lib/motion';
 
 // ---------------- Button ----------------
@@ -88,15 +90,65 @@ export function Spinner({ className }: { className?: string }) {
 // ---------------- Layout ----------------
 
 /** 页面标题：一行标题 + 一句说明，右侧放操作 */
-export function PageHeader({ title, desc, actions, className }: { title: ReactNode; desc?: ReactNode; actions?: ReactNode; className?: string }) {
+/**
+ * 页面大标题（苹果式 Large Title）：小字的上方说明 + 粗体标题。
+ * 手机端的四个分区页右上角是本人头像，点开进入「我的」。
+ */
+export function PageHeader({ title, eyebrow, desc, actions, className }: { title: ReactNode; eyebrow?: ReactNode; desc?: ReactNode; actions?: ReactNode; className?: string }) {
+  const { pathname } = useLocation();
+  const avatar = isTabRoot(pathname);
   return (
-    <header className={cx('flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-ink pt-7 pb-5 mb-6 sm:pt-12', className)}>
-      <div className="min-w-0">
-        <h1 className="font-display text-[34px] leading-[1.1] tracking-[-0.02em] text-ink sm:text-[46px]">{title}</h1>
-        {desc && <p className="mt-2.5 max-w-[40em] text-[15px] text-ink-2">{desc}</p>}
+    <header className={cx('mb-4 pt-[calc(env(safe-area-inset-top)+14px)] md:pt-10', className)}>
+      <div className="flex items-end justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          {eyebrow && <p className="text-[13px] font-semibold tracking-[0.2px] text-ink-3">{eyebrow}</p>}
+          <h1 className="text-[34px] leading-[41px] font-bold tracking-[0.3px] text-ink">{title}</h1>
+        </div>
+        {(actions || avatar) && (
+          <div className="mb-[3px] flex shrink-0 items-center gap-2.5">
+            {actions}
+            {avatar && (
+              <Link to="/me" aria-label="我的" className="block rounded-full md:hidden">
+                <MeAvatar className="size-9" />
+              </Link>
+            )}
+          </div>
+        )}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {desc && <p className="mt-1.5 max-w-[40em] text-[15px] text-ink-3">{desc}</p>}
     </header>
+  );
+}
+
+/** 圆形图标按钮（大标题右侧）：浅灰底 36px */
+export function CircleButton({ label, onClick, to, children }: { label: string; onClick?: () => void; to?: string; children: ReactNode }) {
+  const cls = 'grid size-9 place-items-center rounded-full bg-paper-2 text-ink hover:bg-ink/[.1]';
+  return to ? <Link to={to} aria-label={label} className={cls}>{children}</Link> : <button type="button" aria-label={label} onClick={onClick} className={cls}>{children}</button>;
+}
+
+/** 分组列表（设置式白色圆角卡片），子元素是 ListRow */
+export function GroupList({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cx('overflow-hidden rounded-2xl bg-surface [&>*+*]:border-t-[0.5px] [&>*+*]:border-line', className)}>{children}</div>;
+}
+
+/** 分段控件（iOS 式）：用链接或按钮切换 */
+export function SegmentBar({ items, value, onChange, label, className }: {
+  items: { value: string; label: ReactNode; to?: string }[];
+  value: string;
+  onChange?: (v: string) => void;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <div role="tablist" aria-label={label} className={cx('grid h-[34px] rounded-[10px] bg-paper-2 p-0.5', className)} style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+      {items.map((it) => {
+        const on = it.value === value;
+        const cls = cx('grid place-items-center rounded-[8px] text-[13px] text-ink', on ? 'bg-surface font-semibold shadow-[0_2px_6px_rgba(28,35,32,0.10)]' : 'font-medium');
+        return it.to
+          ? <Link key={it.value} to={it.to} role="tab" aria-selected={on} replace className={cls}>{it.label}</Link>
+          : <button key={it.value} type="button" role="tab" aria-selected={on} onClick={() => onChange?.(it.value)} className={cls}>{it.label}</button>;
+      })}
+    </div>
   );
 }
 

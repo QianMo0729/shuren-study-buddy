@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import path from 'node:path';
 import { config } from './config.ts';
 
@@ -157,24 +157,54 @@ if (!(db.prepare('PRAGMA table_info(uploads)').all() as { name: string }[]).some
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+-- 未读通知数随 /api/auth/me 每 30 秒查询一次，不能扫全表
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_target ON favorites(target_id);
+CREATE INDEX IF NOT EXISTS idx_contact_views_target ON contact_views(target_id);
+CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);
+CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_post_interests_user ON post_interests(user_id);
 `);
 
 type Row = Record<string, any>;
 
+// 同一条 SQL 只编译一次。拼出来的 SQL（如 IN 列表）种类有限，超出上限时淘汰最久没有用过的
+const STATEMENT_CACHE_MAX = 500;
+const statements = new Map<string, StatementSync>();
+
+function statement(sql: string): StatementSync {
+  let stmt = statements.get(sql);
+  if (stmt) {
+    // 用过的挪到最后，常用的语句不会被淘汰
+    statements.delete(sql);
+  } else {
+    stmt = db.prepare(sql);
+    if (statements.size >= STATEMENT_CACHE_MAX) statements.delete(statements.keys().next().value!);
+  }
+  statements.set(sql, stmt);
+  return stmt;
+}
+
 export const q = {
   get<T = Row>(sql: string, ...params: any[]): T | undefined {
-    return db.prepare(sql).get(...params) as T | undefined;
+    return statement(sql).get(...params) as T | undefined;
   },
   all<T = Row>(sql: string, ...params: any[]): T[] {
-    return db.prepare(sql).all(...params) as T[];
+    return statement(sql).all(...params) as T[];
   },
   run(sql: string, ...params: any[]) {
-    return db.prepare(sql).run(...params);
+    return statement(sql).run(...params);
   },
 };
 
+let txDepth = 0;
+
+/** 可以嵌套：内层并入最外层事务，只在最外层提交；任何一层抛出异常都会让整个事务回滚 */
 export function tx<T>(fn: () => T): T {
+  if (txDepth > 0) return fn();
   db.exec('BEGIN');
+  txDepth++;
   try {
     const out = fn();
     db.exec('COMMIT');
@@ -182,6 +212,8 @@ export function tx<T>(fn: () => T): T {
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
+  } finally {
+    txDepth--;
   }
 }
 

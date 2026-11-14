@@ -1,5 +1,6 @@
+import type { ActivityConfig, SensitiveCategory } from '../../shared/activity';
 import type {
-  AdvancedQuery, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal, ContentReviewState,
+  AdvancedQuery, BuddyStatus, LeaderboardResponse, Role, SeasonInfo, ShurenMember, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal, ContentReviewState,
   DeckCard, DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, ForumComment, ForumPost, ForumTargetType, ModerationTargetType,
   MyProfile, NotificationItem, Post, PostSearchQuery, ProfileCard, ProfileDraft, ProfileInput, PublicProfile, QuestionnaireSection, RecommendationResponse, ReportTargetType, SessionUser,
 } from '../../shared/types';
@@ -14,13 +15,40 @@ export class ApiError extends Error {
   }
 }
 
+const DEVICE_KEY = 'dz-device';
+let device: string | null | undefined;
+
+/**
+ * 本浏览器的随机编号，随请求发给服务器（服务器只保存它的哈希），用来标记「一台设备登录多个账号」「一部手机替两人打卡」。
+ * 网页拿不到 MAC 地址等硬件信息；清除浏览器数据后会换一个新编号。
+ */
+function deviceId(): string | null {
+  if (device !== undefined) return device;
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id || !/^[A-Za-z0-9_-]{16,64}$/.test(id)) {
+      const bytes = crypto.getRandomValues(new Uint8Array(18));
+      id = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    device = id;
+  } catch {
+    device = null;
+  }
+  return device;
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   let res: Response;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const id = deviceId();
+  if (id) headers['X-Device-Id'] = id;
   try {
     res = await fetch(`/api${url}`, {
       method,
       credentials: 'same-origin',
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -88,6 +116,8 @@ export const api = {
   square: (q = '', sort = 'latest') =>
     get<{ items: ProfileCard[]; total: number }>(`/profiles?q=${encodeURIComponent(q)}&sort=${sort}`),
   recommendations: () => get<RecommendationResponse>('/profiles/recommendations'),
+  /** 按 ID（系统昵称或末尾编号）查找同学 */
+  lookup: (id: string) => get<{ items: ProfileCard[] }>(`/profiles/lookup${qs({ id })}`),
   advancedSearch: (query: AdvancedQuery & { keyword?: string }) =>
     post<{ items: ProfileCard[]; total: number }>('/profiles/search', query),
   favorites: () => get<{ items: ProfileCard[] }>('/profiles/favorites'),
@@ -113,16 +143,17 @@ export const api = {
     /** after：只取比该 id 新的消息（轮询）；before：取更早的消息（向上翻页） */
     messages: (matchId: number, p: { after?: number; before?: number } = {}) =>
       get<{ summary: ChatSummary; messages: ChatMessage[]; hasMore: boolean }>(`/chat/${matchId}${qs(p)}`),
-    send: (matchId: number, body: string) => post<{ message: ChatMessage }>(`/chat/${matchId}/messages`, { body }),
+    /** confirm：命中需要提醒的敏感词时，发送人确认后再发一次 */
+    send: (matchId: number, body: string, confirm = false) => post<{ message: ChatMessage }>(`/chat/${matchId}/messages`, { body, ...(confirm ? { confirm } : {}) }),
     read: (matchId: number, lastId: number) => post<{ ok: true }>(`/chat/${matchId}/read`, { lastId }),
     close: (matchId: number) => post<{ ok: true }>(`/chat/${matchId}/close`),
   },
 
   // ---------- 社区：聊天区 ----------
   forum: {
-    posts: (p: { q?: string; mine?: boolean; before?: number } = {}) => get<{ items: ForumPost[]; hasMore: boolean }>(`/forum/posts${qs(p)}`),
+    posts: (p: { q?: string; mine?: boolean; share?: boolean; before?: number } = {}) => get<{ items: ForumPost[]; hasMore: boolean }>(`/forum/posts${qs(p)}`),
     post: (id: number) => get<{ post: ForumPost }>(`/forum/posts/${id}`),
-    create: (b: { title: string; body: string; images: string[] }) => post<{ post: ForumPost }>('/forum/posts', b),
+    create: (b: { title: string; body: string; images: string[]; bonus?: boolean }) => post<{ post: ForumPost }>('/forum/posts', b),
     update: (id: number, b: { title: string; body: string; images: string[] }) => put<{ post: ForumPost }>(`/forum/posts/${id}`, b),
     remove: (id: number) => del<{ ok: true }>(`/forum/posts/${id}`),
     search: (query: PostSearchQuery) => post<{ items: ForumPost[]; total: number }>('/forum/search', query),
@@ -136,9 +167,9 @@ export const api = {
   checkins: {
     /** 打开摄像头后领取的一次性拍照凭证 */
     session: () => post<CheckinSession>('/checkins/session'),
-    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } | null; placeId?: string | null }) =>
+    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } }) =>
       post<{ checkin: Checkin; stats: CheckinStats }>('/checkins', b),
-    list: (p: { scope?: 'all' | 'buddies' | 'mine'; before?: number } = {}) => get<{ items: Checkin[]; hasMore: boolean }>(`/checkins${qs(p)}`),
+    list: (p: { scope?: 'all' | 'buddies' | 'partner' | 'mine'; before?: number } = {}) => get<{ items: Checkin[]; hasMore: boolean }>(`/checkins${qs(p)}`),
     get: (id: number) => get<{ checkin: Checkin }>(`/checkins/${id}`),
     stats: () => get<CheckinStats>('/checkins/stats'),
     remove: (id: number) => del<{ ok: true }>(`/checkins/${id}`),
@@ -154,6 +185,22 @@ export const api = {
   deletePost: (id: number) => del<{ ok: true }>(`/posts/${id}`),
   setPostStatus: (id: number, status: 'open' | 'closed') => post<{ status: string }>(`/posts/${id}/status`, { status }),
   interest: (id: number) => post<{ interested: boolean; interestCount: number }>(`/posts/${id}/interest`),
+
+  // ---------- 搭子打卡活动 ----------
+  activity: {
+    config: () => get<{ config: ActivityConfig; season: SeasonInfo }>('/activity/config'),
+    me: () => get<BuddyStatus>('/activity/me'),
+    setCollege: (shurenMember: ShurenMember) => put<BuddyStatus>('/activity/college', { shurenMember }),
+    invite: (userId: number, shurenMember?: ShurenMember) => post<BuddyStatus>('/activity/invites', { userId, shurenMember }),
+    accept: (inviteId: number, shurenMember?: ShurenMember) => post<BuddyStatus & { matchId: number }>(`/activity/invites/${inviteId}/accept`, { shurenMember }),
+    decline: (inviteId: number) => post<BuddyStatus>(`/activity/invites/${inviteId}/decline`),
+    cancel: (inviteId: number) => del<BuddyStatus>(`/activity/invites/${inviteId}`),
+    unbind: () => post<BuddyStatus>('/activity/unbind'),
+    /** 是否在主页上公开「我们是搭子」（两人都打开才显示） */
+    showOnProfile: (show: boolean) => put<BuddyStatus>('/activity/pair/profile', { show }),
+    leaderboard: () => get<LeaderboardResponse>('/activity/leaderboard'),
+    appeal: (checkinId: number, body: string) => post<{ ok: true }>('/activity/appeals', { checkinId, body }),
+  },
 
   notifications: () => get<{ items: NotificationItem[] }>('/notifications'),
   readAll: () => post<{ ok: true }>('/notifications/read-all'),
@@ -178,6 +225,27 @@ export const api = {
     users: (q = '') => get<{ items: AdminUser[] }>(`/admin/users?q=${encodeURIComponent(q)}`),
     settings: (cycleDays: number) => put<{ review: ReviewState }>('/admin/settings', { cycleDays }),
     reviewRound: () => post<{ review: ReviewState }>('/admin/review-round'),
+    // 搭子打卡活动
+    audits: (status: 'pending' | 'done' = 'pending') => get<{ items: AdminAudit[]; reasons: string[] }>(`/admin/audits${qs({ status })}`),
+    passAudit: (checkinId: number) => post<{ ok: true }>(`/admin/audits/${checkinId}/pass`),
+    invalidate: (checkinId: number, reason: string, note = '') => post<{ ok: true; emailStatus: string }>(`/admin/checkins/${checkinId}/invalidate`, { reason, note }),
+    appeals: (status: 'open' | 'all' = 'open') => get<{ items: AdminAppeal[] }>(`/admin/appeals${qs({ status })}`),
+    decideAppeal: (id: number, decision: 'upheld' | 'overturned', note: string) => post<{ ok: true }>(`/admin/appeals/${id}`, { decision, note }),
+    bonus: (status: 'pending' | 'all' = 'pending') => get<{ items: AdminBonus[] }>(`/admin/bonus${qs({ status })}`),
+    decideBonus: (id: number, decision: 'approve' | 'reject', reason = '') => post<{ status: string; points: number }>(`/admin/bonus/${id}`, { decision, reason }),
+    board: () => get<{ items: AdminBoardItem[]; through: string | null; season: SeasonInfo; prizePairs: number }>('/admin/board'),
+    prizeReview: () => post<{ pairs: number; added: number }>('/admin/board/prize-review'),
+    disqualify: (pairId: number, reason: string) => post<{ ok: true }>(`/admin/pairs/${pairId}/disqualify`, { reason }),
+    requalify: (pairId: number) => del<{ ok: true }>(`/admin/pairs/${pairId}/disqualify`),
+    chatWords: () => get<{ words: Record<SensitiveCategory, string[]> }>('/admin/chat-words'),
+    saveChatWords: (words: Record<SensitiveCategory, string[]>) => put<{ words: Record<SensitiveCategory, string[]> }>('/admin/chat-words', { words }),
+    testChatWords: (text: string) => post<{ blocked: SensitiveCategory[]; warned: SensitiveCategory[] }>('/admin/chat-words/test', { text }),
+    activityConfig: () => get<{ config: ActivityConfig; season: SeasonInfo }>('/admin/activity-config'),
+    saveActivityConfig: (config: ActivityConfig) => put<{ config: ActivityConfig; season: SeasonInfo }>('/admin/activity-config', { config }),
+    staff: () => get<{ items: AdminStaff[] }>('/admin/staff'),
+    collegeRoster: () => get<{ count: number; updatedAt: string | null }>('/admin/college-roster'),
+    saveCollegeRoster: (text: string) => put<{ count: number; updatedAt: string | null }>('/admin/college-roster', { text }),
+    setRole: (email: string, role: Role) => post<{ ok: true; role: Role }>('/admin/staff', { email, role }),
   },
 };
 
@@ -202,6 +270,7 @@ export interface AdminOverview {
   stats: {
     users: number; published: number; posts: number; forumPosts: number; checkinsToday: number;
     pendingProfiles: number; pendingPosts: number; pendingCommunity: number; openReports: number; takedowns30d: number;
+    buddyPairs: number; pendingAudits: number; openAppeals: number; pendingBonus: number;
   };
   /** 各类社区内容的待审核数 */
   pendingContent: Record<AdminContentType, number>;
@@ -245,4 +314,41 @@ export interface AdminLog {
 export interface AdminUser {
   id: number; email: string; role: string; nickname: string; realName: string; studentId: string; major: string; published: boolean;
   createdAt: string; lastLoginAt: string | null;
+}
+
+export interface AdminCheckinView {
+  id: number; image: string; caption: string; placeLabel: string; stampText: string; stampedAt: string | null;
+  /** 定位误差（米）；没有定位的旧打卡为 null */
+  accuracy: number | null;
+  deleted: boolean; takenDown: boolean; invalid: boolean; invalidReason: string | null; invalidAt: string | null; invalidBy: string;
+}
+interface AdminPartnerContext {
+  partner: { id: number; nickname: string } | null;
+  partnerCheckin: AdminCheckinView | null;
+  /** 和搭子那次打卡相距多少米；有一方没有定位时为 null */
+  distance: number | null;
+}
+export interface AdminAudit extends AdminPartnerContext {
+  checkinId: number; week: string; source: 'random' | 'flag' | 'prize' | 'manual'; sourceLabel: string; flags: string[];
+  status: 'pending' | 'valid' | 'invalid'; reviewer: string; reviewedAt: string | null;
+  checkin: AdminCheckinView; author: { id: number; nickname: string };
+}
+export interface AdminAppeal extends AdminPartnerContext {
+  id: number; status: 'open' | 'upheld' | 'overturned'; body: string; createdAt: string; decidedBy: string; decidedAt: string | null;
+  decisionNote: string | null; author: { id: number; nickname: string }; checkin: AdminCheckinView; canDecide: boolean;
+}
+export interface AdminBonus {
+  id: number; status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; points: number; reason: string | null; week: string; createdAt: string;
+  reviewer: string; reviewedAt: string | null;
+  post: { id: number; title: string; body: string; images: string[]; deleted: boolean; takenDown: boolean } | null;
+  author: { id: number; nickname: string }; partner: { id: number; nickname: string }; pairActive: boolean; approvedPoints: number; seasonMax: number;
+}
+export interface AdminBoardItem {
+  pairId: number; rank: number | null; tied: boolean; total: number; checkinPoints: number; bonusPoints: number; fullWeeks: number; events: number;
+  reachedWeek: string | null; weeks: { week: string; count: number; counted: number; points: number }[];
+  members: { id: number; nickname: string; realName: string; studentId: string; shuren: ShurenMember | null }[];
+  startsOn: string; createdAt: string; ineligible: string | null; strikes: number; disqualified: boolean;
+}
+export interface AdminStaff {
+  id: number; email: string; role: Role; nickname: string; lastLoginAt: string | null; actions7d: number;
 }

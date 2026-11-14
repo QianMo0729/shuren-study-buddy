@@ -73,6 +73,19 @@ proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
+应用本身不压缩响应，由反向代理负责。在站点的 HTTPS `server` 块里开启 gzip；应用返回的脚本类型是 `text/javascript`，必须列在 `gzip_types` 里（`text/html` 默认已包含）：
+
+```nginx
+gzip on;
+gzip_proxied any;
+gzip_vary on;
+gzip_comp_level 5;
+gzip_min_length 1024;
+gzip_types text/javascript application/javascript text/css application/json image/svg+xml;
+```
+
+上线后用 `curl -sI -H 'Accept-Encoding: gzip' https://<域名>/assets/<主脚本>.js` 确认响应带有 `content-encoding: gzip`。
+
 请求体上限需允许应用的 8 MB JSON 上传。若前端还有 TCP/SNI 分流并传递 PROXY protocol，应仅信任对应的本地代理，并先正确恢复真实客户端 IP。
 
 为新域名添加独立虚拟主机。若服务器已有网站或代理，先核对监听和分流配置，保留现有默认路由；配置检查通过后平滑 reload。配置正式 TLS 证书、HTTP 到 HTTPS 跳转、自动续期和续期后的证书重载。

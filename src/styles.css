@@ -6,27 +6,30 @@
  * 概念：把搭子广场做成一本书院同学的「校园图鉴」。每位同学的系统昵称是一种南科大校园里真实存在的动植物，
  * 默认形象是这种动植物的一幅公版博物画。所有视觉决定都从这本「图鉴」出发：
  *
- * 字体（均为网页字体，按 unicode-range 切片、本地托管）
- *   抖音美好体   标题、昵称、印章：字形方正有力，带一点圆润，只有一个粗字重
- *   MiSans       正文与界面：400 / 500 / 600 / 700 四个字重
+ * 字体
+ *   苹果设备用系统的苹方；其余设备用 MiSans（网页字体，按 unicode-range 切片、本地托管）。标题用同一套字体的粗体
  *   Source Sans 3 斜体   物种学名（学名用斜体是博物学惯例）
  *
  * 颜色
- *   纸  #F3F1EB    卡纸（图版底） #E7E2D6    墨 #1C2320
+ *   底色 #F4F3EF    卡片 #FFFFFF    卡纸（图版底） #E7E2D6    墨 #1C2320    次要文字 #6B706C
  *   树仁绿 #005C65：书院标识色，用于操作与选中
  *   朱砂   #B8392A：印泥色，只用于印章（学习类型、收录章）与「共同学习时间」
+ *
+ * 布局（2026 年 10 月改版）：苹果式的大标题、白色圆角卡片、分段控件；
+ *   手机端四个分区（今天 / 找搭子 / 社区 / 消息）用悬浮标签栏，「我的」在右上角头像里；桌面端换成左侧边栏。
+ *   网站同时是 PWA，添加到主屏幕后全屏打开。
  */
 :root {
-  --paper: #f3f1eb;
-  --paper-2: #e9e6dd;
-  --surface: #fbfaf6;
-  --surface-2: #f6f4ee;
+  --paper: #f4f3ef;
+  --paper-2: #e6e5df;
+  --surface: #ffffff;
+  --surface-2: #f8f7f4;
   --mat: #e7e2d6;
   --ink: #1c2320;
   --ink-2: #4a524d;
-  --ink-3: #7c837e;
-  --ink-4: #aab0aa;
-  --line: rgba(28, 35, 32, 0.11);
+  --ink-3: #6b706c;
+  --ink-4: #b4b7b2;
+  --line: #e0dfd9;
   --line-strong: rgba(28, 35, 32, 0.22);
 
   --brand: #005c65;
@@ -40,7 +43,7 @@
   --seal: #b8392a;
   --accent: #b8392a;
   --accent-text: #a3301f;
-  --accent-soft: #f3e1da;
+  --accent-soft: #f8edea;
   --gold: #8a6a1f;
   --danger: #b3261e;
   --danger-soft: #f6e0db;
@@ -62,7 +65,7 @@
     --ink-2: #b4b3aa;
     --ink-3: #85867e;
     --ink-4: #585b55;
-    --line: rgba(235, 231, 222, 0.1);
+    --line: rgba(235, 231, 222, 0.12);
     --line-strong: rgba(235, 231, 222, 0.2);
     --brand: #17838c;
     --brand-2: #1d929b;
@@ -114,11 +117,18 @@
   --shadow-md: var(--shadow-md);
   --shadow-lg: var(--shadow-lg);
 
-  --font-sans: 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-display: 'Douyin Sans', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'MiSans', 'Microsoft YaHei', sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'MiSans', 'Microsoft YaHei', sans-serif;
   --font-latin: 'Source Sans 3', 'MiSans', sans-serif;
 
   --ease-out-soft: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* 圆角：苹果式的连续大圆角。整体比 Tailwind 默认大一档，按钮、卡片、弹窗一起变圆润 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 22px;
 }
 
 @layer base {
@@ -185,11 +195,10 @@
   }
 }
 
-/* 标题、昵称、印章：抖音美好体（只有 700 一个字重） */
+/* 标题、昵称、印章：与正文同一套无衬线字体的粗体 */
 @utility font-display {
   font-family: var(--font-display);
   font-weight: 700;
-  letter-spacing: -0.01em;
 }
 /* 同学自己写的话：正文字重，稍大一号，保留原本的换行 */
 @utility font-hand {

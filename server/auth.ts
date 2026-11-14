@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { STUDENT_EMAIL_DOMAIN, normalizeStudentEmail, passwordError } from '../shared/authRules.ts';
+import { isStaff, normalizeRole } from '../shared/roles.ts';
+import type { Role } from '../shared/types.ts';
 import { config } from './config.ts';
 import { q } from './db.ts';
 import { createRateLimiter, ipKey } from './rateLimit.ts';
@@ -8,7 +10,7 @@ import { createRateLimiter, ipKey } from './rateLimit.ts';
 export interface AuthedUser {
   id: number;
   email: string;
-  role: 'user' | 'admin';
+  role: Role;
 }
 
 declare global {
@@ -47,6 +49,8 @@ function parseCookies(header: string | undefined) {
 export function createSession(res: Response, userId: number) {
   const token = crypto.randomBytes(32).toString('base64url');
   const expires = new Date(Date.now() + config.sessionDays * 86400_000);
+  // 顺手清理这个账号已经过期的会话，会话表不会无限增长
+  q.run('DELETE FROM sessions WHERE user_id = ? AND expires_at < ?', userId, new Date().toISOString());
   q.run(
     'INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)',
     sha256(token),
@@ -79,7 +83,7 @@ export function loadUser(req: Request, _res: Response, next: NextFunction) {
       sha256(token),
     );
     if (row && new Date(row.expires_at) > new Date()) {
-      req.user = { id: row.id, email: row.email, role: row.role === 'admin' ? 'admin' : 'user' };
+      req.user = { id: row.id, email: row.email, role: normalizeRole(row.role) };
     }
   }
   next();
@@ -93,6 +97,13 @@ export function requireUser(req: Request, _res: Response, next: NextFunction) {
 export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
   if (!req.user) return next(new HttpError(401, '请先登录'));
   if (req.user.role !== 'admin') return next(new HttpError(403, '仅管理员可操作'));
+  next();
+}
+
+/** 管理员与审核员：处理内容、举报、抽检与 Bonus */
+export function requireStaff(req: Request, _res: Response, next: NextFunction) {
+  if (!req.user) return next(new HttpError(401, '请先登录'));
+  if (!isStaff(req.user.role)) return next(new HttpError(403, '仅管理员或审核员可操作'));
   next();
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
 import { Flag } from 'lucide-react';
+import { SENSITIVE_LABELS, type SensitiveCategory } from '../../../shared/activity';
 import type { ChatMessage } from '../../../shared/types';
 import { cx } from '../../lib/format';
 import { Spinner } from '../ui';
@@ -58,18 +59,21 @@ export function SystemNote({ message }: { message: ChatMessage }) {
 }
 
 /** 文字消息气泡：自己在右侧（墨色），对方在左侧；对方的消息可悬停 / 长按举报 */
-export function MessageBubble({ message, pending, onActions, onReport }: {
-  message: Pick<ChatMessage, 'body' | 'mine' | 'createdAt'> & { id?: number };
+export function MessageBubble({ message, pending, onActions, onReport, onReportFlagged }: {
+  message: Pick<ChatMessage, 'body' | 'mine' | 'createdAt' | 'flags'> & { id?: number };
   pending?: boolean;
   /** 长按：打开操作面板（复制 / 举报） */
   onActions?: () => void;
   /** 悬停出现的举报按钮（仅对方的消息） */
   onReport?: () => void;
+  /** 对方发来、命中敏感词的消息下方显示提示和举报入口 */
+  onReportFlagged?: () => void;
 }) {
   const press = useLongPress(() => onActions?.());
   const mine = message.mine;
+  const flagged = !mine && !!message.flags?.length;
   return (
-    <li className={cx('group flex items-end gap-1.5 px-1 py-[3px]', mine ? 'justify-end' : 'justify-start')}>
+    <li className={cx('group flex flex-wrap items-end gap-1.5 px-1 py-[3px]', mine ? 'justify-end' : 'justify-start')}>
       {mine && pending && <Spinner className="mb-2 size-3.5 text-ink-4" />}
       <div
         {...(onActions ? press : {})}
@@ -94,6 +98,12 @@ export function MessageBubble({ message, pending, onActions, onReport }: {
         >
           <Flag size={14} />
         </button>
+      )}
+      {flagged && (
+        <p className="basis-full pl-1 text-[12px] text-ink-3">
+          这条消息可能含有{message.flags!.map((f) => SENSITIVE_LABELS[f as SensitiveCategory] ?? f).join('、')}内容
+          {onReportFlagged && <>，感到不适可以<button type="button" className="ml-0.5 text-danger underline" onClick={onReportFlagged}>举报</button></>}
+        </p>
       )}
     </li>
   );

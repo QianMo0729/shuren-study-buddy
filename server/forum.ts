@@ -1,13 +1,16 @@
 // 社区聊天区：帖子与评论的可见性、作者信息与序列化，并向公共路由（文件访问、举报、评论/点赞）登记。
 // 接口在 server/routes/forum.ts；数据表在 server/community.ts。
 import { hasPrivacyConsent } from '../shared/profileRules.ts';
-import type { ForumAuthor, ForumComment, ForumPost, ForumTargetType, MatchInfo, ProfileInput } from '../shared/types.ts';
+import { isStaff } from '../shared/roles.ts';
+import type { ForumAuthor, ForumComment, ForumPost, ForumTargetType, MatchInfo, ProfileInput, Role } from '../shared/types.ts';
 import './community.ts';
 import { isExcluded } from './connections.ts';
 import { iso, q } from './db.ts';
 import { getProfileRow, parseData } from './profiles.ts';
 import { contentTargetFor, registerContentTarget, registerFileAccess, registerReportTarget } from './social.ts';
 import { reviewState } from './autoModeration.ts';
+import './activityTables.ts';
+import { claimsOfPosts } from './bonus.ts';
 
 export const FORUM_LIMITS = {
   title: 60,
@@ -54,7 +57,7 @@ export interface ForumCommentRow {
 
 export interface Viewer {
   id: number;
-  role: 'user' | 'admin';
+  role: Role;
 }
 
 /** SQL 片段：`col` 列的用户与当前用户（参数两次）没有互相排除 */
@@ -155,8 +158,8 @@ export function getPostRow(id: number): ForumPostRow | undefined {
 export function postVisibleTo(row: ForumPostRow | undefined, viewer: Viewer): row is ForumPostRow {
   if (!row || row.deleted) return false;
   if (row.user_id === viewer.id) return true;
-  if (row.taken_down) return viewer.role === 'admin';
-  return viewer.role === 'admin' || !isExcluded(viewer.id, row.user_id);
+  if (row.taken_down) return isStaff(viewer.role);
+  return isStaff(viewer.role) || !isExcluded(viewer.id, row.user_id);
 }
 
 /** 评论、点赞、举报使用的可见性：被撤下的帖子对所有人都返回 false（作者本人与管理员由调用方另行判断） */
@@ -168,9 +171,10 @@ export function canViewPost(viewerId: number, id: number): boolean {
 
 export function toForumPosts(rows: ForumPostRow[], viewer: Viewer, resolve = authorResolver(viewer.id), matches?: Map<number, MatchInfo>): ForumPost[] {
   const eng = engagementFor('post', rows.map((r) => r.id), viewer.id);
+  const claims = claimsOfPosts(rows.map((r) => r.id));
   return rows.map((r) => {
     const e = eng.get(r.id)!;
-    const canSeeModeration = r.user_id === viewer.id || viewer.role === 'admin';
+    const canSeeModeration = r.user_id === viewer.id || isStaff(viewer.role);
     const post: ForumPost = {
       id: r.id,
       title: r.title,
@@ -187,6 +191,11 @@ export function toForumPosts(rows: ForumPostRow[], viewer: Viewer, resolve = aut
       takenDown: canSeeModeration && !!r.taken_down && !r.auto_held,
       takedownReason: canSeeModeration && r.taken_down && !r.auto_held ? r.takedown_reason : null,
     };
+    const claim = claims.get(r.id);
+    if (claim) {
+      post.share = claim.status === 'pending' || claim.status === 'approved';
+      if (canSeeModeration) post.bonus = { status: claim.status, points: claim.points, reason: claim.reason };
+    }
     const m = matches?.get(r.id);
     if (m) post.match = m;
     return post;

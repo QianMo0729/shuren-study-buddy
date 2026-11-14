@@ -2,9 +2,11 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, CalendarClock, Check, CheckCheck, ExternalLink, FileText, Flag, MessagesSquare, Minus, Plus, RotateCcw, Search, ShieldX, UserRound,
+  AlertTriangle, Award, CalendarClock, Camera, Check, CheckCheck, ExternalLink, FileText, Flag, MessagesSquare, Minus, Plus, RotateCcw, Scale, Search, ShieldX, UserRound,
 } from 'lucide-react';
-import type { ModerationTargetType, ReportTargetType } from '../../shared/types';
+import { useAuth } from '../lib/auth';
+import { ActivitySettingsTab, AuditTab, BoardTab, BonusTab, StaffTab, WordsTab } from './AdminActivity';
+import type { ModerationTargetType, ReportTargetType, Role } from '../../shared/types';
 import {
   api, ApiError, fileUrl, type AdminContent, type AdminContentType, type AdminLog, type AdminOverview, type AdminPost, type AdminProfile,
   type AdminReport, type AdminUser,
@@ -16,15 +18,23 @@ import { Button, PageHeader, Segmented, Skeleton } from '../components/ui';
 import { Cover } from '../components/ProfileCard';
 import { CategoryTag } from '../components/PostCard';
 import { TakedownDialog } from '../components/moderation';
+import { ROLE_LABELS, isStaff } from '../../shared/roles';
 
+/** adminOnly：审核员看不到（设置、授权、用户名单含学号） */
 const TABS = [
   { id: 'overview', label: '概览' },
   { id: 'profiles', label: '主页审核' },
   { id: 'posts', label: '招募审核' },
   { id: 'community', label: '社区内容' },
   { id: 'reports', label: '举报处理' },
-  { id: 'logs', label: '撤下记录' },
-  { id: 'users', label: '用户' },
+  { id: 'audits', label: '抽检与申诉' },
+  { id: 'bonus', label: 'Bonus 审核' },
+  { id: 'board', label: '搭子榜' },
+  { id: 'words', label: '敏感词' },
+  { id: 'logs', label: '处理记录' },
+  { id: 'activity', label: '活动设置', adminOnly: true },
+  { id: 'staff', label: '审核小组', adminOnly: true },
+  { id: 'users', label: '用户', adminOnly: true },
 ];
 
 const FILTERS = [
@@ -46,6 +56,9 @@ type Target = { type: ModerationTargetType; id: number; label: string };
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : '请稍后重试');
 
 export function Admin() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const tabs = TABS.filter((t) => isAdmin || !t.adminOnly);
   const [tab, setTab] = useState('overview');
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const loadOverview = useCallback(() => api.admin.overview().then(setOverview).catch(() => {}), []);
@@ -55,16 +68,18 @@ export function Admin() {
 
   return (
     <div className="pt-2">
-      <PageHeader title="管理后台" desc="树仁学发内部使用。定期查看新发布的主页、招募和社区内容；撤下违规内容后，系统会自动给当事人发站内通知和邮件。" />
+      <PageHeader title="管理后台" desc={`树仁学发内部使用（当前身份：${user ? ROLE_LABELS[user.role] : ''}）。定期查看新发布的内容、处理举报与抽检；撤下或判无效后，系统会自动给当事人发站内通知和邮件。`} />
 
       <div className="-mx-4 flex gap-6 overflow-x-auto border-b border-line px-4 no-scrollbar sm:mx-0 sm:px-0" role="tablist">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const on = t.id === tab;
           const badge =
             t.id === 'profiles' ? overview?.stats.pendingProfiles
             : t.id === 'posts' ? overview?.stats.pendingPosts
             : t.id === 'community' ? overview?.stats.pendingCommunity
             : t.id === 'reports' ? overview?.stats.openReports
+            : t.id === 'audits' ? (overview?.stats.pendingAudits ?? 0) + (overview?.stats.openAppeals ?? 0)
+            : t.id === 'bonus' ? overview?.stats.pendingBonus
             : 0;
           return (
             <button key={t.id} role="tab" aria-selected={on} onClick={() => setTab(t.id)} className={cx('relative flex shrink-0 items-center gap-1.5 py-2.5 text-[14.5px] transition-colors', on ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink')}>
@@ -79,13 +94,19 @@ export function Admin() {
       <div className="mt-5">
         <AnimatePresence mode="wait">
           <motion.div key={tab} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15, ease }}>
-            {tab === 'overview' && <Overview data={overview} reload={loadOverview} go={setTab} />}
+            {tab === 'overview' && <Overview data={overview} reload={loadOverview} go={setTab} isAdmin={isAdmin} />}
             {tab === 'profiles' && <ProfilesReview onChange={loadOverview} />}
             {tab === 'posts' && <PostsReview onChange={loadOverview} />}
             {tab === 'community' && <CommunityReview pending={overview?.pendingContent} onChange={loadOverview} />}
             {tab === 'reports' && <Reports onChange={loadOverview} />}
+            {tab === 'audits' && <AuditTab onChange={loadOverview} />}
+            {tab === 'bonus' && <BonusTab onChange={loadOverview} />}
+            {tab === 'board' && <BoardTab isAdmin={isAdmin} />}
+            {tab === 'words' && <WordsTab />}
             {tab === 'logs' && <Logs />}
-            {tab === 'users' && <UsersTab />}
+            {tab === 'activity' && isAdmin && <ActivitySettingsTab />}
+            {tab === 'staff' && isAdmin && <StaffTab />}
+            {tab === 'users' && isAdmin && <UsersTab />}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -95,7 +116,7 @@ export function Admin() {
 
 // ---------------- 概览 ----------------
 
-function Overview({ data, reload, go }: { data: AdminOverview | null; reload: () => void; go: (t: string) => void }) {
+function Overview({ data, reload, go, isAdmin }: { data: AdminOverview | null; reload: () => void; go: (t: string) => void; isAdmin: boolean }) {
   const toast = useToast();
   const [days, setDays] = useState<number | null>(null);
   if (!data) return <Skeleton className="h-72 rounded-xl" />;
@@ -108,6 +129,7 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
     { label: '招募中', value: s.posts },
     { label: '社区帖子', value: s.forumPosts },
     { label: '今日打卡', value: s.checkinsToday },
+    { label: '在绑搭子组合', value: s.buddyPairs },
     { label: '近 30 天撤下', value: s.takedowns30d },
   ];
   const todo = [
@@ -115,6 +137,9 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
     { label: '待审核招募', value: s.pendingPosts, tab: 'posts', icon: FileText },
     { label: '待审核社区内容', value: s.pendingCommunity, tab: 'community', icon: MessagesSquare },
     { label: '待处理举报', value: s.openReports, tab: 'reports', icon: Flag },
+    { label: '待抽检打卡', value: s.pendingAudits, tab: 'audits', icon: Camera },
+    { label: '待复核申诉', value: s.openAppeals, tab: 'audits', icon: Scale },
+    { label: '待审核 Bonus', value: s.pendingBonus, tab: 'bonus', icon: Award },
   ];
   return (
     <div className="space-y-5">
@@ -154,7 +179,7 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
             <CalendarClock size={17} /> 周期巡查
           </p>
           <p className="mt-1 text-[12.5px] leading-relaxed text-ink-3">内容默认直接公开，只有系统判定为极高风险的内容会暂缓公开并进入「待审核」。巡查时可复核这些内容或处理举报。</p>
-          <div className="mt-5 flex items-center gap-3">
+          {!isAdmin ? <p className="mt-5 text-[13.5px] text-ink-2">每 {r.cycleDays} 天巡查一次（由管理员设置）</p> : <div className="mt-5 flex items-center gap-3">
             <span className="text-[13.5px] text-ink-2">每</span>
             <div className="flex items-center rounded-full border border-line-strong/70">
               <button onClick={() => setDays(Math.max(1, cycle - 1))} className="grid size-8 place-items-center rounded-full text-ink-3 hover:text-ink" aria-label="减少">
@@ -180,7 +205,7 @@ function Overview({ data, reload, go }: { data: AdminOverview | null; reload: ()
                 保存
               </Button>
             )}
-          </div>
+          </div>}
           <dl className="mt-5 grid grid-cols-2 gap-3 text-[13px]">
             <div className="rounded-2xl bg-paper-2/60 px-4 py-3">
               <dt className="text-ink-3">上次巡查</dt>
@@ -801,8 +826,14 @@ function Logs() {
     api.admin.logs().then((r) => setItems(r.items));
   }, []);
   if (!items) return <Skeleton className="h-64 rounded-xl" />;
-  if (!items.length) return <Empty text="还没有撤下 / 恢复记录" />;
+  if (!items.length) return <Empty text="还没有处理记录" />;
   const mail = { sent: '已发送', logged: '已记录（未配置邮件服务）', failed: '发送失败', skipped: '未发送（账号已注销）', '': '—' } as Record<string, string>;
+  const ACTIONS: Record<string, { text: string; danger?: boolean }> = {
+    takedown: { text: '撤下', danger: true }, restore: { text: '恢复' }, invalidate: { text: '判无效', danger: true }, audit_pass: { text: '抽检有效' },
+    appeal_upheld: { text: '申诉维持', danger: true }, appeal_overturned: { text: '申诉撤销' }, bonus_approve: { text: 'Bonus 通过' },
+    bonus_reject: { text: 'Bonus 不通过', danger: true }, disqualify: { text: '取消资格', danger: true }, requalify: { text: '恢复资格' },
+    role_change: { text: '修改角色' }, activity_config: { text: '活动设置' }, college_roster: { text: '书院名单' },
+  };
   return (
     <div className="overflow-x-auto rounded-xl bg-surface">
       <table className="w-full min-w-[760px] text-left text-[13px]">
@@ -820,13 +851,13 @@ function Logs() {
             <tr key={l.id} className="border-b border-line last:border-0">
               <td className="tabular px-4 py-3 whitespace-nowrap text-ink-2">{fullDateTime(l.createdAt)}</td>
               <td className="px-4 py-3">
-                <span className={cx('rounded-full px-2 py-0.5 text-[11.5px] font-medium', l.action === 'takedown' ? 'bg-danger-soft text-danger' : 'bg-brand-soft text-brand-text')}>{l.action === 'takedown' ? '撤下' : '恢复'}</span>
+                <span className={cx('rounded-full px-2 py-0.5 text-[11.5px] font-medium whitespace-nowrap', ACTIONS[l.action]?.danger ? 'bg-danger-soft text-danger' : 'bg-brand-soft text-brand-text')}>{ACTIONS[l.action]?.text ?? l.action}</span>
               </td>
               <td className="px-4 py-3 text-ink">
-                <span className="text-ink-3">{TYPE_TEXT[l.targetType as ReportTargetType] ?? l.targetType} </span>
+                <span className="text-ink-3">{TYPE_TEXT[l.targetType as ReportTargetType] ?? ({ buddy_pair: '搭子组合', user: '账号', settings: '' } as Record<string, string>)[l.targetType] ?? l.targetType} </span>
                 {l.targetLabel}
               </td>
-              <td className="max-w-56 px-4 py-3 text-ink-2">{l.reason || '—'}</td>
+              <td className="max-w-56 truncate px-4 py-3 text-ink-2" title={l.reason}>{l.action === 'activity_config' ? '见活动设置' : l.reason || '—'}</td>
               <td className="px-4 py-3 whitespace-nowrap text-ink-3">{mail[l.emailStatus] ?? l.emailStatus}</td>
               <td className="px-4 py-3 text-ink-3">{l.admin}</td>
             </tr>
@@ -873,7 +904,7 @@ function UsersTab() {
                 <tr key={u.id} className="border-b border-line last:border-0">
                   <td className="px-4 py-3 text-ink">
                     {u.email}
-                    {u.role === 'admin' && <span className="ml-1.5 rounded-full bg-ink px-1.5 py-px text-[10.5px] text-paper">管理员</span>}
+                    {isStaff(u.role) && <span className="ml-1.5 rounded-full bg-ink px-1.5 py-px text-[10.5px] text-paper">{ROLE_LABELS[u.role as Role]}</span>}
                   </td>
                   <td className="px-4 py-3 text-ink-2">{u.nickname || '—'}</td>
                   <td className="px-4 py-3 text-ink-2">{u.realName || '—'}</td>

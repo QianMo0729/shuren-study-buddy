@@ -13,7 +13,9 @@ import { iso, q } from './db.ts';
 import { reviewState } from './autoModeration.ts';
 import { HttpError } from './auth.ts';
 import { matchStateFor } from './matches.ts';
+import { hasActiveBuddy, publicBuddyOf, relationBetween } from './buddyState.ts';
 import { noteForOwner } from './notes.ts';
+import { registerAccountCleanup } from './social.ts';
 import { invalidSelectedSemesterCourses, invalidSelectedSubjects, normalizeSelectedSemesterCourses, normalizeSelectedSubjects } from '../shared/courseCatalog.ts';
 
 // ---------- 系统随机昵称 ----------
@@ -162,13 +164,42 @@ interface ProfileRow {
   email?: string;
 }
 
-export function parseData(row: ProfileRow): ProfileInput {
+export function parseData(row: Pick<ProfileRow, 'data'>): ProfileInput {
   let parsed: unknown = {};
   try {
     parsed = JSON.parse(row.data);
   } catch {}
   return pickProfileInput(parsed as Partial<ProfileInput>);
 }
+
+/** 最多保留这么多份解析结果；满了以后新的不再保留（照常解析），不会挤掉已有的 */
+const SHARED_PROFILE_MAX = 5000;
+const sharedProfiles = new Map<number, { raw: string; data: ProfileInput }>();
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const item of Object.values(value)) deepFreeze(item);
+  }
+  return value;
+}
+
+/**
+ * 列表、检索与推荐一次要读很多份资料：解析结果按 user_id 保留在内存里，在多次请求之间共享。
+ * 只有 profiles.data 的原文与解析时完全相同才复用，所以不需要任何失效通知——资料无论经哪条路径改动，下一次都会重新解析。
+ * 返回的对象已冻结，只读；需要改动时用 parseData。
+ */
+export function sharedProfile(row: Pick<ProfileRow, 'user_id' | 'data'>): ProfileInput {
+  const hit = sharedProfiles.get(row.user_id);
+  if (hit && hit.raw === row.data) return hit.data;
+  const data = deepFreeze(parseData(row));
+  if (hit || sharedProfiles.size < SHARED_PROFILE_MAX) sharedProfiles.set(row.user_id, { raw: row.data, data });
+  return data;
+}
+
+registerAccountCleanup((uid) => {
+  sharedProfiles.delete(uid);
+});
 
 export function getProfileRow(userId: number) {
   return q.get<ProfileRow>('SELECT p.*, u.email FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = ?', userId);
@@ -224,6 +255,7 @@ export function toCard(row: ProfileRow, d: ProfileInput, me: { id: number; sched
     isMe: row.user_id === me.id,
     overlapHours: row.user_id === me.id ? 0 : overlapHoursOf(d.schedule, me.schedule),
     publishedAt: iso(row.published_at),
+    hasBuddy: hasActiveBuddy(row.user_id),
   };
 }
 
@@ -280,6 +312,8 @@ export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, myS
     takenDown: !!row.taken_down && !row.auto_held,
     matchState: relation.state,
     matchId: relation.matchId,
+    buddy: relationBetween(viewerId, row.user_id),
+    publicBuddy: publicBuddyOf(row.user_id, viewerId),
   };
 }
 

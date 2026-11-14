@@ -1,23 +1,24 @@
 {
   "title": "南科大学习打卡楼栋目录与坐标来源",
   "preparedOn": "2026-10-06",
+  "updatedOn": "2026-10-26",
   "coordinateSystem": "WGS84 (EPSG:4326), [longitude, latitude]",
   "counts": {
     "places": 52,
     "libraries": 3,
     "teachingBuildings": 3,
     "dormitoryBuildings": 46,
-    "osmFootprints": 51,
-    "communityPoiOnly": 1,
-    "automaticBuildings": 51,
-    "manualOnlyBuildings": 1
+    "osmFootprints": 52,
+    "communityPoiOnly": 0,
+    "automaticBuildings": 52,
+    "manualOnlyBuildings": 0
   },
   "license": {
     "database": "ODbL-1.0",
     "url": "https://opendatacommons.org/licenses/odbl/1-0/",
     "attribution": "© OpenStreetMap contributors",
     "attributionUrl": "https://www.openstreetmap.org/copyright",
-    "scope": "OSM建筑轮廓及其改编地理数据库；不改变应用程序代码的许可。官方资料用于核对楼名；一丹单点来自标明名称的社区导航点位。"
+    "scope": "OSM建筑轮廓及其改编地理数据库；不改变应用程序代码的许可。官方资料用于核对楼名；一丹轮廓切自OSM南科大中心多边形，范围由树仁学发在地图上圈定，社区导航点位用于交叉核对。"
   },
   "sources": [
     {
@@ -27,6 +28,17 @@
       "dataTimestamp": "2026-09-07T08:30:50Z",
       "rawSha256": "fe33cf9f8d3f15dc5ad71d0eb30ee4d3f4fdebe6dfe8ba5bed8babc2932acf0b",
       "use": "51栋原始建筑外轮廓、第二教学楼内庭孔洞、校园边界way/456349157。每个楼栋保留精确sourceUrl。"
+    },
+    {
+      "id": "osm-sustech-center",
+      "url": "https://www.openstreetmap.org/relation/12480428",
+      "retrievedOn": "2026-10-26",
+      "use": "南科大中心多边形（外环way/980598954及7个内环）。一丹图书馆为其东翼：西以细长天井way/980598953东沿为界，南以内院way/980598951、way/980598952北沿为界，台阶形内院way/980598950为孔洞。"
+    },
+    {
+      "id": "shuren-confirmation",
+      "checkedOn": "2026-10-26",
+      "use": "树仁学发在按OSM建筑轮廓绘制的校园图上圈出一丹图书馆的位置（南科大中心东翼）；切出的轮廓94%落在圈定范围内。"
     },
     {
       "id": "official-campus-map",
@@ -42,7 +54,7 @@
       "url": "https://bus.sustcra.com/geojson/sustech_bldg.json",
       "archivedOn": "2026-09-07",
       "sourceRevisionDate": null,
-      "use": "一丹图书馆原始命名POI：113.9931979856845,22.60036695712506。GeoJSON/MapLibre源坐标；未将南科大中心整体点位冒充馆点。"
+      "use": "一丹图书馆原始命名POI：113.9931979856845,22.60036695712506。GeoJSON/MapLibre源坐标；用于交叉核对，该点落在一丹东翼轮廓内。"
     },
     {
       "id": "official-yidan",
@@ -62,9 +74,9 @@
     "全部OSM点按原始经纬度保留，未进行GCJ02偏移或由渲染坐标反推。",
     "lat/lng是根据原始建筑轮廓计算的内部代表点：4米、1米、0.25米网格逐步寻找离边界较远点；不是校方测量入口。polygon与holes保留原始几何。",
     "polygon的radiusM仅为代表点到最远顶点的上界，自动判定依赖建筑轮廓和GPS误差，不扩大半径匹配。",
-    "一丹无独立已验证建筑轮廓，其命名POI仅作目录依据；只允许手选，不自动将南科大中心判为一丹。",
+    "一丹只取南科大中心东翼（见osm-sustech-center），南科大中心其余部分不识别为一丹；代表点用同样的网格方法在东翼轮廓内计算。",
     "荔园5栋、创园3栋没有可靠来源，未编造目录或坐标。",
-    "建筑自动识别要求定位精度不超过20米，且误差圆完整落在唯一建筑范围内；边界/邻楼歧义或差精度退回校园级标签，用户可手选并标注（手选）。"
+    "建筑自动识别要求定位精度不超过20米，且误差圆完整落在唯一建筑范围内；边界/邻楼歧义或差精度退回校园级标签。地点不能手选。"
   ],
   "limitations": [
     "公开地图不等于测绘或现场实测，室内GPS、系统精度与源轮廓都有误差。",
