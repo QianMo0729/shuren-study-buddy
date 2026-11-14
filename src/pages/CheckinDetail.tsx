@@ -113,7 +113,7 @@ export function CheckinDetail() {
             <div className="flex gap-3">
               <dt className="w-16 shrink-0 text-ink-3">可见范围</dt>
               <dd className="inline-flex items-center gap-1 text-ink">
-                {c.visibility === 'buddies' ? <><Lock size={13} className="text-ink-3" aria-hidden />仅搭子</> : '所有同学'}
+                {c.visibility === 'buddies' ? <><Lock size={13} className="text-ink-3" aria-hidden />仅私聊的同学</> : '所有同学'}
               </dd>
             </div>
           </dl>
@@ -163,7 +163,7 @@ export function CheckinDetail() {
         open={confirmDelete}
         tone="danger"
         title="删除这次打卡？"
-        desc="删除后其他同学将看不到这张照片，也不再计入连续打卡天数；当天的打卡次数不会因此恢复。"
+        desc="删除后其他同学将看不到这张照片，也不再计入连续打卡天数。如果这是当天的第一次打卡，删掉后当天就不能再计分了（删掉重拍不能换一次）。"
         confirmText="删除"
         loading={deleting}
         onCancel={() => setConfirmDelete(false)}

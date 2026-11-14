@@ -9,7 +9,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import jpeg from 'jpeg-js';
-import { CAMPUS, CAMPUS_PLACES, NO_LOCATION_LABEL, OFF_CAMPUS_LABEL } from '../shared/campusPlaces.ts';
+import { CAMPUS, CAMPUS_PLACES, OFF_CAMPUS_LABEL } from '../shared/campusPlaces.ts';
 import { REPORT_REASONS } from '../shared/options.ts';
 import { emptyProfile } from '../shared/profileRules.ts';
 import type { ProfileInput } from '../shared/types.ts';
@@ -60,9 +60,9 @@ async function startServer() {
   let output = '';
   child.stdout.on('data', (chunk) => { output += String(chunk); });
   child.stderr.on('data', (chunk) => { output += String(chunk); });
-  const api = async (endpoint: string, cookie = '', method = 'GET', body?: unknown) => {
+  const api = async (endpoint: string, cookie = '', method = 'GET', body?: unknown, headers: Record<string, string> = {}) => {
     const response = await fetch(`${url}/api${endpoint}`, { method, headers: {
-      ...(cookie ? { Cookie: cookie } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json', Origin: url }),
+      ...(cookie ? { Cookie: cookie } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json', Origin: url }), ...headers,
     }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
     const buf = Buffer.from(await response.arrayBuffer());
     const text = buf.toString();
@@ -134,8 +134,10 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     return r.body as { token: string; expiresAt: string; serverTime: string };
   };
   const lynn = CAMPUS_PLACES.find((p) => p.id === 'lynn-library')!;
-  const submit = (user: { cookie: string }, body: Record<string, unknown>) =>
-    api('/checkins', user.cookie, 'POST', { image: dataUrl(photo()), caption: '', visibility: 'all', location: null, ...body });
+  // 打卡必须带定位；默认用误差 30 米的定位（只能认出在校园里，认不出楼栋）
+  const campusFix = { lat: lynn.lat, lng: lynn.lng, accuracy: 30 };
+  const submit = (user: { cookie: string }, body: Record<string, unknown>, headers: Record<string, string> = {}) =>
+    api('/checkins', user.cookie, 'POST', { image: dataUrl(photo()), caption: '', visibility: 'all', location: campusFix, ...body }, headers);
 
   let publicId = 0;
   let buddiesId = 0;
@@ -218,6 +220,8 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
       [{ caption: 'x'.repeat(201) }, /200/],
       [{ caption: 42 }, /说明/],
       [{ visibility: 'friends' }, /谁可以看到/],
+      [{ location: null }, /定位/],
+      [{ location: undefined }, /定位/],
       [{ location: { lat: 'a', lng: 113.99, accuracy: 10 } }, /位置/],
       [{ location: { lat: 91, lng: 113.99, accuracy: 10 } }, /位置/],
       [{ location: { lat: 22.6, lng: 113.99 } }, /位置/],
@@ -233,6 +237,8 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     assert.equal(r.status, 200, r.text);
     assert.equal(r.body.checkin.placeLabel, OFF_CAMPUS_LABEL);
     assert.equal((await api(`/checkins/${r.body.checkin.id}`, other.cookie, 'DELETE')).status, 200);
+    const removed = db.prepare('SELECT geo_lat, geo_lng, geo_accuracy FROM checkins WHERE id = ?').get(r.body.checkin.id) as Record<string, unknown>;
+    assert.deepEqual({ ...removed }, { geo_lat: null, geo_lng: null, geo_accuracy: 30 }, 'deleting a check-in deletes its coordinates');
   });
 
   await t.test('photos are stamped off the request thread: one at a time per account, registered with their size', async () => {
@@ -271,7 +277,7 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     }
   });
 
-  await t.test('stamps place and server time; client time fields are ignored; no coordinates are stored', async () => {
+  await t.test('stamps place and server time; client time fields are ignored; coordinates are stored coarsely and never shown', async () => {
     const s = await session(author);
     const before = Date.now();
     const r = await submit(author, {
@@ -305,8 +311,13 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     assert.equal(row.local_date, beijingDay());
     assert.equal(row.place_label, c.placeLabel);
     assert.equal(row.stamp_text, c.stampText);
-    assert.ok(!Object.keys(row).some((k) => /lat|lng|lon|accuracy/.test(k)));
+    // 经纬度只保留 4 位小数（约 10 米），用来核对搭子两人的距离；接口返回的打卡里没有经纬度
+    assert.equal(row.geo_lat, Math.round(lynn.lat * 1e4) / 1e4);
+    assert.equal(row.geo_lng, Math.round(lynn.lng * 1e4) / 1e4);
+    assert.equal(row.geo_accuracy, 5);
     assert.ok(!JSON.stringify(row).includes(String(lynn.lat)));
+    assert.ok(!Object.keys(c).some((k) => /geo|lat|lng|lon|accuracy/i.test(k)));
+    assert.ok(!JSON.stringify(c).includes(String(row.geo_lat)));
     const upload = db.prepare('SELECT user_id, kind FROM uploads WHERE name = ?').get(c.image) as { user_id: number; kind: string };
     assert.deepEqual({ ...upload }, { user_id: author.id, kind: 'checkin' });
     assert.match(c.image, /^[a-f0-9]{24}\.jpg$/);
@@ -321,32 +332,29 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
     assert.ok(dark > 200, 'watermark pixels should be black on a light photo');
     assert.ok(img.data[(10 * 640 + 10) * 4] > 200, 'the rest of the photo is untouched');
 
-    // 仅搭子可见的一条，未提供位置
+    // 仅搭子可见的一条：定位误差 30 米，认不出楼栋，只盖校园名
     const s2 = await session(author);
     const r2 = await submit(author, { token: s2.token, visibility: 'buddies', image: dataUrl(photo(480, 640, 40)) });
     assert.equal(r2.status, 200, r2.text);
     buddiesId = r2.body.checkin.id;
     buddiesImage = r2.body.checkin.image;
-    assert.equal(r2.body.checkin.placeLabel, NO_LOCATION_LABEL);
+    assert.equal(r2.body.checkin.placeLabel, CAMPUS.name);
     assert.equal(r2.body.stats.total, 2);
   });
 
-  await t.test('manual building selection is validated before consuming the token and stamped as manual', async () => {
+  await t.test('the place comes only from the location: hand-picked buildings are ignored and a location is required', async () => {
     const visitor = createUser();
     const s = await session(visitor);
-    for (const placeId of ['<script>fake building</script>', 'unknown-dorm', 12, { id: 'yidan-library' }]) {
-      const bad = await submit(visitor, { token: s.token, placeId });
-      assert.equal(bad.status, 400, bad.text);
-      assert.match(bad.body.error, /楼栋/);
-    }
-    const r = await submit(visitor, { token: s.token, placeId: 'yidan-library', location: null });
+    const missing = await submit(visitor, { token: s.token, placeId: 'dorm-15', location: null });
+    assert.equal(missing.status, 400, missing.text);
+    assert.match(missing.body.error, /定位/);
+    // 校验失败不消耗凭证；旧版页面传来的手选楼栋被忽略，水印按定位盖章
+    const r = await submit(visitor, { token: s.token, placeId: 'dorm-15', location: { lat: lynn.lat, lng: lynn.lng, accuracy: 5 } });
     assert.equal(r.status, 200, r.text);
-    assert.equal(r.body.checkin.placeLabel, `${CAMPUS.short}·一丹图书馆（手选）`);
-    const row = db.prepare('SELECT * FROM checkins WHERE id = ?').get(r.body.checkin.id) as Record<string, unknown>;
-    assert.equal(row.place_label, r.body.checkin.placeLabel);
-    assert.ok(!Object.keys(row).some((key) => /lat|lng|lon|accuracy/.test(key)));
+    assert.equal(r.body.checkin.placeLabel, `${CAMPUS.short}·${lynn.label}`);
+    assert.doesNotMatch(r.body.checkin.placeLabel, /手选|宿舍/);
     const stored = await fs.readFile(path.join(app.dir, 'uploads', r.body.checkin.image));
-    assert.notDeepEqual(stored, photo(), 'the manual label must go through server watermarking');
+    assert.notDeepEqual(stored, photo(), 'the place must go through server watermarking');
     db.prepare('UPDATE checkins SET deleted = 1 WHERE user_id = ?').run(visitor.id);
   });
 
@@ -484,6 +492,29 @@ test('live check-ins: session tokens, JPEG-only uploads, server stamp, visibilit
        VALUES (?, 'y.jpg', '校外', datetime('now', '-3 days'), ?, '', datetime('now', '-3 days'))`,
     ).run(e.id, beijingDay(-2));
     assert.deepEqual((await api('/checkins/stats', e.cookie)).body, { streak: 0, total: 1, checkedInToday: false });
+  });
+
+  await t.test('one device checks in for only one account a day; each photo gets a fingerprint', async () => {
+    const one = createUser();
+    const two = createUser();
+    const device = { 'X-Device-Id': 'shared-phone-device-0001' };
+    const first = await submit(one, { token: (await session(one)).token, caption: '复习高数第二章' }, device);
+    assert.equal(first.status, 200, first.text);
+    const row = db.prepare('SELECT photo_hash, device_hash FROM checkins WHERE id = ?').get(first.body.checkin.id) as { photo_hash: string; device_hash: string };
+    assert.match(row.photo_hash, /^[0-9a-f]{16}$/);
+    assert.match(row.device_hash, /^[0-9a-f]{64}$/);
+    // 同一个浏览器换成另一个账号：被拒绝，拍照凭证也没有被消耗
+    const s2 = await session(two);
+    const blocked = await submit(two, { token: s2.token, caption: '替搭子打卡' }, device);
+    assert.equal(blocked.status, 409);
+    assert.match(blocked.body.error, /另一个账号/);
+    assert.equal((await submit(two, { token: s2.token, caption: '用自己的手机' }, { 'X-Device-Id': 'own-phone-device-00002' })).status, 200, 'the token was not used up');
+    // 删掉打卡也不能把设备让给别人
+    db.prepare('UPDATE checkins SET deleted = 1 WHERE id = ?').run(first.body.checkin.id);
+    assert.equal((await submit(two, { token: (await session(two)).token }, device)).status, 409);
+    // 同一个账号在自己的设备上可以继续打卡
+    assert.equal((await submit(one, { token: (await session(one)).token }, device)).status, 200);
+    db.prepare('UPDATE checkins SET deleted = 1 WHERE user_id IN (?, ?)').run(one.id, two.id);
   });
 
   await t.test('daily limit of 10 check-ins (deleting does not reset it)', async () => {

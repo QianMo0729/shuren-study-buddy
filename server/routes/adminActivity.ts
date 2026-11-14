@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { INVALID_OTHER, INVALID_REASONS, validateActivityConfig } from '../../shared/activity.ts';
+import { distanceM } from '../../shared/campusPlaces.ts';
 import { ROLE_LABELS, normalizeRole } from '../../shared/roles.ts';
 import { HttpError, requireAdmin, requireStaff } from '../auth.ts';
 import { activityConfig, saveActivityConfig, seasonInfo } from '../activityConfig.ts';
@@ -7,7 +8,7 @@ import {
   FLAG_LABELS, type AuditFlag, decideAppeal, disqualifyPair, enqueuePrizeReview, ensureWeeklySamples, invalidateCheckin, passAudit, requalifyPair,
 } from '../audits.ts';
 import { decideClaim } from '../bonus.ts';
-import { type PairRow, shurenOf } from '../buddyState.ts';
+import { type PairRow, replaceRoster, rosterInfo, shurenOf } from '../buddyState.ts';
 import { checkMessage, saveWordLists, wordLists } from '../chatSafety.ts';
 import { iso, q } from '../db.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
@@ -31,11 +32,13 @@ const SOURCE_LABELS = { random: '随机抽检', flag: '系统标记', prize: '�
 interface CheckinRow {
   id: number; user_id: number; image: string; caption: string; place_label: string; stamp_text: string; stamped_at: string;
   local_date: string; created_at: string; deleted: number; taken_down: number; invalid: number; invalid_reason: string | null;
-  invalid_at: string | null; invalid_by: number | null;
+  invalid_at: string | null; invalid_by: number | null; geo_lat: number | null; geo_lng: number | null; geo_accuracy: number | null;
 }
 
 const checkinView = (c: CheckinRow) => ({
   id: c.id, image: c.image, caption: c.caption, placeLabel: c.place_label, stampText: c.stamp_text, stampedAt: iso(c.stamped_at),
+  // 只给审核人员看定位误差，不给经纬度
+  accuracy: c.geo_accuracy,
   deleted: !!c.deleted, takenDown: !!c.taken_down, invalid: !!c.invalid, invalidReason: c.invalid_reason,
   invalidAt: iso(c.invalid_at), invalidBy: emailOf(c.invalid_by),
 });
@@ -46,13 +49,17 @@ function partnerContext(c: CheckinRow) {
     `SELECT * FROM buddy_pairs WHERE (user_a = ? OR user_b = ?) AND created_at <= ? AND (ended_at IS NULL OR ended_at >= ?)
      ORDER BY id DESC LIMIT 1`, c.user_id, c.user_id, c.created_at, c.created_at,
   );
-  if (!pair) return { partner: null, partnerCheckin: null };
+  if (!pair) return { partner: null, partnerCheckin: null, distance: null };
   const partnerId = pair.user_a === c.user_id ? pair.user_b : pair.user_a;
   const near = q.get<CheckinRow>(
     `SELECT * FROM checkins WHERE user_id = ? AND local_date = ? AND deleted = 0
      ORDER BY abs(julianday(stamped_at) - julianday(?)) LIMIT 1`, partnerId, c.local_date, c.stamped_at,
   );
-  return { partner: { id: partnerId, nickname: nicknameOf(partnerId) }, partnerCheckin: near ? checkinView(near) : null };
+  // 两次打卡相距多少米（取整到 10 米）；有一方没有定位时为 null
+  const meters = near && c.geo_lat !== null && c.geo_lng !== null && near.geo_lat !== null && near.geo_lng !== null
+    ? Math.round(distanceM({ lat: c.geo_lat, lng: c.geo_lng }, { lat: near.geo_lat, lng: near.geo_lng }) / 10) * 10
+    : null;
+  return { partner: { id: partnerId, nickname: nicknameOf(partnerId) }, partnerCheckin: near ? checkinView(near) : null, distance: meters };
 }
 
 // ---------- 抽检 ----------
@@ -233,6 +240,25 @@ adminActivityRouter.put('/activity-config', requireAdmin, (req, res) => {
 });
 
 // ---------- 审核小组（仅管理员） ----------
+
+// ---------- 树仁书院名单（只有管理员能看和改，名单里是学号） ----------
+
+adminActivityRouter.get('/college-roster', requireAdmin, (_req, res) => {
+  res.json(rosterInfo());
+});
+
+/** 用新名单替换旧名单：粘贴学号即可，其他文字会被忽略。清空名单后恢复为本人填写 */
+adminActivityRouter.put('/college-roster', requireAdmin, (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+  if (text.length > 2_000_000) throw new HttpError(400, '名单太长了');
+  const count = replaceRoster(text);
+  touchScores();
+  q.run(
+    "INSERT INTO moderation_logs (admin_id, action, target_type, target_id, target_label, reason) VALUES (?, 'college_roster', 'settings', 0, '树仁书院名单', ?)",
+    req.user!.id, `${count} 个学号`,
+  );
+  res.json(rosterInfo());
+});
 
 adminActivityRouter.get('/staff', requireAdmin, (_req, res) => {
   const rows = q.all<{ id: number; email: string; role: string; last_login_at: string | null }>(

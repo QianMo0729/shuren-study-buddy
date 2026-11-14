@@ -76,6 +76,9 @@ export function useLiveCamera(enabled: boolean) {
     return problem ? { status: 'error', problem } : { status: 'starting' };
   });
   const [canSwitch, setCanSwitch] = useState(false);
+  const [zoomRange, setZoomRange] = useState<ZoomRange>(DIGITAL_ZOOM);
+  const [zoom, setZoomState] = useState(1);
+  const zoomRef = useRef({ value: 1, range: DIGITAL_ZOOM, pending: 0 });
   const [attempt, setAttempt] = useState(0);
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'hidden');
 
@@ -167,6 +170,16 @@ export function useLiveCamera(enabled: boolean) {
         video.setAttribute('webkit-playsinline', '');
         video.srcObject = stream;
         const track = stream.getVideoTracks()[0];
+        // 变焦：手机支持时用相机自己的变焦（画质好）；不支持时（多数 iPhone）用裁剪放大
+        const caps = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { zoom?: { min: number; max: number; step?: number } };
+        const settings = (track?.getSettings?.() ?? {}) as MediaTrackSettings & { zoom?: number };
+        const range: ZoomRange = caps.zoom && caps.zoom.max > caps.zoom.min
+          ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, HARDWARE_ZOOM_MAX), hardware: true }
+          : DIGITAL_ZOOM;
+        const initial = range.hardware ? Math.min(range.max, Math.max(range.min, settings.zoom ?? 1)) : 1;
+        zoomRef.current = { value: initial, range, pending: 0 };
+        setZoomRange(range);
+        setZoomState(initial);
         let previewController: AbortController | null = null;
         let wasLive = false;
         const current = () => !cancelled && streamRef.current === stream;
@@ -260,6 +273,21 @@ export function useLiveCamera(enabled: boolean) {
     };
   }, [enabled, hidden, facing, attempt, stop]);
 
+  /** 设置变焦倍数。相机变焦按帧节流，避免双指移动时连续调用 applyConstraints */
+  const setZoom = useCallback((value: number) => {
+    const ref = zoomRef.current;
+    const next = Math.min(ref.range.max, Math.max(ref.range.min, Math.round(value * 100) / 100));
+    if (next === ref.value) return;
+    ref.value = next;
+    setZoomState(next);
+    if (!ref.range.hardware || ref.pending) return;
+    ref.pending = requestAnimationFrame(() => {
+      ref.pending = 0;
+      const track = streamRef.current?.getVideoTracks()[0];
+      void track?.applyConstraints({ advanced: [{ zoom: ref.value } as MediaTrackConstraintSet] }).catch(() => {});
+    });
+  }, []);
+
   const resumePreview = useCallback(() => {
     if (resumeRef.current) resumeRef.current();
     else setAttempt((n) => n + 1);
@@ -274,14 +302,38 @@ export function useLiveCamera(enabled: boolean) {
     retry: () => setAttempt((n) => n + 1),
     resumePreview,
     stop,
+    zoom,
+    zoomRange,
+    setZoom,
+    /** 裁剪放大的倍数（相机自己变焦时为 1）：取景框和拍照都按它裁掉四周 */
+    digitalZoom: zoomRange.hardware ? 1 : zoom,
   };
+}
+
+export interface ZoomRange {
+  min: number;
+  max: number;
+  /** true：相机自己变焦；false：裁剪放大 */
+  hardware: boolean;
+}
+
+/** 裁剪放大最多 3 倍：再大画面太糊，看不清学习内容 */
+const DIGITAL_ZOOM: ZoomRange = { min: 1, max: 3, hardware: false };
+const HARDWARE_ZOOM_MAX = 5;
+
+/** 裁剪放大时，取景框和照片使用的视频区域（以视频像素计，居中） */
+export function cropRect(vw: number, vh: number, zoom = 1) {
+  const z = Math.max(1, zoom);
+  const w = vw / z;
+  const h = vh / z;
+  return { x: (vw - w) / 2, y: (vh - h) / 2, w, h };
 }
 
 /**
  * 把当前视频帧画到 canvas（最长边 ≤ maxSide）并编码成 JPEG dataURL。
  * 这是唯一的取图方式：没有任何选择文件 / 相册的入口。
  */
-export function captureFrame(video: HTMLVideoElement, maxSide = 1600, quality = 0.9): string | null {
+export function captureFrame(video: HTMLVideoElement, zoom = 1, maxSide = 1600, quality = 0.9): string | null {
   if (!isCameraPreviewReady(video)) return null;
   const vw = video.videoWidth;
   const vh = video.videoHeight;
@@ -293,7 +345,9 @@ export function captureFrame(video: HTMLVideoElement, maxSide = 1600, quality = 
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   try {
-    ctx.drawImage(video, 0, 0, width, height);
+    // 裁剪放大：只取画面中间的部分，放大到原来的尺寸，和取景框里看到的一致
+    const crop = cropRect(vw, vh, zoom);
+    ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, width, height);
     return canvas.toDataURL('image/jpeg', quality);
   } catch {
     // Camera interruptions can race with a tap even after a valid preview frame.

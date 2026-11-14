@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { motion } from 'motion/react';
 import { Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router';
 import { PageBoundary } from './components/PageBoundary';
@@ -79,10 +79,17 @@ function LegacySquare() {
   return <Navigate to={id ? `/u/${id}` : '/match'} replace />;
 }
 
-/** 页面级转场：按一级路径切换，同一分区内（如匹配页打开主页浮层、私聊切换会话）不触发整页转场 */
+/** 底部导航的分区首页：切换时立即显示，不放动画（和系统 App 的标签栏一样） */
+const TAB_ROOTS = new Set(['/today', '/match', '/community', '/messages', '/me']);
+
+/**
+ * 页面级转场：进入详情等页面时淡入一下；分区之间切换立即显示。
+ * 不做退出动画：旧页面直接换成新页面，新页面也不用等旧页面的动画放完才开始加载。
+ */
 function Page({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
   return (
-    <motion.div variants={page} initial="initial" animate="enter" exit="exit">
+    <motion.div variants={page} initial={TAB_ROOTS.has(pathname) ? false : 'initial'} animate="enter">
       <PageBoundary>
         <Suspense fallback={<BootScreen />}>{children}</Suspense>
       </PageBoundary>
@@ -114,7 +121,6 @@ export function App() {
   const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy' || section === 'rules';
 
   const routes = (
-    <AnimatePresence mode="wait" initial={false}>
       <Routes location={location} key={section === 'match' || section === 'messages' ? section : location.pathname}>
         <Route path="/" element={<Page><Landing /></Page>} />
         <Route path="/login" element={<Page><Login /></Page>} />
@@ -144,7 +150,6 @@ export function App() {
         <Route path="/admin" element={<RequireAuth admin><Page><Admin /></Page></RequireAuth>} />
         <Route path="*" element={<Page><NotFound /></Page>} />
       </Routes>
-    </AnimatePresence>
   );
 
   return bare ? routes : <Shell>{routes}</Shell>;

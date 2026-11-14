@@ -62,7 +62,7 @@ async function startServer() {
   } catch (error) { await stop(); throw error; }
 }
 
-test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat safety', { timeout: 180_000 }, async (t) => {
+test('buddy binding, same-event scoring, own-only ranking, audits, bonus and chat safety', { timeout: 180_000 }, async (t) => {
   const app = await startServer();
   const { api, db } = app;
   t.after(async () => { db.close(); await app.stop(); });
@@ -104,14 +104,21 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
   }
 
   let checkinSeq = 0;
+  /** 默认的打卡定位：两人都在同一处、误差 10 米 */
+  const LIBRARY = { lat: 22.6025, lng: 113.994, accuracy: 10 };
+  type Geo = { lat: number; lng: number; accuracy: number };
   /** 写一条打卡：date 为北京日期，time 为北京时间 HH:mm:ss */
-  function checkin(m: Member, date: string, time: string, caption = '一起复习线性代数', extra: { device?: string } = {}) {
+  function checkin(m: Member, date: string, time: string, caption = '一起复习线性代数', extra: { device?: string; photoHash?: string; geo?: Geo | null } = {}) {
     const utc = new Date(Date.parse(`${date}T${time}+08:00`));
     const stamped = utc.toISOString().slice(0, 19).replace('T', ' ');
+    const geo = extra.geo === undefined ? LIBRARY : extra.geo;
     return Number(db.prepare(
-      `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility, created_at, device_hash)
-       VALUES (?, ?, ?, '图书馆', ?, ?, ?, 'all', ?, ?)`,
-    ).run(m.id, `${String(++checkinSeq).padStart(24, '0')}.jpg`, caption, stamped, date, `${date} ${time} 北京时间`, stamped, extra.device ?? null).lastInsertRowid);
+      `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility, created_at, device_hash, photo_hash, geo_lat, geo_lng, geo_accuracy)
+       VALUES (?, ?, ?, '图书馆', ?, ?, ?, 'all', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      m.id, `${String(++checkinSeq).padStart(24, '0')}.jpg`, caption, stamped, date, `${date} ${time} 北京时间`, stamped, extra.device ?? null, extra.photoHash ?? null,
+      geo?.lat ?? null, geo?.lng ?? null, geo?.accuracy ?? null,
+    ).lastInsertRowid);
   }
 
   // 赛季：从三周前的周一开始，已经有三个完整的周
@@ -131,9 +138,14 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     assert.equal((await api('/admin/activity-config', moderator.cookie, 'PUT', { config })).status, 403);
     assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, seasonStart: addDays(seasonStart, 1) } })).status, 400, 'season starts on a Monday');
     assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, ladder: [0, 1, 3] } })).status, 400, 'ladder covers 0..cap');
-    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, ladder: [0, 3, 1, 4, 6, 8] } })).status, 400, 'ladder never decreases');
+    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, ladder: [0, 3, 1, 4, 6, 7, 8, 10] } })).status, 400, 'ladder never decreases');
+    assert.equal(config.distanceMeters, 300, 'two check-ins at most 300 m apart by default');
+    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, distanceMeters: -1 } })).status, 400);
+    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, accuracyMeters: 5 } })).status, 400);
     await saveConfig();
-    assert.equal((await api('/activity/config')).body.config.weeklyCap, 5);
+    const saved = (await api('/activity/config')).body.config;
+    assert.equal(saved.weeklyCap, 7, 'plan 2.0: up to 7 same-event days a week');
+    assert.deepEqual(saved.ladder, [0, 1, 3, 4, 6, 7, 8, 10]);
   });
 
   await t.test('binding needs both sides, the Shuren answer, and is strictly one-to-one', async () => {
@@ -191,10 +203,10 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
   const p3 = [createUser(), createUser()] as const;
   const pairIdOf = (m: Member) => (db.prepare("SELECT id FROM buddy_pairs WHERE status = 'active' AND (user_a = ? OR user_b = ?)").get(m.id, m.id) as { id: number }).id;
 
-  await t.test('same-event check-ins: same day, within the window, once a day, capped weekly, ladder points', async () => {
+  await t.test('same-event check-ins: first check-in of the day, same day, within the window, capped weekly, ladder points', async () => {
     for (const [a, b] of [p1, p2, p3]) await bind(a, b);
     db.prepare('UPDATE buddy_pairs SET starts_on = ?, created_at = ? WHERE id IN (?, ?, ?)').run(seasonStart, `${addDays(seasonStart, -3)} 00:00:00`, pairIdOf(p1[0]), pairIdOf(p2[0]), pairIdOf(p3[0]));
-    // p1：第 1 周 7 天都打卡（上限 5 次 → 8 分）；同一天的第二次相同事件不重复计
+    // p1：第 1 周 7 天都打卡（满勤 7 次 → 10 分）；当天之后的打卡不再计分
     for (let d = 0; d < 7; d++) {
       checkin(p1[0], week(0, d), '20:00:00');
       checkin(p1[1], week(0, d), '20:25:00');
@@ -213,6 +225,10 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     checkin(p2[0], week(1, 0), '10:00:00', '复习');
     checkin(p2[1], week(1, 0), '10:01:00'); // 说明不到 5 个字
     checkin(p2[0], week(1, 1), '10:00:00');
+    // 只看每人当天第一次打卡：第一次相差 3 小时，第二次虽然只差 5 分钟也不算
+    checkin(p2[0], week(1, 2), '08:00:00');
+    checkin(p2[1], week(1, 2), '11:00:00');
+    checkin(p2[0], week(1, 2), '11:05:00');
     // p3：第 2 周 4 次 → 6 分，与 p2 同分；p2 更早达到 → p2 排在前面
     for (let d = 0; d < 4; d++) {
       checkin(p3[0], week(1, d), '15:00:00');
@@ -221,18 +237,109 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     await saveConfig();
     const b = await board(p1[0]);
     assert.equal(b.through, addDays(thisMonday, -1), 'only completed weeks count');
-    assert.deepEqual(b.items.map((i) => [i.rank, i.mine]), [[1, true], [2, false], [3, false]]);
-    assert.ok(!('total' in b.items[0]) && !JSON.stringify(b).includes('"points"'), 'no points are exposed to students');
+    assert.deepEqual(b.mine, { rank: 1, tied: false, total: 10 });
+    assert.equal(b.pairs, 3);
+    assert.ok(!('items' in b), 'students only see their own rank and points');
+    for (const other of [p2[0], p3[0]]) assert.ok(!JSON.stringify(b).includes(other.nickname), 'other pairs are never listed');
+    assert.equal((await board(createUser())).mine, null, 'a student without a buddy has no rank');
     const staffBoard = (await api('/admin/board', moderator.cookie)).body;
     const totals = new Map(staffBoard.items.map((i: any) => [i.pairId, i.total]));
-    assert.equal(totals.get(pairIdOf(p1[0])), 8);
+    assert.equal(totals.get(pairIdOf(p1[0])), 10);
     assert.equal(totals.get(pairIdOf(p2[0])), 6);
     assert.equal(totals.get(pairIdOf(p3[0])), 6);
     assert.equal(staffBoard.items[0].members[0].studentId, '', 'moderators do not see student numbers');
     assert.ok((await api('/admin/board', admin.cookie)).body.items[0].members[0].studentId, 'admins see student numbers to verify the college');
     const st = await status(p1[1]);
     assert.deepEqual(st.rank, { rank: 1, tied: false, total: 3 });
-    assert.equal(st.week?.cap, 5);
+    assert.deepEqual(st.score, { total: 10, through: addDays(thisMonday, -1) });
+    assert.equal(st.week?.cap, 7);
+  });
+
+  await t.test('my status shows this week, today\'s scoring check-ins and nothing an auditor would use', async () => {
+    const a = createUser({ schedule: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62] });
+    const b = createUser({ schedule: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62] });
+    await bind(a, b);
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(thisMonday, pairIdOf(a));
+    let st = await status(a);
+    assert.equal(st.today?.date, today);
+    assert.equal(st.today?.mine, null);
+    assert.equal(st.today?.partner, null);
+    assert.ok(st.today!.free.length > 0, 'periods when both are free today');
+    checkin(a, today, '00:00:01', '一起背单词', { device: 'device-a', photoHash: '0123456789abcdef' });
+    checkin(b, today, '00:10:00', '一起背单词', { device: 'device-b', photoHash: '0123456789abcdef' });
+    checkin(a, today, '00:20:00', '第二次只发社区');
+    st = await status(a);
+    assert.equal(st.today?.mine?.counts, true);
+    assert.equal(Date.parse(st.today!.mine!.at), Date.parse(`${today}T00:00:01+08:00`), 'the first check-in of the day is the scoring one');
+    assert.ok(st.today?.partner);
+    assert.equal(st.week?.count, 1);
+    assert.equal(st.week?.points, 1);
+    assert.deepEqual(st.week?.events, [{ date: today, mine: '00:00', theirs: '00:10', place: '图书馆', distance: 0 }]);
+    assert.equal(st.today?.mine?.issue, null);
+    assert.equal(st.today?.partner?.place, '图书馆', 'where the buddy checked in, as stamped on the photo');
+    const text = JSON.stringify(st);
+    assert.ok(!text.includes('device') && !text.includes('0123456789abcdef'), 'device ids and photo fingerprints stay on the server');
+    assert.ok(!text.includes(String(LIBRARY.lng)) && !/lat|lng|geo/.test(text), 'coordinates stay on the server');
+    db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+  });
+
+  await t.test('the two check-ins must be close together: far apart, a poor location fix or no location does not count', async () => {
+    const [a, b] = [createUser(), createUser()];
+    await bind(a, b);
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(seasonStart, pairIdOf(a));
+    // 往北每 0.001 度约 111 米
+    const north = (meters: number, accuracy = 20) => ({ lat: LIBRARY.lat + meters / 111_195, lng: LIBRARY.lng, accuracy });
+    checkin(a, week(2, 0), '10:00:00');
+    checkin(b, week(2, 0), '10:05:00', '一起复习线性代数', { geo: north(250) }); // 相距 250 米：算
+    checkin(a, week(2, 1), '10:00:00');
+    checkin(b, week(2, 1), '10:05:00', '一起复习线性代数', { geo: north(500) }); // 相距 500 米：不算
+    checkin(a, week(2, 2), '10:00:00');
+    checkin(b, week(2, 2), '10:05:00', '一起复习线性代数', { geo: north(50, 400) }); // 定位误差 400 米：不算
+    checkin(a, week(2, 3), '10:00:00');
+    checkin(b, week(2, 3), '10:05:00', '一起复习线性代数', { geo: null }); // 没有定位：不算
+    await saveConfig();
+    const totalOf = async () => (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(a));
+    assert.deepEqual((await totalOf()).weeks.find((w: any) => w.week === week(2)), { week: week(2), count: 1, counted: 1, points: 1 });
+    // 管理员把距离设为 0：不再检查距离和定位
+    await saveConfig({ distanceMeters: 0 });
+    assert.equal((await totalOf()).weeks.find((w: any) => w.week === week(2)).count, 4);
+    await saveConfig();
+
+    // 今天第一次打卡定位不准：今天不能计分，页面能说出原因
+    checkin(a, today, '00:00:01', '一起复习线性代数', { geo: north(0, 500) });
+    const st = await status(a);
+    assert.deepEqual({ counts: st.today?.mine?.counts, issue: st.today?.mine?.issue }, { counts: false, issue: 'location' });
+    db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+  });
+
+  await t.test('a buddy is named on profiles only when both agree; otherwise others just see that they have one', async () => {
+    const [a, b, viewer, excluded] = [createUser(), createUser(), createUser(), createUser()];
+    await bind(a, b);
+    const profile = async (of: Member, by: Member) => (await api(`/profiles/${of.id}`, by.cookie)).body.profile;
+    assert.equal((await profile(a, viewer)).publicBuddy, null, 'hidden by default');
+    assert.equal((await profile(a, viewer)).buddy.otherHasBuddy, true);
+    let st = (await api('/activity/pair/profile', a.cookie, 'PUT', { show: true })).body as BuddyStatus;
+    assert.deepEqual(st.pair?.showOnProfile, { mine: true, partner: false });
+    assert.equal((await profile(a, viewer)).publicBuddy, null, 'one side agreeing is not enough');
+    assert.equal((await api('/activity/pair/profile', b.cookie, 'PUT', { show: 'yes' })).status, 400);
+    st = (await api('/activity/pair/profile', b.cookie, 'PUT', { show: true })).body;
+    assert.deepEqual(st.pair?.showOnProfile, { mine: true, partner: true });
+    assert.deepEqual((await profile(a, viewer)).publicBuddy, { id: b.id, nickname: b.nickname });
+    assert.deepEqual((await profile(b, viewer)).publicBuddy, { id: a.id, nickname: a.nickname });
+    // 与搭子互相排除的同学看不到搭子是谁
+    db.prepare('INSERT INTO exclusions (user_id, target_id) VALUES (?, ?)').run(b.id, excluded.id);
+    assert.equal((await profile(a, excluded)).publicBuddy, null);
+    // 任何一方关掉就不再显示；解绑后新的绑定默认不公开
+    await api('/activity/pair/profile', a.cookie, 'PUT', { show: false });
+    assert.equal((await profile(b, viewer)).publicBuddy, null);
+    await api('/activity/pair/profile', a.cookie, 'PUT', { show: true });
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+    assert.equal((await api('/activity/pair/profile', a.cookie, 'PUT', { show: true })).status, 409, 'no buddy, nothing to show');
+    await bind(a, b);
+    assert.equal((await profile(a, viewer)).publicBuddy, null);
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });
 
   await t.test('ties use the published order and identical records share a rank', async () => {
@@ -249,8 +356,9 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
       checkin(p2[1], week(n, d), '15:05:00');
     }
     await saveConfig();
-    items = (await board(p2[0])).items;
-    assert.deepEqual(items.map((i) => [i.rank, i.tied]), [[1, false], [2, true], [2, true]]);
+    items = (await api('/admin/board', admin.cookie)).body.items;
+    assert.deepEqual(items.slice(0, 3).map((i: any) => [i.rank, i.tied]), [[1, false], [2, true], [2, true]]);
+    assert.deepEqual((await board(p2[0])).mine, { rank: 2, tied: true, total: 7 });
   });
 
   await t.test('invalidated check-ins stop counting; the appeal must be decided by a different reviewer', async () => {
@@ -264,13 +372,9 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     assert.equal(mine.invalid.reason, '画面中没有学习内容');
     assert.equal(mine.invalid.canAppeal, true);
     assert.equal((await api(`/checkins/${target.id}`, p2[0].cookie)).body.checkin.invalid, null, 'others never see the invalidation');
-    // 第 1 周的第一天这对还有一次 21:00 的相同事件 → 本周仍然 5 次
-    let total = (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(p1[0])).total;
-    assert.equal(total, 8);
-    const second = db.prepare('SELECT id FROM checkins WHERE user_id = ? AND local_date = ? AND caption <> \'\' ORDER BY id').all(p1[0].id, week(0, 0)) as { id: number }[];
-    await api(`/admin/checkins/${second[1].id}/invalidate`, moderator.cookie, 'POST', { reason: '画面看不清，无法判断' });
-    total = (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(p1[0])).total;
-    assert.equal(total, 8, 'six other days still reach the weekly cap');
+    // 当天第一次打卡被判无效：当天 21:00 那次也不能顶替 → 第 1 周 6 次 → 8 分
+    const totalOf = async () => (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(p1[0])).total;
+    assert.equal(await totalOf(), 8, 'a later check-in on the same day does not replace an invalid first one');
     const appeal = await api('/activity/appeals', p1[0].cookie, 'POST', { checkinId: target.id, body: '照片里有课本，只是光线暗' });
     assert.equal(appeal.status, 200, appeal.text);
     assert.equal((await api('/activity/appeals', p1[0].cookie, 'POST', { checkinId: target.id, body: '再来一次' })).status, 409, 'one appeal per check-in');
@@ -280,6 +384,7 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     assert.equal((await api(`/admin/appeals/${row.id}`, moderator.cookie, 'POST', { decision: 'overturned' })).status, 403);
     assert.equal((await api(`/admin/appeals/${row.id}`, admin.cookie, 'POST', { decision: 'overturned', note: '能看到课本' })).status, 200);
     assert.equal((await api(`/checkins/${target.id}`, p1[0].cookie)).body.checkin.invalid, null);
+    assert.equal(await totalOf(), 10, 'an overturned appeal restores the day');
   });
 
   await t.test('three invalid check-ins disqualify the pair; confirmed cheating disqualifies both people', async () => {
@@ -289,7 +394,8 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     await api(`/admin/checkins/${third.id}/invalidate`, admin.cookie, 'POST', { reason: '翻拍或不是现场拍摄' });
     const st = await status(p2[0]);
     assert.match(st.pair!.ineligible!, /无效打卡累计 3 次/);
-    assert.ok(!(await board(p2[0])).items.some((i) => i.mine), 'ineligible pairs leave the leaderboard');
+    assert.equal((await board(p2[0])).mine, null, 'ineligible pairs leave the ranking');
+    assert.ok((await status(p2[0])).score, 'they still see their points');
     assert.equal((await api(`/admin/pairs/${pairIdOf(p3[0])}/disqualify`, moderator.cookie, 'POST', { reason: '一人操作两个账号' })).status, 200);
     assert.match((await status(p3[1])).pair!.ineligible!, /作弊/);
     assert.equal((await api(`/admin/pairs/${pairIdOf(p3[0])}/disqualify`, moderator.cookie, 'DELETE')).status, 200);
@@ -299,6 +405,9 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
   await t.test('weekly samples pick random and flagged check-ins once per week', async () => {
     const shared = 'device-hash-shared';
     const ids = [checkin(p1[0], week(2, 3), '12:00:00', '一起复习线性代数', { device: shared }), checkin(p1[1], week(2, 3), '12:00:01', '一起复习线性代数', { device: shared })];
+    // 两张照片的指纹只差 1 位：像是同一部手机在同一个位置拍的；差很多的不标记
+    const similar = [checkin(p3[0], week(2, 4), '09:00:00', '一起复习线性代数', { photoHash: 'ffffffff00000000' }), checkin(p3[1], week(2, 4), '09:20:00', '一起复习线性代数', { photoHash: 'ffffffff00000001' })];
+    const different = [checkin(p3[0], week(2, 5), '09:00:00', '一起复习线性代数', { photoHash: 'ffffffff00000000' }), checkin(p3[1], week(2, 5), '09:20:00', '一起复习线性代数', { photoHash: '00000000ffffffff' })];
     await saveConfig({ auditRate: 50 });
     db.prepare("DELETE FROM settings WHERE key LIKE 'audit_sample_%'").run();
     const list = (await api('/admin/audits', moderator.cookie)).body.items;
@@ -306,6 +415,14 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     assert.equal(flagged.length, 2);
     assert.ok(flagged[0].flags.some((f: string) => f.includes('同一台设备')));
     assert.ok(flagged[0].flags.some((f: string) => f.includes('几乎同时')));
+    // 审核人员看到两人相距多远和定位误差，看不到经纬度
+    assert.equal(flagged[0].distance, 0);
+    assert.equal(flagged[0].checkin.accuracy, LIBRARY.accuracy);
+    assert.ok(!JSON.stringify(list).includes(String(LIBRARY.lng)));
+    const photoFlags = list.filter((item: any) => similar.includes(item.checkinId));
+    assert.equal(photoFlags.length, 2);
+    assert.ok(photoFlags.every((item: any) => item.flags.some((f: string) => f.includes('照片几乎一样'))));
+    assert.ok(!list.some((item: any) => different.includes(item.checkinId) && item.source === 'flag'), 'different photos are not flagged');
     assert.ok(list.some((item: any) => item.source === 'random'));
     const again = (await api('/admin/audits', moderator.cookie)).body.items;
     assert.equal(again.length, list.length, 'a week is only sampled once');
@@ -348,7 +465,7 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
     assert.equal((await status(b)).pair, null);
     assert.ok(db.prepare("SELECT 1 FROM notifications WHERE user_id = ? AND title = '搭子绑定已解除'").get(b.id));
-    assert.ok(!(await board(b)).items.some((i) => i.mine), 'the ended pair leaves the leaderboard');
+    assert.equal((await board(b)).mine, null, 'the ended pair leaves the ranking');
     const rebound = await bind(b, a);
     assert.equal(rebound.pair?.startsOn, addDays(thisMonday, 7));
     const row = (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === rebound.pair!.id);
@@ -396,6 +513,27 @@ test('buddy binding, same-event scoring, leaderboard, audits, bonus and chat saf
     assert.equal((await api('/admin/staff', admin.cookie, 'POST', { email: admin.email, role: 'user' })).status, 400, 'admins cannot demote themselves');
     const staff = (await api('/admin/staff', admin.cookie)).body.items;
     assert.ok(staff.some((s: any) => s.id === moderator.id && s.actions7d > 0), 'recent work is counted per reviewer');
+  });
+
+  await t.test('an imported college roster decides who is a Shuren student; only admins manage it', async () => {
+    const inRoster = createUser();
+    const outside = createUser();
+    db.prepare("INSERT OR REPLACE INTO activity_members (user_id, shuren) VALUES (?, 'yes')").run(outside.id);
+    assert.equal((await api('/admin/college-roster', moderator.cookie)).status, 403);
+    assert.equal((await api('/admin/college-roster', moderator.cookie, 'PUT', { text: '12345678' })).status, 403);
+    const id = inRoster.email.split('@')[0];
+    const saved = await api('/admin/college-roster', admin.cookie, 'PUT', { text: `学号\n${id}\n${id}\n1234567\n123456789\n12345678` });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.count, 2, 'only distinct 8-digit numbers are kept');
+    const mine = await status(inRoster);
+    assert.equal(mine.shurenMember, 'yes');
+    assert.equal(mine.shurenSource, 'roster');
+    assert.equal((await status(outside)).shurenMember, 'no', 'the roster overrides what people said themselves');
+    assert.equal((await api('/activity/college', outside.cookie, 'PUT', { shurenMember: 'yes' })).status, 409);
+    const invited = await api('/activity/invites', outside.cookie, 'POST', { userId: inRoster.id });
+    assert.equal(invited.status, 200, 'no need to answer once the roster is loaded');
+    assert.equal((await api('/admin/college-roster', admin.cookie, 'PUT', { text: '' })).body.count, 0);
+    assert.equal((await status(outside)).shurenSource, 'self', 'clearing the roster goes back to self-reported answers');
   });
 
   await t.test('logins record only a hash of the browser device id, so two accounts on one device can be flagged', async () => {

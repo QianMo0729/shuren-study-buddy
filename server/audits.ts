@@ -9,18 +9,22 @@ import { activityConfig } from './activityConfig.ts';
 import { pairById } from './buddyState.ts';
 import { getSetting, iso, q, setSetting, tx } from './db.ts';
 import { sendInvalidCheckinMail } from './mail.ts';
+import { hashDistance } from './photoHash.ts';
 import { beijingTime, notify } from './notify.ts';
 import { leaderboard, sameEvents, scoredThrough, touchScores, weekEvents } from './scoring.ts';
 
-export type AuditFlag = 'same_device' | 'near_same_time' | 'shared_device';
+export type AuditFlag = 'same_device' | 'near_same_time' | 'shared_device' | 'similar_photo';
 
 export const FLAG_LABELS: Record<AuditFlag, string> = {
   same_device: '两人的打卡来自同一台设备',
   near_same_time: '两人几乎同时提交（相差 2 秒以内）',
   shared_device: '两人的账号在同一台设备上登录过',
+  similar_photo: '两人的照片几乎一样（可能是同一部手机在同一个位置拍的）',
 };
 
 const NEAR_SAME_MS = 2_000;
+/** 两张照片指纹相差不超过这么多位，算「几乎一样」。同一位置连拍通常在 6 以内，不同的书桌通常在 20 以上 */
+export const SIMILAR_PHOTO_BITS = 10;
 
 // ---------- 设备记录 ----------
 
@@ -54,6 +58,13 @@ export function sharedDevice(a: number, b: number): boolean {
 function purgeOldDevices() {
   q.run('DELETE FROM device_seen WHERE last_seen < datetime(\'now\', ?)', `-${DEVICE_RETENTION_DAYS} days`);
   q.run('UPDATE checkins SET device_hash = NULL WHERE device_hash IS NOT NULL AND created_at < datetime(\'now\', ?)', `-${DEVICE_RETENTION_DAYS} days`);
+  // 打卡定位同样只保留 180 天；本赛季内的打卡要用来算分，保留到赛季设置换成下一季为止
+  const { seasonStart, seasonEnd } = activityConfig();
+  q.run(
+    `UPDATE checkins SET geo_lat = NULL, geo_lng = NULL
+     WHERE geo_lat IS NOT NULL AND created_at < datetime('now', ?) AND (local_date < ? OR local_date > ?)`,
+    `-${DEVICE_RETENTION_DAYS} days`, seasonStart, seasonEnd,
+  );
 }
 
 // ---------- 判无效 ----------
@@ -196,11 +207,14 @@ function enqueue(checkinId: number, week: string, source: 'random' | 'flag' | 'p
 }
 
 /** 一次相同事件的可疑标记 */
-export function eventFlags(pair: { user_a: number; user_b: number }, event: { a: { device: string | null }; b: { device: string | null }; gapMs: number }, shared?: boolean): AuditFlag[] {
+type FlagInput = { device: string | null; photoHash?: string | null };
+
+export function eventFlags(pair: { user_a: number; user_b: number }, event: { a: FlagInput; b: FlagInput; gapMs: number }, shared?: boolean): AuditFlag[] {
   const flags: AuditFlag[] = [];
   if (event.a.device && event.a.device === event.b.device) flags.push('same_device');
   if (event.gapMs <= NEAR_SAME_MS) flags.push('near_same_time');
   if (shared ?? sharedDevice(pair.user_a, pair.user_b)) flags.push('shared_device');
+  if (event.a.photoHash && event.b.photoHash && hashDistance(event.a.photoHash, event.b.photoHash) <= SIMILAR_PHOTO_BITS) flags.push('similar_photo');
   return flags;
 }
 

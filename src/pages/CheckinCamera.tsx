@@ -3,8 +3,7 @@ import { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Camera, CameraOff, MapPin, ShieldCheck } from 'lucide-react';
 import { FlipIcon, PencilIcon, XIcon } from '../components/icons';
-import type { Checkin, CheckinStats, CheckinVisibility } from '../../shared/types';
-import { CAMPUS_PLACES, NO_LOCATION_LABEL, placeLabelFor } from '../../shared/campusPlaces';
+import type { BuddyStatus, Checkin, CheckinStats, CheckinVisibility, DayCheckinIssue } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { ease } from '../lib/motion';
 import { useToast } from '../lib/toast';
@@ -15,19 +14,18 @@ import { useCheckinSession } from '../components/checkin/useCheckinSession';
 import { useGeoLabel } from '../components/checkin/useGeoLabel';
 import { captureFrame, useLiveCamera } from '../components/checkin/useLiveCamera';
 import { Viewfinder } from '../components/checkin/Viewfinder';
-import { PHOTO_MUST, captionLength } from '../../shared/activity';
+import { PHOTO_MUST, captionLength, shortDate } from '../../shared/activity';
+import { splitNickname } from '../components/ProfileCard';
 import { useActivityConfig } from '../lib/activity';
 
 const CAPTION_MAX = 200;
 const VISIBILITY_OPTIONS = [
   { value: 'all', label: '所有同学' },
-  { value: 'buddies', label: '仅搭子' },
+  { value: 'buddies', label: '仅私聊的同学' },
 ];
-const GEO_KEY = 'dz-checkin-geo';
 const VIS_KEY = 'dz-checkin-visibility';
-const PLACE_GROUPS = [...new Set(CAMPUS_PLACES.map((place) => place.group))];
 
-// 只保存个人偏好（是否附带位置、默认可见范围）；读写失败时用默认值
+// 只保存个人偏好（默认可见范围）；读写失败时用默认值
 const readPref = (key: string) => {
   try { return localStorage.getItem(key); } catch { return null; }
 };
@@ -37,32 +35,36 @@ const writePref = (key: string, value: string) => {
 
 /**
  * 实时拍照打卡：只能用网页相机现场拍摄（getUserMedia），页面上没有任何选择文件或相册的入口。
- * 快门 → 当前视频帧 → JPEG → 携带一次性拍照凭证提交 → 服务器盖上地点与北京时间后保存。
+ * 必须定位：地点由定位自动识别，不能手选；定位成功前快门不可用。
+ * 快门 → 当前视频帧 → JPEG → 携带一次性拍照凭证与定位提交 → 服务器盖上地点与北京时间后保存。
  */
 export function CheckinCamera() {
   const nav = useNavigate();
   const toast = useToast();
   const activity = useActivityConfig();
   const captionId = useId();
-  const placeId = useId();
   const [done, setDone] = useState<{ checkin: Checkin; stats: CheckinStats } | null>(null);
   const camera = useLiveCamera(!done);
   const live = camera.state.status === 'live';
   const session = useCheckinSession(live);
-  // 水印默认带地点（浏览器会请求定位权限）；用户关掉后记住选择
-  const [geoOn, setGeoOn] = useState(() => readPref(GEO_KEY) !== '0');
   // 先让相机完成权限与预览初始化，避免 iPhone 同时弹出相机和定位权限请求。
-  const geo = useGeoLabel(geoOn && live && !done);
-  // 不记住手选楼栋，避免下次去其他地方时仍带上旧地点。
-  const [selectedPlace, setSelectedPlace] = useState('');
-  const watermarkPlace = geoOn ? placeLabelFor(geo.location, selectedPlace) : NO_LOCATION_LABEL;
+  const geo = useGeoLabel(live && !done, activity.config.accuracyMeters);
+  const watermarkPlace = geo.label;
+  const distanceOn = activity.config.distanceMeters > 0;
   const [visibility, setVisibility] = useState<CheckinVisibility>(() => (readPref(VIS_KEY) === 'buddies' ? 'buddies' : 'all'));
   const [caption, setCaption] = useState('');
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(0);
   const [status, setStatus] = useState('');
+  const [buddy, setBuddy] = useState<BuddyStatus | null>(null);
 
-  useEffect(() => writePref(GEO_KEY, geoOn ? '1' : '0'), [geoOn]);
+  useEffect(() => {
+    let alive = true;
+    api.activity.me().then((s) => { if (alive) setBuddy(s); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  usePageZoomLock();
+
   useEffect(() => writePref(VIS_KEY, visibility), [visibility]);
   useEffect(() => {
     if (camera.state.status === 'live') setStatus('相机已打开，可以拍照');
@@ -70,11 +72,34 @@ export function CheckinCamera() {
     else if (camera.state.status === 'error') setStatus(camera.state.problem.title);
   }, [camera.state]);
 
+  // 今天的第一次打卡才计分：说明不够字数时先提醒一次，免得白白用掉今天的机会
+  const scoringShot = !!buddy?.pair?.started && buddy.season.status === 'running' && !!buddy.today && !buddy.today.mine;
+  const captionShort = captionLength(caption) < activity.config.captionMin;
+  const [captionWarned, setCaptionWarned] = useState(false);
+  const [locationWarned, setLocationWarned] = useState(false);
+
   const shoot = async () => {
     const video = camera.videoRef.current;
+    const location = geo.location;
     if (busy || !live || !video) return;
-    // 按下快门的这一刻取帧
-    const image = captureFrame(video);
+    if (!location) {
+      toast.info('还没定位到', '打卡需要定位，定位成功后再按快门。');
+      return;
+    }
+    if (scoringShot && captionShort && !captionWarned) {
+      setCaptionWarned(true);
+      setNoteOpen(true);
+      toast.info('先写一句学了什么', `这是你今天的计分打卡，说明至少 ${activity.config.captionMin} 个字才计分。`);
+      return;
+    }
+    // 定位误差太大就没法核对两人是否在同一处，这次打卡不计分：先提醒一次
+    if (scoringShot && distanceOn && !geo.precise && !locationWarned) {
+      setLocationWarned(true);
+      toast.info('定位还不够准', `现在误差约 ±${Math.ceil(location.accuracy)} 米，超过 ${activity.config.accuracyMeters} 米这次不计分。到窗边等几秒会更准；仍要拍就再按一次快门。`);
+      return;
+    }
+    // 按下快门的这一刻取帧（裁剪放大时只取画面中间，与取景框一致）
+    const image = captureFrame(video, camera.digitalZoom);
     if (!image) {
       toast.error('拍照失败', '画面还没准备好，请稍后再试');
       return;
@@ -84,11 +109,7 @@ export function CheckinCamera() {
     setStatus('正在提交，服务器盖章中…');
     try {
       const token = await session.take();
-      const r = await api.checkins.create({
-        token, image, caption: caption.trim(), visibility,
-        location: geoOn ? geo.location : null,
-        placeId: geoOn ? selectedPlace || null : null,
-      });
+      const r = await api.checkins.create({ token, image, caption: caption.trim(), visibility, location });
       setDone(r);
       if (r.checkin.reviewPending) {
         setStatus('已提交，等待审核，暂未公开');
@@ -134,31 +155,12 @@ export function CheckinCamera() {
         <button type="button" onClick={back} aria-label="关闭" className="grid size-9 place-items-center rounded-full bg-white/14">
           <XIcon size={16} width={2.4} />
         </button>
-        <label className="relative flex h-9 min-w-0 items-center gap-1.5 rounded-full bg-white/14 px-3.5 text-[15px] font-semibold">
+        {/* 地点由定位自动识别，不能手选 */}
+        <p className="flex h-9 min-w-0 items-center gap-1.5 rounded-full bg-white/14 px-3.5 text-[15px] font-semibold">
           <MapPin size={15} aria-hidden className="shrink-0" />
-          <span className="truncate">{geoOn ? watermarkPlace : '不显示地点'}</span>
-          <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden className="shrink-0"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
-          <span className="sr-only">水印上的地点</span>
-          <select
-            id={placeId}
-            value={geoOn ? selectedPlace : 'off'}
-            disabled={busy}
-            onChange={(e) => {
-              if (e.target.value === 'off') { setGeoOn(false); return; }
-              setGeoOn(true);
-              setSelectedPlace(e.target.value);
-            }}
-            className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-          >
-            <option value="">自动识别楼栋</option>
-            {PLACE_GROUPS.map((group) => (
-              <optgroup key={group} label={group}>
-                {CAMPUS_PLACES.filter((place) => place.group === group).map((place) => <option key={place.id} value={place.id}>{place.label}</option>)}
-              </optgroup>
-            ))}
-            <option value="off">不显示地点</option>
-          </select>
-        </label>
+          <span className="sr-only">水印上的地点：</span>
+          <span className="truncate">{geo.location ? watermarkPlace : geo.state.status === 'error' ? '无法定位' : '正在定位…'}</span>
+        </p>
         <button type="button" onClick={() => setNoteOpen(true)} aria-label="说明与可见范围" className="grid size-9 place-items-center rounded-full bg-white/14">
           <PencilIcon size={17} width={2} />
         </button>
@@ -174,6 +176,10 @@ export function CheckinCamera() {
             live={live}
             placeLabel={watermarkPlace}
             clockOffset={session.offset}
+            zoom={camera.zoom}
+            digitalZoom={camera.digitalZoom}
+            zoomRange={camera.zoomRange}
+            onZoom={camera.setZoom}
           >
             {camera.state.status === 'error' ? (
               <div className="absolute inset-0 overflow-y-auto">
@@ -207,11 +213,13 @@ export function CheckinCamera() {
         </div>
       </div>
 
-      <p className="mt-3 shrink-0 px-6 text-center text-[13px] text-white/72">
+      <p className="mt-3 shrink-0 px-6 text-center text-[13px] leading-5 text-white/72">
         {live && !session.ready && !busy && session.error
           ? <span className="text-[#ff8a7a]" role="alert">{session.error}</span>
+          : live ? <LocationLine geo={geo} limit={activity.config.accuracyMeters} scoring={scoringShot && distanceOn} />
           : <>拍下正在学习的自己和学习内容 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>}
       </p>
+      <BuddyHint status={buddy} windowMinutes={activity.config.windowMinutes} distanceMeters={activity.config.distanceMeters} captionMissing={captionShort ? activity.config.captionMin : 0} />
 
       <div className="mt-5 mb-[calc(env(safe-area-inset-bottom)+28px)] grid shrink-0 grid-cols-3 items-center">
         <div className="flex justify-center">
@@ -225,8 +233,8 @@ export function CheckinCamera() {
           <button
             type="button"
             onClick={() => void shoot()}
-            disabled={!live || busy}
-            aria-label="拍照并提交打卡"
+            disabled={!live || busy || !geo.location}
+            aria-label={geo.location ? '拍照并提交打卡' : '正在定位，定位成功后才能拍照'}
             className="size-[78px] rounded-full border-4 border-white p-1 transition-transform active:scale-95 disabled:opacity-40"
           >
             <span className="block h-full w-full rounded-full bg-white" />
@@ -270,10 +278,14 @@ export function CheckinCamera() {
               className="min-h-20"
             />
           </Field>
-          <Field label="谁可以看到" hint={visibility === 'all' ? '登录的同学都能看到（与你互相排除的人除外）。' : '只有和你互相感兴趣、正在私聊的搭子能看到。'}>
+          <Field label="谁可以看到" hint={visibility === 'all' ? '登录的同学都能看到（与你互相排除的人除外）。' : '只有和你互相感兴趣、正在私聊的同学能看到（绑定的搭子也在其中）。'}>
             <Segmented options={VISIBILITY_OPTIONS} value={visibility} onChange={(v) => setVisibility(v as CheckinVisibility)} />
           </Field>
-          {geoOn && <p className="text-[13px] leading-relaxed text-ink-3">{placeHint(geo, selectedPlace, watermarkPlace)}只把地点文字盖在照片上，不保存经纬度。</p>}
+          <p className="text-[13px] leading-relaxed text-ink-3">
+            {placeHint(geo)}地点由定位自动识别，不能手选。
+            {distanceOn && `参加搭子打卡的话，两人相距 ${activity.config.distanceMeters} 米以内拍才算一次。`}
+            经纬度只用来核对距离，不给任何同学看。
+          </p>
           <PhotoRules />
           <WhyLive />
           <Button variant="primary" size="lg" className="w-full" onClick={() => setNoteOpen(false)}>完成</Button>
@@ -283,12 +295,123 @@ export function CheckinCamera() {
   );
 }
 
-/** 地点说明：手选、定位中、定位结果或失败 */
-function placeHint(geo: ReturnType<typeof useGeoLabel>, selected: string, label: string) {
-  if (selected) return `水印地点：${label}（手选，请确认是当前所在楼栋）。`;
-  if (geo.state.status === 'locating' || geo.state.status === 'off') return '正在定位，也可以在顶部手选所在楼栋。';
-  if (geo.state.status === 'error') return `${geo.state.message}。可以在顶部手选楼栋。`;
-  return `水印地点：${label}${geo.location ? `，定位精度约 ±${Math.ceil(geo.location.accuracy)} 米` : ''}${geo.resolution.precision !== 'building' ? '；暂时无法确认具体楼栋，请在顶部手选' : ''}。`;
+/**
+ * 打卡页不让整个页面被双指缩放：取景框里的双指留给相机变焦。
+ * iPhone 的 Safari 不理会 user-scalable=no，要拦下它自己的 gesture 事件。
+ */
+function usePageZoomLock() {
+  useEffect(() => {
+    const block = (e: Event) => e.preventDefault();
+    const events = ['gesturestart', 'gesturechange', 'gestureend'];
+    for (const name of events) document.addEventListener(name, block, { passive: false });
+    const root = document.documentElement;
+    const previous = root.style.touchAction;
+    root.style.touchAction = 'pan-x pan-y';
+    return () => {
+      for (const name of events) document.removeEventListener(name, block);
+      root.style.touchAction = previous;
+    };
+  }, []);
+}
+
+/** 当天第一次打卡不能计分的原因 */
+const ISSUE_TEXT: Record<DayCheckinIssue, string> = {
+  deleted: '已经删除',
+  taken_down: '被管理员撤下',
+  invalid: '被判无效',
+  caption: '说明字数不够',
+  location: '定位误差太大',
+};
+
+/**
+ * 拍照前提示今天这次打卡能不能计分：每人每天只有第一次打卡计分，
+ * 两人相差不超过时间窗、相距不超过规定距离才算一次。没有搭子、还没开始计分或赛季外不显示。
+ */
+function BuddyHint({ status, windowMinutes, distanceMeters, captionMissing }: {
+  status: BuddyStatus | null; windowMinutes: number; distanceMeters: number; captionMissing: number;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const pair = status?.pair;
+  const today = status?.today;
+  if (!pair || !today || status.season.status !== 'running') return null;
+  const name = splitNickname(pair.partner.nickname).word;
+  const hm = (iso: string) => new Date(Date.parse(iso) + 8 * 3_600_000).toISOString().slice(11, 16);
+  const near = distanceMeters > 0 ? `、相距 ${distanceMeters} 米以内` : '';
+  let text: string;
+  let tone: 'good' | 'plain' | 'warn' = 'plain';
+  if (!pair.started) {
+    text = `你们从 ${shortDate(pair.startsOn)}（周一）开始计分。`;
+  } else if (today.mine) {
+    text = today.mine.counts
+      ? `今天的计分打卡已经在 ${hm(today.mine.at)} 完成了，这次只发到社区，不再计分。`
+      : `今天第一次打卡（${hm(today.mine.at)}）${today.mine.issue ? ISSUE_TEXT[today.mine.issue] : '不符合计分条件'}，今天不能再计分了，这次只发到社区。`;
+  } else if (today.partner && !today.partner.counts) {
+    text = `${name} 今天第一次打卡不符合计分条件，今天不能计分了。`;
+    tone = 'warn';
+  } else if (today.partner) {
+    const minutes = Math.floor((now - Date.parse(today.partner.at)) / 60_000);
+    if (minutes <= windowMinutes) {
+      const where = distanceMeters > 0 ? `在${today.partner.place}` : '';
+      text = `${name} ${minutes < 1 ? '刚刚' : `${minutes} 分钟前`}${where}打卡了，${distanceMeters > 0 ? `在 ${distanceMeters} 米以内` : '现在'}拍就能算一次。`;
+      tone = 'good';
+    } else {
+      text = `${name} 今天 ${hm(today.partner.at)} 打过卡，已经超过 ${windowMinutes} 分钟，今天不能计分了。`;
+      tone = 'warn';
+    }
+  } else {
+    text = `这是你今天的计分打卡。${name} 还没打卡，${windowMinutes} 分钟内${near}两人都拍才算一次。`;
+  }
+  // 今天的第一次打卡还没拍、说明又不够字数：提醒先写说明，否则这次不计分
+  if (captionMissing && pair.started && !today.mine && tone !== 'warn') {
+    text += `先点右上角写一句学了什么（至少 ${captionMissing} 个字）。`;
+    if (tone === 'plain') tone = 'warn';
+  }
+  return (
+    <p className={`mx-4 mt-2 max-w-[30em] shrink-0 self-center rounded-2xl px-3.5 py-1.5 text-center text-[13px] leading-5 ${tone === 'good' ? 'bg-[#2f8f6b]/85 text-white' : tone === 'warn' ? 'bg-white/14 text-[#ffcf8a]' : 'bg-white/14 text-white/85'}`}>
+      {text}
+    </p>
+  );
+}
+
+/** 地点说明：定位中、定位结果或失败 */
+function placeHint(geo: ReturnType<typeof useGeoLabel>) {
+  if (geo.location) {
+    const coarse = geo.resolution.precision === 'campus' ? '（暂时认不出具体楼栋）' : '';
+    return `水印地点：${geo.label}${coarse}，定位误差约 ±${Math.ceil(geo.location.accuracy)} 米。`;
+  }
+  if (geo.state.status === 'error') return `${geo.state.message}。`;
+  return '正在定位。';
+}
+
+/**
+ * 取景框下方的一行：定位状态优先（没定位不能拍），定位正常时显示拍摄要求。
+ * 定位误差太大时，计分打卡会提醒这次可能不计分。
+ */
+function LocationLine({ geo, limit, scoring }: { geo: ReturnType<typeof useGeoLabel>; limit: number; scoring: boolean }) {
+  const rules = <>拍下正在学习的自己和学习内容 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>;
+  if (geo.state.status === 'error' && !geo.location) {
+    return (
+      <span className="text-[#ffcf8a]" role="alert">
+        {geo.state.denied
+          ? '打卡需要定位。iPhone：设置 → 隐私与安全性 → 定位服务 → Safari 网站，选「使用 App 期间」并打开「精确位置」；安卓：在浏览器的网站设置里允许位置信息。'
+          : geo.state.message}
+        {' '}
+        <button type="button" onClick={geo.retry} className="text-white underline underline-offset-2">重新定位</button>
+      </span>
+    );
+  }
+  if (!geo.location) return <span className="inline-flex items-center gap-1.5"><Spinner className="text-white/72" />正在定位，定位成功后才能拍照</span>;
+  if (!geo.precise) {
+    const accuracy = Math.ceil(geo.location.accuracy);
+    // 误差上千米通常是关掉了「精确位置」
+    const tip = accuracy > 1000 ? '可能关掉了「精确位置」，请在系统的定位设置里打开' : '到窗边等几秒会更准';
+    return <span className="text-[#ffcf8a]">定位误差约 ±{accuracy} 米{scoring ? `，超过 ${limit} 米不计分` : ''}。{tip}。</span>;
+  }
+  return rules;
 }
 
 /** 计分打卡的照片要求（与规则页同一份文字） */
@@ -372,7 +495,7 @@ function Result({ result, onDone, onOpen }: { result: { checkin: Checkin; stats:
           </div>
           <div>
             <dt className="text-[12.5px] text-ink-3">可见范围</dt>
-            <dd className="text-ink">{checkin.reviewPending ? '等待审核，暂未公开' : checkin.visibility === 'buddies' ? '仅搭子' : '所有同学'}</dd>
+            <dd className="text-ink">{checkin.reviewPending ? '等待审核，暂未公开' : checkin.visibility === 'buddies' ? '仅私聊的同学' : '所有同学'}</dd>
           </div>
         </dl>
         {checkin.caption && <p className="mt-3 text-[15px] leading-relaxed whitespace-pre-wrap break-words text-ink">{checkin.caption}</p>}

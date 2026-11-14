@@ -7,7 +7,7 @@ import { useAuth } from '../lib/auth';
 import { cx } from '../lib/format';
 import { ease } from '../lib/motion';
 import { Button } from '../components/ui';
-import { Plate, Stamp, Wordmark } from '../components/brand';
+import { Plate, Stamp, Wordmark, IcpNotice } from '../components/brand';
 import { CampusPhoto, useCredits } from '../components/credits';
 
 const CN_DIGITS = '〇一二三四五六七八九';
@@ -23,7 +23,7 @@ const NOTES = [
   '「匹配推荐」一次弹出一张卡片。契合度同时看两边：TA 是否符合你的期待，你是否也符合 TA 的期待；时间、学习内容和学习性格占比最高。',
   '你可以选「感兴趣」「不感兴趣」或「稍后再看」。每天最多推荐 5 位，系统根据感兴趣与不感兴趣调整次日排序；稍后再看会保存在独立清单中，不感兴趣的同学不会再出现，也不会收到任何提示。',
   '只有双方都选了「感兴趣」，才会出现在「私聊」里。先聊聊学习安排，觉得合适再在聊天中申请交换联系方式，双方确认后才会显示。',
-  '「校园社区」里有聊天区、打卡区和招募。聊天区可以发帖分享生活；社区搜索只查帖子；在匹配页的「找同学」中，可按专业、课程、时间等条件主动检索。',
+  '「社区」里有帖子、打卡、学习分享和招募，右上角可以搜索帖子；在「找搭子」的「找同学」中，可按专业、课程、时间等条件主动检索，也可以直接输入同学的 ID。',
   '打卡只能用网页实时拍照，不能上传相册图片。服务器收到照片后，在右下角逐像素盖上位置与北京时间，水印颜色随背景深浅自动取黑或白。',
   '学发定期查看新发布和修改过的内容。违规的主页、帖子或打卡会被撤下，当事人会收到写明时间与原因的邮件。',
   '图版取自公有领域的博物学著作，照片取自维基共享资源，出处列在文末。',
@@ -207,7 +207,7 @@ export function Landing() {
             <p className="text-[15px] leading-relaxed font-bold text-ink-2">
               居高怀仁　止于至善
               <br />
-              <span className="font-sans text-[13px] text-ink-3">由树仁书院学生发展中心维护</span>
+              <span className="font-sans text-[13px] text-ink-3">由树仁书院学生发展中心维护 · <IcpNotice /></span>
             </p>
           </div>
           <div className="flex flex-wrap gap-x-5 gap-y-1">

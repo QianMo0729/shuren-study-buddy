@@ -13,6 +13,19 @@ export function registerServiceWorker() {
   });
 }
 
+/**
+ * 从主屏幕打开（像 App 一样用）时，不让页面被双指缩放或双击放大，免得整个界面被放大后回不去。
+ * 在 Safari 里打开时照常可以缩放，看不清字的同学仍然可以放大。
+ * iPhone 不理会 user-scalable=no，要拦下 Safari 自己的 gesture 事件。
+ */
+export function lockZoomWhenStandalone() {
+  if (typeof window === 'undefined' || !isStandalone()) return;
+  for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(name, (e) => e.preventDefault(), { passive: false });
+  }
+  document.documentElement.style.touchAction = 'pan-x pan-y';
+}
+
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }> };
 let deferred: InstallEvent | null = null;
 const listeners = new Set<() => void>();

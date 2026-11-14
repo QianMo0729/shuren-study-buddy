@@ -127,7 +127,9 @@ function Sidebar() {
   return (
     <aside className="sticky top-0 hidden h-dvh w-[232px] shrink-0 flex-col gap-[22px] bg-[#ECEBE5] px-3.5 py-6 md:flex dark:bg-paper-2">
       <Link to="/today" className="flex items-center gap-2.5 px-2.5 text-ink">
-        <span className="grid size-7 place-items-center rounded-lg bg-brand text-[15px] font-bold text-white">树</span>
+        {/* 树仁书院院徽：浅色用绿盾，深色用白盾 */}
+        <img src="/assets/brand/shield.png" alt="" width={378} height={400} className="h-7 w-auto dark:hidden" />
+        <img src="/assets/brand/shield-white.png" alt="" width={378} height={400} className="hidden h-7 w-auto opacity-85 dark:block" />
         <span className="text-[17px] font-bold">树仁搭子</span>
       </Link>
       <nav aria-label="主导航" className="flex flex-col gap-0.5">

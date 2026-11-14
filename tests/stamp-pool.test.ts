@@ -15,7 +15,8 @@ test('stamping runs off the main thread, with fixed concurrency and a bounded qu
   t.after(() => pool.close());
   const small = photo(640, 480);
 
-  const out = await pool.stamp(small, LINES);
+  const { image: out, hash } = await pool.stamp(small, LINES);
+  assert.match(hash, /^[0-9a-f]{16}$/, 'the photo fingerprint comes back with the stamped photo');
   const decoded = jpeg.decode(out, { useTArray: true });
   assert.deepEqual([decoded.width, decoded.height], [640, 480]);
   assert.notDeepEqual(out, small, 'the photo was re-encoded with the watermark');
@@ -41,7 +42,7 @@ test('the largest accepted photo is stamped without stalling the event loop', { 
   let last = performance.now();
   const ticker = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now; }, 5);
   const started = performance.now();
-  const out = await pool.stamp(worst, LINES);
+  const { image: out } = await pool.stamp(worst, LINES);
   const elapsed = performance.now() - started;
   clearInterval(ticker);
   assert.ok(out.length > 0);
@@ -55,12 +56,12 @@ test('bad photos, oversized photos and stuck jobs fail cleanly and the pool keep
   await assert.rejects(pool.stamp(Buffer.from('not a jpeg'), LINES), (e) => reason(e) === 'failed');
   // Beyond the decoder's pixel budget: refused by the decoder itself, whatever the route validated.
   await assert.rejects(pool.stamp(photo(2600, 1600), LINES), (e) => reason(e) === 'failed');
-  assert.ok((await pool.stamp(photo(320, 240), LINES)).length > 0);
+  assert.ok((await pool.stamp(photo(320, 240), LINES)).image.length > 0);
 
   // A job that exceeds its time budget is terminated; the next one gets a fresh worker.
   const impatient = createStampPool({ ...STAMP_POOL, workers: 1, timeoutMs: 1 });
   t.after(() => impatient.close());
   await assert.rejects(impatient.stamp(photo(2560, 1560, true), LINES), (e) => reason(e) === 'timeout');
   assert.equal(impatient.running, 0);
-  assert.ok((await pool.stamp(photo(320, 240), LINES)).length > 0);
+  assert.ok((await pool.stamp(photo(320, 240), LINES)).image.length > 0);
 });

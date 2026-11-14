@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { CalendarClock, ChevronLeft, ChevronRight, Clock3, Flag, Link2, Pencil, ShieldX, Star, UserRoundX, X } from 'lucide-react';
 import { collegeOf } from '../../shared/majors';
 import {
@@ -110,7 +110,7 @@ export function ProfileDetail({ profile, onClose, onChanged, inOverlay, match, s
               <StatusDot status={profile.status} />
               {optionLabel(STATUSES, profile.status)}
               {profile.publishedAt && <span>· {timeAgo(profile.publishedAt)}上传</span>}
-              {!profile.isMe && profile.buddy?.otherHasBuddy && <span className="ml-1 rounded-[4px] bg-paper-2 px-1.5 py-px text-[12px] text-ink-2">已有搭子</span>}
+              <BuddyBadge profile={profile} />
             </p>
             <motion.h2 layoutId={inOverlay ? `nick-${profile.id}` : undefined} transition={spring} className="mt-1.5">
               {privateNote?.remarkName ? <span className="font-display text-[32px] break-words">{privateNote.remarkName}</span> : <Nickname name={profile.nickname} size={32} />}
@@ -401,4 +401,23 @@ function deadlineText(date: string) {
   const days = Math.round((target - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86_400_000);
   const label = `${y} 年 ${m} 月 ${d} 日`;
   return days > 0 ? `${label}（还有 ${days} 天）` : days === 0 ? `${label}（就是今天）` : label;
+}
+
+/**
+ * 主页上的搭子：两人都同意公开时显示搭子是谁（点开是对方主页），否则别人只看到「已有搭子」。
+ * 自己的主页上也显示，方便确认别人看到的样子。
+ */
+function BuddyBadge({ profile }: { profile: PublicProfile }) {
+  const chip = 'ml-1 inline-flex min-w-0 items-center rounded-[4px] bg-paper-2 px-1.5 py-px text-[12px] text-ink-2';
+  const buddy = profile.publicBuddy;
+  if (buddy) {
+    // 看自己搭子的主页时，下面已经有「你的学习搭子」
+    if (profile.buddy?.state === 'bound') return null;
+    return (
+      <Link to={`/u/${buddy.id}`} className={cx(chip, 'hover:text-ink')}>
+        <span className="shrink-0">搭子：</span><span className="max-w-[10em] truncate">{buddy.nickname}</span>
+      </Link>
+    );
+  }
+  return !profile.isMe && profile.buddy?.otherHasBuddy ? <span className={chip}>已有搭子</span> : null;
 }

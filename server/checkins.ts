@@ -3,7 +3,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCampusPlace, placeLabelFor, type GeoInput } from '../shared/campusPlaces.ts';
+import { resolveLocation, type GeoInput } from '../shared/campusPlaces.ts';
 import { hasPrivacyConsent } from '../shared/profileRules.ts';
 import { isStaff } from '../shared/roles.ts';
 import type { Checkin, CheckinSession, CheckinStats, CheckinVisibility, ForumAuthor, Role } from '../shared/types.ts';
@@ -63,6 +63,9 @@ export interface CheckinRow {
   invalid_at?: string | null;
   invalid_by?: number | null;
   device_hash?: string | null;
+  geo_lat?: number | null;
+  geo_lng?: number | null;
+  geo_accuracy?: number | null;
 }
 
 export interface Viewer {
@@ -239,9 +242,12 @@ export function parseLiveJpeg(image: unknown): Buffer {
   return buf;
 }
 
-/** 位置：null 表示未提供；否则必须是合法的经纬度与精度 */
-export function parseLocation(v: unknown): GeoInput | null {
-  if (v === null || v === undefined) return null;
+/**
+ * 位置：打卡必须带定位（地点不能手选），用来盖地点水印、核对两人是否在同一处。
+ * 必须是合法的经纬度与精度。
+ */
+export function parseLocation(v: unknown): GeoInput {
+  if (v === null || v === undefined) throw new HttpError(400, '打卡需要定位：请允许网页使用你的位置，定位成功后再拍');
   if (typeof v !== 'object') throw new HttpError(400, '位置信息不正确');
   const { lat, lng, accuracy } = v as Record<string, unknown>;
   const num = (x: unknown) => typeof x === 'number' && Number.isFinite(x);
@@ -269,13 +275,6 @@ export function parseVisibility(v: unknown): CheckinVisibility {
   throw new HttpError(400, '请选择谁可以看到这次打卡');
 }
 
-/** 手选地点只能来自校园楼栋目录，不能提交任意水印文字。 */
-export function parsePlaceId(v: unknown): string | null {
-  if (v === undefined || v === null || v === '') return null;
-  if (typeof v === 'string' && getCampusPlace(v)) return v;
-  throw new HttpError(400, '请选择有效的校园楼栋');
-}
-
 // ---------- 创建 ----------
 
 /** 过去 24 小时内的打卡次数（含已删除的，删掉重拍不能绕过限制） */
@@ -294,14 +293,20 @@ export function assertCanStamp() {
  */
 export async function createCheckin(
   userId: number,
-  input: { jpeg: Buffer; caption: string; visibility: CheckinVisibility; location: GeoInput | null; placeId?: string | null; deviceHash?: string | null },
+  input: { jpeg: Buffer; caption: string; visibility: CheckinVisibility; location: GeoInput; deviceHash?: string | null },
   now = new Date(),
 ): Promise<CheckinRow> {
-  const placeLabel = placeLabelFor(input.location, input.placeId);
+  // 地点只由定位决定，不能手选
+  const placeLabel = resolveLocation(input.location).label;
+  // 经纬度保留 4 位小数（约 10 米），够核对 300 米的距离，又不精确到座位
+  const lat = Math.round(input.location.lat * 1e4) / 1e4;
+  const lng = Math.round(input.location.lng * 1e4) / 1e4;
+  const accuracy = Math.ceil(input.location.accuracy);
   const stampText = stampTimeText(now);
   let stamped: Buffer;
+  let photoHash: string;
   try {
-    stamped = await stampPool.stamp(input.jpeg, [placeLabel, stampText]);
+    ({ image: stamped, hash: photoHash } = await stampPool.stamp(input.jpeg, [placeLabel, stampText]));
   } catch (error) {
     const reason = error instanceof StampError ? error.reason : 'failed';
     if (reason === 'busy') throw new HttpError(503, '现在打卡的同学有点多，请稍等几秒再按快门');
@@ -319,9 +324,10 @@ export async function createCheckin(
       q.run("INSERT INTO uploads (name, user_id, kind, bytes) VALUES (?, ?, 'checkin', ?)", name, userId, stamped.length);
       const id = Number(
         q.run(
-          `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility, device_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          userId, name, input.caption, placeLabel, sqliteTime(now), beijingDate(now), stampText, input.visibility, input.deviceHash ?? null,
+          `INSERT INTO checkins (user_id, image, caption, place_label, stamped_at, local_date, stamp_text, visibility, device_hash, photo_hash, geo_lat, geo_lng, geo_accuracy)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          userId, name, input.caption, placeLabel, sqliteTime(now), beijingDate(now), stampText, input.visibility, input.deviceHash ?? null, photoHash,
+          lat, lng, accuracy,
         ).lastInsertRowid,
       );
       applyAutoModeration('checkins', id, input.caption);
@@ -368,7 +374,8 @@ export const OTHERS_VISIBLE_SQL = `c.taken_down = 0
     SELECT 1 FROM matches m WHERE m.status = 'active' AND m.user_a = min(c.user_id, ?) AND m.user_b = max(c.user_id, ?)
   ))`;
 
-export type FeedScope = 'all' | 'buddies' | 'mine';
+/** all：全部；buddies：私聊中的同学；partner：绑定的搭子；mine：我的 */
+export type FeedScope = 'all' | 'buddies' | 'partner' | 'mine';
 
 /** 打卡列表：按时间倒序分页（before 为上一页最后一条的 id） */
 export function listCheckins(viewer: Viewer, scope: FeedScope, before: number | null): { rows: CheckinRow[]; hasMore: boolean } {
@@ -382,6 +389,17 @@ export function listCheckins(viewer: Viewer, scope: FeedScope, before: number | 
     rows = q.all<CheckinRow>(
       `SELECT c.* FROM checkins c WHERE c.deleted = 0 AND c.user_id = ? ${cursor} ORDER BY c.id DESC LIMIT ?`,
       uid, ...cursorParams, limit + 1,
+    );
+  } else if (scope === 'partner') {
+    // 绑定的学习搭子的打卡（对我可见的）
+    rows = q.all<CheckinRow>(
+      `SELECT c.* FROM checkins c
+       WHERE c.deleted = 0 AND c.user_id <> ? AND c.user_id IN (
+         SELECT CASE WHEN p.user_a = ? THEN p.user_b ELSE p.user_a END FROM buddy_pairs p
+         WHERE p.status = 'active' AND (p.user_a = ? OR p.user_b = ?)
+       ) AND ${OTHERS_VISIBLE_SQL} ${cursor}
+       ORDER BY c.id DESC LIMIT ?`,
+      uid, uid, uid, uid, uid, uid, uid, uid, ...cursorParams, limit + 1,
     );
   } else if (scope === 'buddies') {
     // 与我有进行中配对的同学（私聊里的搭子）的打卡

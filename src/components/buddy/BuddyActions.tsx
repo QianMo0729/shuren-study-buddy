@@ -17,7 +17,7 @@ export function ShurenChoice({ value, onChange }: { value: ShurenMember | null; 
   return (
     <div>
       <p className="text-[14px] font-semibold text-ink">你是树仁书院的学生吗？</p>
-      <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink-3">至少一方是树仁学生，组合才能参与搭子榜和评奖。只有管理员能看到，发奖前会按学号核对。</p>
+      <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink-3">至少一方是树仁学生，组合才能参与排名和评奖。只有管理员能看到，发奖前会按学号核对。</p>
       <Segmented className="mt-2" options={SHUREN_OPTIONS} value={value ?? ''} onChange={(v) => onChange(v as ShurenMember)} />
     </div>
   );

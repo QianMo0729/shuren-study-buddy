@@ -35,16 +35,23 @@ function Photo({ checkin, className }: { checkin: AdminCheckinView; className?: 
 }
 
 /** 一条打卡和搭子当天最近的一条，放在一起对照 */
-function CheckinPair({ checkin, author, partner, partnerCheckin }: {
+const accuracyText = (c: AdminCheckinView) => (c.accuracy === null ? '没有定位' : `定位误差 ±${c.accuracy} 米`);
+
+function CheckinPair({ checkin, author, partner, partnerCheckin, distance }: {
   checkin: AdminCheckinView; author: { id: number; nickname: string };
-  partner: { id: number; nickname: string } | null; partnerCheckin: AdminCheckinView | null;
+  partner: { id: number; nickname: string } | null; partnerCheckin: AdminCheckinView | null; distance: number | null;
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">
+      {partnerCheckin && (
+        <p className="text-[13px] text-ink-2 sm:col-span-2">
+          两次打卡{distance === null ? '无法比较距离（有一方没有定位）' : `相距约 ${distance} 米`}
+        </p>
+      )}
       <div>
         <Photo checkin={checkin} className="aspect-[4/3]" />
         <p className="mt-1.5 text-[13px] text-ink-2"><Link to={`/u/${author.id}`} className="font-semibold text-ink hover:underline">{author.nickname}</Link> · {checkin.stampText}</p>
-        <p className="text-[13px] text-ink-3">{checkin.placeLabel}</p>
+        <p className="text-[13px] text-ink-3">{checkin.placeLabel} · {accuracyText(checkin)}</p>
         <p className="mt-1 text-[14px] whitespace-pre-wrap break-words text-ink">{checkin.caption || <span className="text-ink-4">（没有说明）</span>}</p>
       </div>
       <div>
@@ -52,6 +59,7 @@ function CheckinPair({ checkin, author, partner, partnerCheckin }: {
           <>
             <Photo checkin={partnerCheckin} className="aspect-[4/3] opacity-90" />
             <p className="mt-1.5 text-[13px] text-ink-3">搭子 {partner?.nickname} 当天最近的一次 · {partnerCheckin.stampText}</p>
+            <p className="text-[13px] text-ink-3">{partnerCheckin.placeLabel} · {accuracyText(partnerCheckin)}</p>
             <p className="mt-1 text-[13.5px] whitespace-pre-wrap break-words text-ink-2">{partnerCheckin.caption}</p>
           </>
         ) : (
@@ -106,7 +114,7 @@ function Audits({ done, onChange }: { done: boolean; onChange: () => void }) {
             {item.flags.map((f) => <span key={f} className="text-accent-text">· {f}</span>)}
             <Link to={`/community/checkins/${item.checkinId}`} className="ml-auto inline-flex items-center gap-1 text-ink-3 hover:text-ink">打开打卡 <ExternalLink size={12} /></Link>
           </div>
-          <CheckinPair checkin={item.checkin} author={item.author} partner={item.partner} partnerCheckin={item.partnerCheckin} />
+          <CheckinPair checkin={item.checkin} author={item.author} partner={item.partner} partnerCheckin={item.partnerCheckin} distance={item.distance} />
           {done ? (
             <p className="mt-3 text-[13px] text-ink-3">
               {item.status === 'valid' ? '有效' : `无效：${item.checkin.invalidReason ?? ''}`} · {item.reviewer} · {dateTime(item.reviewedAt)}
@@ -155,7 +163,7 @@ function Appeals({ onChange }: { onChange: () => void }) {
             判无效：<b className="text-ink">{item.checkin.invalidReason ?? '（已恢复）'}</b>
             <span className="text-ink-3"> · {item.checkin.invalidBy} · {dateTime(item.checkin.invalidAt)}</span>
           </p>
-          <CheckinPair checkin={item.checkin} author={item.author} partner={item.partner} partnerCheckin={item.partnerCheckin} />
+          <CheckinPair checkin={item.checkin} author={item.author} partner={item.partner} partnerCheckin={item.partnerCheckin} distance={item.distance} />
           <blockquote className="mt-3 rounded-md bg-paper-2 px-3 py-2 text-[14px] text-ink-2">申诉理由：{item.body}</blockquote>
           {item.status === 'open' ? (
             item.canDecide ? (
@@ -426,6 +434,8 @@ export function ActivitySettingsTab() {
         <Field label="赛季开始（周一）"><Input type="date" value={form.seasonStart} onChange={(e) => set('seasonStart', e.target.value)} /></Field>
         <Field label="赛季结束（周日）"><Input type="date" value={form.seasonEnd} onChange={(e) => set('seasonEnd', e.target.value)} /></Field>
         <NumberField label="相同事件时间窗（分钟）" value={form.windowMinutes} onChange={(v) => set('windowMinutes', v)} />
+        <NumberField label="两人相距不超过（米）" value={form.distanceMeters} onChange={(v) => set('distanceMeters', v)} hint="填 0 表示不检查距离" />
+        <NumberField label="定位误差上限（米）" value={form.accuracyMeters} onChange={(v) => set('accuracyMeters', v)} hint="误差更大的打卡不计分" />
         <NumberField label="每周最多计几次" value={form.weeklyCap} onChange={setCap} />
         <NumberField label="计分打卡的说明至少几个字" value={form.captionMin} onChange={(v) => set('captionMin', v)} />
         <NumberField label="随机抽检比例（%）" value={form.auditRate} onChange={(v) => set('auditRate', v)} />
@@ -451,7 +461,44 @@ export function ActivitySettingsTab() {
       </div>
       {'error' in checked && <p className="text-[13.5px] text-danger" role="alert">{checked.error}</p>}
       <div className="flex justify-end"><Button variant="primary" loading={busy} disabled={'error' in checked} onClick={() => void save()}>保存设置</Button></div>
+      <CollegeRoster />
     </div>
+  );
+}
+
+/** 树仁书院名单：粘贴学号（每行一个或任意分隔），导入后按学号自动判断书院身份，不再由本人填写 */
+function CollegeRoster() {
+  const toast = useToast();
+  const [info, setInfo] = useState<{ count: number; updatedAt: string | null } | null>(null);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.admin.collegeRoster().then(setInfo).catch(() => {}); }, []);
+  const found = new Set(text.match(/(?<!\d)\d{8}(?!\d)/g) ?? []).size;
+  const save = async (value: string) => {
+    setBusy(true);
+    try {
+      const next = await api.admin.saveCollegeRoster(value);
+      setInfo(next);
+      setText('');
+      toast.success(next.count ? `名单已更新：${next.count} 个学号` : '名单已清空', next.count ? '书院身份按学号自动判断' : '恢复为本人绑定时填写');
+    } catch (e) { toast.error('保存失败', errorText(e)); } finally { setBusy(false); }
+  };
+  return (
+    <section className="space-y-3 border-t border-line pt-6" aria-labelledby="roster-title">
+      <h3 id="roster-title" className="text-[16px] font-semibold text-ink">树仁书院名单</h3>
+      <p className="text-[13.5px] leading-relaxed text-ink-3">
+        {info?.count
+          ? `现有 ${info.count} 个学号。同学的书院身份按登录邮箱里的学号自动判断，不在名单里的算非树仁学生；本人不再需要填写。`
+          : '还没有导入名单：现在由同学在绑定搭子时自己填写是否为树仁学生。导入名单后改为按学号自动判断，并在「我的」页显示「树仁书院」。'}
+        组合里至少一人是树仁学生才能参与排名。名单只有管理员能看到和修改。
+      </p>
+      <Textarea aria-label="树仁书院学号名单" value={text} onChange={(e) => setText(e.target.value)} placeholder="粘贴学号，每行一个，或从表格里整列复制（8 位数字以外的内容会被忽略）" className="min-h-28 font-mono" />
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="mr-auto text-[13px] text-ink-3">{text ? `识别到 ${found} 个学号` : ''}</span>
+        {!!info?.count && <Button disabled={busy} onClick={() => void save('')}>清空名单</Button>}
+        <Button variant="primary" loading={busy} disabled={!found} onClick={() => void save(text)}>用这份名单替换</Button>
+      </div>
+    </section>
   );
 }
 

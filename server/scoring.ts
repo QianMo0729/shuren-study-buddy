@@ -1,6 +1,8 @@
-// 打卡积分：相同事件打卡判定、每周阶梯计分、Bonus、评奖资格与搭子榜（含并列规则）。
+// 打卡积分：相同事件打卡判定（同一天、时间差在时间窗内、相距不超过规定距离）、每周阶梯计分、Bonus、评奖资格与搭子榜（含并列规则）。
 // 积分不单独存表，每次都从打卡记录算出来：打卡被判无效、撤下或解绑后，结果自动更新。
 import { addDays, beijingDay, captionLength, mondayOf, type ActivityConfig } from '../shared/activity.ts';
+import { distanceM } from '../shared/campusPlaces.ts';
+import type { DayCheckinIssue } from '../shared/types.ts';
 import { activityConfig } from './activityConfig.ts';
 import { type PairRow, shurenOf } from './buddyState.ts';
 import { q } from './db.ts';
@@ -11,14 +13,20 @@ export interface EventCheckin {
   at: number;
   date: string;
   device: string | null;
+  place: string;
+  photoHash: string | null;
+  /** 打卡时的定位；没有定位的旧打卡为 null */
+  geo: { lat: number; lng: number; accuracy: number } | null;
 }
 
-/** 一次相同事件打卡：同一天、两人各一次有效打卡、时间差不超过时间窗 */
+/** 一次相同事件打卡：同一天、两人当天的计分打卡都有效、时间差不超过时间窗、相距不超过规定距离 */
 export interface SameEvent {
   date: string;
   a: EventCheckin;
   b: EventCheckin;
   gapMs: number;
+  /** 两人相距多少米；不检查距离时为 null */
+  distanceM: number | null;
 }
 
 export interface WeekScore {
@@ -44,43 +52,114 @@ export interface PairScore {
 
 const toMs = (sqlite: string) => Date.parse(`${sqlite.replace(' ', 'T')}Z`);
 
-/** 两人在日期范围内能参与计分的打卡：未删除、未撤下、未判无效、说明字数达标 */
+interface DayRow {
+  id: number;
+  user_id: number;
+  stamped_at: string;
+  local_date: string;
+  caption: string;
+  device_hash: string | null;
+  place_label: string;
+  photo_hash: string | null;
+  geo_lat: number | null;
+  geo_lng: number | null;
+  geo_accuracy: number | null;
+  deleted: number;
+  taken_down: number;
+  invalid: number;
+}
+
+const DAY_COLUMNS = 'id, user_id, stamped_at, local_date, caption, device_hash, place_label, photo_hash, geo_lat, geo_lng, geo_accuracy, deleted, taken_down, invalid';
+
+const geoOf = (row: DayRow) => (row.geo_lat === null || row.geo_lng === null || row.geo_accuracy === null
+  ? null
+  : { lat: row.geo_lat, lng: row.geo_lng, accuracy: row.geo_accuracy });
+
+/**
+ * 当天第一次打卡为什么不能计分；能计分时为 null。
+ * 要检查距离时，还必须有定位且误差不超过上限（定位不准就没法核对两人是否在同一处）。
+ */
+function issueOf(row: DayRow, config: ActivityConfig): DayCheckinIssue | null {
+  if (row.deleted) return 'deleted';
+  if (row.taken_down) return 'taken_down';
+  if (row.invalid) return 'invalid';
+  if (captionLength(row.caption) < config.captionMin) return 'caption';
+  const geo = geoOf(row);
+  if (config.distanceMeters > 0 && (!geo || geo.accuracy > config.accuracyMeters)) return 'location';
+  return null;
+}
+
+/**
+ * 每人每天的计分打卡：当天第一次打卡（含之后删除的，删掉重拍不能换一次）。
+ * 它有效（未删除、未撤下、未判无效、说明字数达标、定位够准）才参与计分；当天之后的打卡照常发到社区，但不计分。
+ */
 export function scoringCheckins(userIds: number[], from: string, to: string, config = activityConfig()): EventCheckin[] {
   if (!userIds.length || from > to) return [];
   const marks = userIds.map(() => '?').join(',');
-  return q.all<{ id: number; user_id: number; stamped_at: string; local_date: string; caption: string; device_hash: string | null }>(
-    `SELECT id, user_id, stamped_at, local_date, caption, device_hash FROM checkins
-     WHERE user_id IN (${marks}) AND deleted = 0 AND taken_down = 0 AND invalid = 0 AND local_date BETWEEN ? AND ?
+  const rows = q.all<DayRow>(
+    `SELECT ${DAY_COLUMNS} FROM checkins
+     WHERE user_id IN (${marks}) AND local_date BETWEEN ? AND ?
      ORDER BY stamped_at, id`,
     ...userIds, from, to,
-  )
-    .filter((row) => captionLength(row.caption) >= config.captionMin)
-    .map((row) => ({ id: row.id, userId: row.user_id, at: toMs(row.stamped_at), date: row.local_date, device: row.device_hash }));
+  );
+  const seen = new Set<string>();
+  const out: EventCheckin[] = [];
+  for (const row of rows) {
+    const key = `${row.user_id}|${row.local_date}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (issueOf(row, config)) continue;
+    out.push({
+      id: row.id, userId: row.user_id, at: toMs(row.stamped_at), date: row.local_date,
+      device: row.device_hash, place: row.place_label, photoHash: row.photo_hash, geo: geoOf(row),
+    });
+  }
+  return out;
 }
 
-/** 每天最多一次：取当天时间差最小的一对 */
+export interface DayCheckin {
+  id: number;
+  at: string;
+  /** 能参与计分：未删除、未撤下、未判无效、说明字数达标、定位够准 */
+  counts: boolean;
+  issue: DayCheckinIssue | null;
+  place: string;
+}
+
+/** 某人某天的计分打卡（当天第一次打卡）；还没打卡时为 null */
+export function dayCheckin(uid: number, date: string, config = activityConfig()): DayCheckin | null {
+  const row = q.get<DayRow>(
+    `SELECT ${DAY_COLUMNS} FROM checkins WHERE user_id = ? AND local_date = ? ORDER BY stamped_at, id LIMIT 1`,
+    uid, date,
+  );
+  if (!row) return null;
+  const issue = issueOf(row, config);
+  return { id: row.id, at: new Date(toMs(row.stamped_at)).toISOString(), counts: !issue, issue, place: row.place_label };
+}
+
+/** 两次打卡相距多少米；有一方没有定位时为 null */
+export function checkinDistance(a: Pick<EventCheckin, 'geo'>, b: Pick<EventCheckin, 'geo'>): number | null {
+  return a.geo && b.geo ? distanceM(a.geo, b.geo) : null;
+}
+
+/** 每人每天只有一次计分打卡，所以每天最多一次相同事件 */
 export function sameEvents(pair: Pick<PairRow, 'user_a' | 'user_b'>, from: string, to: string, config = activityConfig()): SameEvent[] {
-  const byDate = new Map<string, { a: EventCheckin[]; b: EventCheckin[] }>();
+  const byDate = new Map<string, { a?: EventCheckin; b?: EventCheckin }>();
   for (const c of scoringCheckins([pair.user_a, pair.user_b], from, to, config)) {
     let day = byDate.get(c.date);
-    if (!day) byDate.set(c.date, (day = { a: [], b: [] }));
-    (c.userId === pair.user_a ? day.a : day.b).push(c);
+    if (!day) byDate.set(c.date, (day = {}));
+    if (c.userId === pair.user_a) day.a = c;
+    else day.b = c;
   }
   const windowMs = config.windowMinutes * 60_000;
   const out: SameEvent[] = [];
   for (const [date, { a, b }] of [...byDate].sort(([x], [y]) => x.localeCompare(y))) {
-    let best: SameEvent | null = null;
-    let j = 0;
-    // 两个列表都按时间排好序：双指针找最近的一对
-    for (const ca of a) {
-      while (j + 1 < b.length && b[j + 1].at <= ca.at) j++;
-      for (const cb of [b[j], b[j + 1]]) {
-        if (!cb) continue;
-        const gap = Math.abs(ca.at - cb.at);
-        if (gap <= windowMs && (!best || gap < best.gapMs)) best = { date, a: ca, b: cb, gapMs: gap };
-      }
-    }
-    if (best) out.push(best);
+    if (!a || !b) continue;
+    const gapMs = Math.abs(a.at - b.at);
+    if (gapMs > windowMs) continue;
+    const distance = checkinDistance(a, b);
+    if (config.distanceMeters > 0 && (distance === null || distance > config.distanceMeters)) continue;
+    out.push({ date, a, b, gapMs, distanceM: config.distanceMeters > 0 ? distance : null });
   }
   return out;
 }
@@ -133,12 +212,28 @@ export function pairScore(pair: PairRow, through: string | null, config = activi
   };
 }
 
-/** 本周进度：只给本组合看次数，不显示分数 */
+/** 本周进度：次数、按阶梯换算的预计得分（周一结算后计入总分）与本周已通过的 Bonus。只给本组合看 */
 export function currentWeek(pair: PairRow, now = new Date(), config = activityConfig()) {
   const today = beijingDay(now);
   if (today < config.seasonStart || today > config.seasonEnd || today < pair.starts_on) return null;
   const start = mondayOf(today);
-  return { start, end: addDays(start, 6), count: sameEvents(pair, start, today, config).length, cap: config.weeklyCap };
+  const events = sameEvents(pair, start, today, config);
+  const count = events.length;
+  let used = 0;
+  let bonus = 0;
+  for (const claim of q.all<{ week: string; points: number }>(
+    "SELECT week, points FROM bonus_claims WHERE pair_id = ? AND status = 'approved' AND week <= ? ORDER BY week, id", pair.id, start,
+  )) {
+    const add = Math.max(0, Math.min(claim.points, config.bonusSeasonMax - used));
+    used += add;
+    if (claim.week === start) bonus += add;
+  }
+  return {
+    start, end: addDays(start, 6), count, cap: config.weeklyCap,
+    points: config.ladder[Math.min(count, config.weeklyCap)] ?? 0,
+    bonus,
+    events,
+  };
 }
 
 // ---------- 评奖资格 ----------

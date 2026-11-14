@@ -167,9 +167,9 @@ export const api = {
   checkins: {
     /** 打开摄像头后领取的一次性拍照凭证 */
     session: () => post<CheckinSession>('/checkins/session'),
-    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } | null; placeId?: string | null }) =>
+    create: (b: { token: string; image: string; caption: string; visibility: CheckinVisibility; location: { lat: number; lng: number; accuracy: number } }) =>
       post<{ checkin: Checkin; stats: CheckinStats }>('/checkins', b),
-    list: (p: { scope?: 'all' | 'buddies' | 'mine'; before?: number } = {}) => get<{ items: Checkin[]; hasMore: boolean }>(`/checkins${qs(p)}`),
+    list: (p: { scope?: 'all' | 'buddies' | 'partner' | 'mine'; before?: number } = {}) => get<{ items: Checkin[]; hasMore: boolean }>(`/checkins${qs(p)}`),
     get: (id: number) => get<{ checkin: Checkin }>(`/checkins/${id}`),
     stats: () => get<CheckinStats>('/checkins/stats'),
     remove: (id: number) => del<{ ok: true }>(`/checkins/${id}`),
@@ -196,6 +196,8 @@ export const api = {
     decline: (inviteId: number) => post<BuddyStatus>(`/activity/invites/${inviteId}/decline`),
     cancel: (inviteId: number) => del<BuddyStatus>(`/activity/invites/${inviteId}`),
     unbind: () => post<BuddyStatus>('/activity/unbind'),
+    /** 是否在主页上公开「我们是搭子」（两人都打开才显示） */
+    showOnProfile: (show: boolean) => put<BuddyStatus>('/activity/pair/profile', { show }),
     leaderboard: () => get<LeaderboardResponse>('/activity/leaderboard'),
     appeal: (checkinId: number, body: string) => post<{ ok: true }>('/activity/appeals', { checkinId, body }),
   },
@@ -241,6 +243,8 @@ export const api = {
     activityConfig: () => get<{ config: ActivityConfig; season: SeasonInfo }>('/admin/activity-config'),
     saveActivityConfig: (config: ActivityConfig) => put<{ config: ActivityConfig; season: SeasonInfo }>('/admin/activity-config', { config }),
     staff: () => get<{ items: AdminStaff[] }>('/admin/staff'),
+    collegeRoster: () => get<{ count: number; updatedAt: string | null }>('/admin/college-roster'),
+    saveCollegeRoster: (text: string) => put<{ count: number; updatedAt: string | null }>('/admin/college-roster', { text }),
     setRole: (email: string, role: Role) => post<{ ok: true; role: Role }>('/admin/staff', { email, role }),
   },
 };
@@ -314,11 +318,15 @@ export interface AdminUser {
 
 export interface AdminCheckinView {
   id: number; image: string; caption: string; placeLabel: string; stampText: string; stampedAt: string | null;
+  /** 定位误差（米）；没有定位的旧打卡为 null */
+  accuracy: number | null;
   deleted: boolean; takenDown: boolean; invalid: boolean; invalidReason: string | null; invalidAt: string | null; invalidBy: string;
 }
 interface AdminPartnerContext {
   partner: { id: number; nickname: string } | null;
   partnerCheckin: AdminCheckinView | null;
+  /** 和搭子那次打卡相距多少米；有一方没有定位时为 null */
+  distance: number | null;
 }
 export interface AdminAudit extends AdminPartnerContext {
   checkinId: number; week: string; source: 'random' | 'flag' | 'prize' | 'manual'; sourceLabel: string; flags: string[];

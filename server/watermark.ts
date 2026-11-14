@@ -3,6 +3,7 @@
 // 这样无论背景深浅，文字都清晰可读。字形来自 server/watermarkFont.ts（Unifont 点阵）。
 import jpeg from 'jpeg-js';
 import { GLYPHS, GLYPH_HEIGHT } from './watermarkFont.ts';
+import { photoHash } from './photoHash.ts';
 
 const FALLBACK = '?';
 
@@ -133,12 +134,18 @@ export const DECODE_LIMITS = { maxResolutionInMP: 4, maxMemoryUsageInMB: 128 } a
 export const STAMP_QUALITY = 88;
 
 /**
- * 解码 JPEG → 盖水印 → 以质量 88 重新编码。重新编码同时去掉了 EXIF 等全部元数据。
+ * 解码 JPEG → 计算照片指纹 → 盖水印 → 以质量 88 重新编码。重新编码同时去掉了 EXIF 等全部元数据。
  * 解码失败会抛出异常，由调用方转换成用户可读的错误。
  * 这是同步的重计算：处理请求时不要直接调用，交给 server/stampPool.ts 的工作线程。
  */
-export function stampWatermark(input: Buffer, lines: string[]): Buffer {
+export function stampAndHash(input: Buffer, lines: string[]): { image: Buffer; hash: string } {
   const img = jpeg.decode(input, { useTArray: true, formatAsRGBA: true, ...DECODE_LIMITS });
+  // 指纹用盖章前的画面，水印不影响比较
+  const hash = photoHash(img.data, img.width, img.height);
   paintWatermark(img.data, img.width, img.height, lines);
-  return jpeg.encode({ data: img.data, width: img.width, height: img.height }, STAMP_QUALITY).data;
+  return { image: jpeg.encode({ data: img.data, width: img.width, height: img.height }, STAMP_QUALITY).data, hash };
+}
+
+export function stampWatermark(input: Buffer, lines: string[]): Buffer {
+  return stampAndHash(input, lines).image;
 }

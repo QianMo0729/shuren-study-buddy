@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import jpeg from 'jpeg-js';
 import {
-  CAMPUS, CAMPUS_PLACES, MAX_BUILDING_ACCURACY_M, NO_LOCATION_LABEL, OFF_CAMPUS_LABEL, allPlaceLabels, placeLabelFor,
+  CAMPUS, CAMPUS_PLACES, MAX_BUILDING_ACCURACY_M, NO_LOCATION_LABEL, OFF_CAMPUS_LABEL, allPlaceLabels, resolveLocation,
 } from '../shared/campusPlaces.ts';
 import { GLYPHS, GLYPH_HEIGHT } from '../server/watermarkFont.ts';
 import { glyphOf, layoutWatermark, missingGlyphs, paintWatermark, stampWatermark, textWidth } from '../server/watermark.ts';
@@ -57,11 +57,10 @@ test('character set covers every place label, the time line and printable ASCII'
   for (let c = 0x20; c <= 0x7e; c++) assert.deepEqual(missingGlyphs(String.fromCharCode(c)), []);
 });
 
-test('every selectable building watermark, including its manual-selection suffix, has complete glyphs', () => {
+test('every building watermark has complete glyphs', () => {
   for (const place of CAMPUS_PLACES) {
-    const label = placeLabelFor(null, place.id);
-    assert.match(label, /（手选）$/);
-    assert.deepEqual(missingGlyphs(label), [], `manual building label lacks glyphs: ${label}`);
+    const label = `${CAMPUS.short}·${place.label}`;
+    assert.deepEqual(missingGlyphs(label), [], `building label lacks glyphs: ${label}`);
     for (const character of label) {
       assert.ok(GLYPHS[character], `missing actual glyph for ${character} in ${label}`);
     }
@@ -212,23 +211,23 @@ test('stampWatermark decodes, stamps and re-encodes a JPEG without its metadata'
   assert.throws(() => stampWatermark(Buffer.from('not a jpeg'), LINES));
 });
 
-test('placeLabelFor maps verified building interiors to watermark text', () => {
-  assert.equal(placeLabelFor(null), NO_LOCATION_LABEL);
-  assert.equal(placeLabelFor({ lat: Number.NaN, lng: 0, accuracy: 10 }), NO_LOCATION_LABEL);
+test('locations map verified building interiors to watermark text', () => {
+  const labelOf = (loc: Parameters<typeof resolveLocation>[0]) => resolveLocation(loc).label;
+  assert.equal(labelOf(null), NO_LOCATION_LABEL);
+  assert.equal(labelOf({ lat: Number.NaN, lng: 0, accuracy: 10 }), NO_LOCATION_LABEL);
   for (const p of CAMPUS_PLACES.filter((place) => place.automatic)) {
-    assert.equal(placeLabelFor({ lat: p.lat, lng: p.lng, accuracy: 5 }), `${CAMPUS.short}·${p.label}`);
+    assert.equal(labelOf({ lat: p.lat, lng: p.lng, accuracy: 5 }), `${CAMPUS.short}·${p.label}`);
   }
-  assert.equal(placeLabelFor({ lat: 39.9042, lng: 116.4074, accuracy: 20 }), OFF_CAMPUS_LABEL);
-  assert.equal(placeLabelFor({ lat: 22.5, lng: 113.9, accuracy: 20 }), OFF_CAMPUS_LABEL);
-  // 南科大中心没有独立的一丹建筑轮廓，不能把综合体自动当成图书馆。
-  assert.equal(placeLabelFor({ lat: 22.59998770717294, lng: 113.9923345196037, accuracy: 5 }), CAMPUS.name);
-  assert.equal(placeLabelFor(null, 'yidan-library'), '南科大·一丹图书馆（手选）');
+  assert.equal(labelOf({ lat: 39.9042, lng: 116.4074, accuracy: 20 }), OFF_CAMPUS_LABEL);
+  assert.equal(labelOf({ lat: 22.5, lng: 113.9, accuracy: 20 }), OFF_CAMPUS_LABEL);
+  // 一丹只是南科大中心的东翼，中心西侧不能当成图书馆。
+  assert.equal(labelOf({ lat: 22.59998770717294, lng: 113.9923345196037, accuracy: 5 }), CAMPUS.name);
 });
 
 test('poor GPS precision never expands a building match', () => {
   for (const p of CAMPUS_PLACES) {
     for (const accuracy of [MAX_BUILDING_ACCURACY_M + 1, 120, 150, 5000]) {
-      assert.equal(placeLabelFor({ lat: p.lat, lng: p.lng, accuracy }), CAMPUS.name, `${p.id}: ±${accuracy}m`);
+      assert.equal(resolveLocation({ lat: p.lat, lng: p.lng, accuracy }).label, CAMPUS.name, `${p.id}: ±${accuracy}m`);
     }
   }
 });

@@ -4,16 +4,17 @@ import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react
 import { Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert } from 'lucide-react';
 import { GRADES } from '../../shared/options';
 import { speciesOfNickname } from '../../shared/species';
-import type { Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
+import type { BuddyStatus, Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { cx, timeAgo } from '../lib/format';
 import { useToast } from '../lib/toast';
 import { Button, ConfirmDialog, Empty, Field, GroupList, Input, Modal, PageHeader, Segmented, Skeleton, Tag } from '../components/ui';
-import { Plate } from '../components/brand';
+import { Plate, IcpNotice } from '../components/brand';
 import { useBack } from '../components/Shell';
-import { AlertIcon, BookIcon, Chevron, GridIcon, ShieldIcon, SlidersIcon } from '../components/icons';
-import { ProfileCard } from '../components/ProfileCard';
+import { AlertIcon, BookIcon, Chevron, GridIcon, PeopleIcon, ShieldIcon, SlidersIcon } from '../components/icons';
+import { useCached } from '../lib/cache';
+import { ProfileCard, splitNickname } from '../components/ProfileCard';
 import { PostCard } from '../components/PostCard';
 import { Illustration } from '../components/brand';
 import { ROLE_LABELS, isStaff } from '../../shared/roles';
@@ -71,6 +72,7 @@ function MeHome() {
   const [profile, setProfile] = useState<MyProfile | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [counts, setCounts] = useState<{ forum: string; checkins: number; events: number; favorites: number } | null>(null);
+  const { data: buddy } = useCached<BuddyStatus>('activity:me', () => api.activity.me());
 
   const load = useCallback(() => api.myProfile().then((r) => { setProfile(r.profile); setLoadError(null); }), []);
   useEffect(() => { load().catch((e) => setLoadError(errorText(e))); }, [load]);
@@ -111,7 +113,8 @@ function MeHome() {
             <div className="flex flex-col items-center gap-px">
               <h1 className="text-[24px] font-bold text-ink">{profile.nickname}</h1>
               {latin && <p className="latin text-[13px] text-ink-3">{latin}</p>}
-              <p className="mt-0.5 text-[15px] text-ink-3">{[profile.major, GRADES.find((g) => g.value === profile.grade)?.label, staff ? ROLE_LABELS[user!.role] : ''].filter(Boolean).join(' · ')}</p>
+              <CopyId id={profile.nickname} />
+              <p className="mt-0.5 text-[15px] text-ink-3">{[buddy?.shurenSource === 'roster' && buddy.shurenMember === 'yes' ? '树仁书院' : '', profile.major, GRADES.find((g) => g.value === profile.grade)?.label, staff ? ROLE_LABELS[user!.role] : ''].filter(Boolean).join(' · ')}</p>
             </div>
             <Link to="/me/edit" className="flex h-[34px] items-center rounded-full bg-brand-soft px-4 text-[15px] font-semibold text-brand-text">编辑资料与问卷</Link>
             {status !== 'live' && (
@@ -137,6 +140,10 @@ function MeHome() {
         </div>
 
         <GroupList>
+          <MeRow to="/buddy" icon={<PeopleIcon size={20} width={2} />} value={buddyValue(buddy)}>我的搭子</MeRow>
+        </GroupList>
+
+        <GroupList>
           <MeRow to="/me/preferences" icon={<SlidersIcon size={20} width={2} />}>推荐偏好</MeRow>
           <MeRow to="/me/edit" icon={<GridIcon size={20} width={2} />} value={profile ? `${profile.schedule.length} 个空闲时段` : undefined}>我的空闲时间</MeRow>
           <MeRow to="/me/settings" icon={<ShieldIcon size={20} width={2} />}>账号与隐私</MeRow>
@@ -160,6 +167,37 @@ function MeHome() {
         </GroupList>
       </div>
     </div>
+  );
+}
+
+/** 「我的搭子」一行右侧：搭子的昵称、累计积分和名次；没有搭子时显示邀请 */
+function buddyValue(status: BuddyStatus | undefined): string | undefined {
+  if (!status) return undefined;
+  if (!status.pair) {
+    const incoming = status.invites.filter((i) => i.direction === 'incoming').length;
+    return incoming ? `${incoming} 个邀请` : '还没有绑定';
+  }
+  const parts = [splitNickname(status.pair.partner.nickname).word];
+  if (status.score?.through) parts.push(`${status.score.total} 分`);
+  if (status.rank) parts.push(`第 ${status.rank.rank} 名`);
+  return parts.join(' · ');
+}
+
+/** 自己的 ID（系统昵称）：已经认识的同学可以在「找同学」里输入它找到你 */
+function CopyId({ id }: { id: string }) {
+  const toast = useToast();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(id);
+      toast.success('ID 已复制', '发给同学，对方在「找同学」里粘贴就能找到你。');
+    } catch {
+      toast.info(`我的 ID：${id}`, '没能自动复制，请长按选中后复制。');
+    }
+  };
+  return (
+    <button type="button" onClick={() => void copy()} className="mt-1 inline-flex h-7 items-center gap-1 rounded-full bg-paper-2 px-3 text-[13px] text-ink-2">
+      复制我的 ID
+    </button>
   );
 }
 
@@ -551,8 +589,8 @@ function MyForumPosts() {
       <Empty
         art={<Illustration name="mascot-empty" className="mb-4 size-24" />}
         title="还没有发过帖子"
-        desc="在校园社区的聊天区分享学习和生活，认识更多同学。"
-        action={<Button variant="primary" onClick={() => nav('/community')}>去聊天区发帖</Button>}
+        desc="在社区分享学习和生活，认识更多同学。"
+        action={<Button variant="primary" onClick={() => nav('/community')}>去社区发帖</Button>}
       />
     );
   return (
@@ -648,7 +686,7 @@ function MyCheckins() {
                 </p>
                 {c.reviewPending ? <PendingReviewBadge /> : c.takenDown && <TakenDownNote reason={c.takedownReason} what="打卡" />}
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
-                  <span>{c.reviewPending ? '审核通过后展示' : c.takenDown ? '仅本人和管理员可见' : c.visibility === 'buddies' ? '仅搭子可见' : '所有同学可见'}</span>
+                  <span>{c.reviewPending ? '审核通过后展示' : c.takenDown ? '仅本人和管理员可见' : c.visibility === 'buddies' ? '仅私聊的同学可见' : '所有同学可见'}</span>
                   <span className="inline-flex items-center gap-1">
                     <Heart size={12} aria-hidden /> <span className="sr-only">点赞</span>
                     {c.likeCount}
@@ -770,7 +808,7 @@ function AccountSettings() {
       </section>
 
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface p-5">
-        <p className="text-[14px] text-ink-2">树仁搭子由树仁书院学生发展中心维护。</p>
+        <p className="text-[14px] text-ink-2">树仁搭子由树仁书院学生发展中心维护。<br /><IcpNotice className="text-[13px] text-ink-3" /></p>
         <Link to="/" className="text-[14px] text-brand-text hover:underline">
           查看首页
         </Link>

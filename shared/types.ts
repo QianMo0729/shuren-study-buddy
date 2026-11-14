@@ -433,6 +433,8 @@ export interface PublicProfile extends ContentReviewState {
   matchState: MatchState;
   matchId: number | null;
   buddy: BuddyRelation;
+  /** 这位同学的搭子：两人都同意在主页上公开时才有，否则为 null（主页上只显示「已有搭子」） */
+  publicBuddy: { id: number; nickname: string } | null;
 }
 
 export interface ContactReveal {
@@ -562,6 +564,19 @@ export interface SeasonInfo {
   status: 'upcoming' | 'running' | 'ended';
 }
 
+/** 本周的一次相同事件（只给本组合看）：日期、两人各自的打卡时间（北京时间 HH:mm）与相距多远 */
+export interface BuddyWeekEvent {
+  date: string;
+  mine: string;
+  theirs: string;
+  place: string;
+  /** 两人打卡位置相距多少米（取整到 10 米）；不检查距离时为 null */
+  distance: number | null;
+}
+
+/** 当天第一次打卡不能计分的原因 */
+export type DayCheckinIssue = 'deleted' | 'taken_down' | 'invalid' | 'caption' | 'location';
+
 export interface BuddyStatus {
   pair: {
     id: number;
@@ -573,24 +588,37 @@ export interface BuddyStatus {
     matchId: number | null;
     /** 不能参与评奖的原因；可以参与时为 null */
     ineligible: string | null;
+    /** 是否在主页上公开「我们是搭子」：两人都打开后，双方主页上显示对方 */
+    showOnProfile: { mine: boolean; partner: boolean };
   } | null;
   invites: { id: number; direction: 'incoming' | 'outgoing'; other: BuddyPartner; createdAt: string }[];
-  /** 本周进度（只有次数，没有分数） */
-  week: { start: string; end: string; count: number; cap: number } | null;
+  /** 本周进度：次数、按阶梯换算的预计得分（周一结算后计入总分）、本周已通过的 Bonus、每次相同事件 */
+  week: { start: string; end: string; count: number; cap: number; points: number; bonus: number; events: BuddyWeekEvent[] } | null;
+  /** 组合总积分：只统计已经结束的周（周一结算）；through 为统计到的那个周日 */
+  score: { total: number; through: string | null } | null;
+  /** 组合在搭子总榜上的名次（只给自己看）；total 为参与排名的组合数 */
   rank: { rank: number; tied: boolean; total: number } | null;
+  /** 今天：两人当天的计分打卡（每人每天第一次打卡）与两人都有空的时段 */
+  today: {
+    date: string;
+    /** issue：不能计分的原因（能计分时为 null） */
+    mine: { at: string; counts: boolean; issue: DayCheckinIssue | null } | null;
+    /** place：搭子打卡照片上的地点 */
+    partner: { at: string; counts: boolean; place: string } | null;
+    /** 今天两人问卷里都有空的时段（PERIODS 下标） */
+    free: number[];
+  } | null;
   shurenMember: ShurenMember | null;
+  /** roster：按书院名单（学号）判断；self：本人填写；null：还不知道 */
+  shurenSource: 'roster' | 'self' | null;
   season: SeasonInfo;
 }
 
-export interface LeaderboardEntry {
-  rank: number;
-  tied: boolean;
-  members: [BuddyPartner, BuddyPartner];
-  mine: boolean;
-}
-
+/** 积分与名次：每个组合只能看到自己的 */
 export interface LeaderboardResponse {
-  items: LeaderboardEntry[];
+  mine: { rank: number; tied: boolean; total: number } | null;
+  /** 参与排名的组合数 */
+  pairs: number;
   /** 排名统计到哪一天（最近一个已结束的周日）；赛季还没有完整的一周时为 null */
   through: string | null;
   season: SeasonInfo;

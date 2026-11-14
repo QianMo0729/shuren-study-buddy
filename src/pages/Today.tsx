@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useActivityConfig } from '../lib/activity';
+import { useCached } from '../lib/cache';
+import { splitNickname } from '../components/ProfileCard';
 import { Link } from 'react-router';
-import { DAYS, GRADES, PERIODS, overlapSlots, slotDay, slotPeriod } from '../../shared/options';
+import { DAYS, GRADES, PERIODS } from '../../shared/options';
 import { shortDate } from '../../shared/activity';
-import type { BuddyStatus, Checkin, DeckCard, DeckResponse } from '../../shared/types';
+import type { BuddyStatus, DeckCard, DeckResponse } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
 import { Plate } from '../components/brand';
@@ -43,18 +45,13 @@ const PICKS_EMPTY: Record<DeckResponse['state'], string> = {
  */
 export function Today() {
   const today = beijingNow();
-  const [status, setStatus] = useState<BuddyStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [deck, setDeck] = useState<DeckResponse | null>(null);
-  const [version, setVersion] = useState(0);
-
-  useEffect(() => {
-    let live = true;
-    setError(null);
-    api.activity.me().then((s) => { if (live) setStatus(s); }).catch((e) => { if (live) setError(errorText(e)); });
-    api.match.deck(5).then((d) => { if (live) setDeck(d); }).catch(() => {});
-    return () => { live = false; };
-  }, [version]);
+  // 先显示上次的内容，后台再刷新：切回「今天」时不用再等
+  const buddy = useCached<BuddyStatus>('activity:me', () => api.activity.me());
+  const deckQuery = useCached<DeckResponse>('match:deck:5', () => api.match.deck(5));
+  const status = buddy.data ?? null;
+  const error = buddy.error ? errorText(buddy.error) : null;
+  const deck = deckQuery.data ?? null;
+  const reload = () => { buddy.reload(); deckQuery.reload(); };
 
   const picks = deck?.state === 'ready' ? deck.items.slice(0, 2) : [];
 
@@ -67,7 +64,7 @@ export function Today() {
           {error && !status ? (
             <p className="text-[15px] text-ink-2">
               搭子信息加载失败：{error}
-              <Button size="sm" className="ml-2" onClick={() => setVersion((v) => v + 1)}>重试</Button>
+              <Button size="sm" className="ml-2" onClick={reload}>重试</Button>
             </p>
           ) : !status ? (
             <Skeleton className="h-40 rounded-2xl" />
@@ -88,8 +85,12 @@ export function Today() {
             <h2 id="picks-title" className="text-[22px] font-bold text-ink">今日推荐</h2>
             <Link to="/match" className="text-[15px] text-brand-text">全部</Link>
           </div>
-          {!deck ? (
-            <div className="flex gap-3">{[0, 1].map((i) => <Skeleton key={i} className="h-[166px] flex-1 rounded-[18px]" />)}</div>
+          {!deck && deckQuery.error ? (
+            <button type="button" onClick={deckQuery.reload} className="flex items-center gap-3 rounded-[18px] bg-surface px-4 py-3.5 text-left text-[15px] text-ink-2">
+              <span className="flex-1">推荐没有加载出来，点一下重试</span>
+            </button>
+          ) : !deck ? (
+            <div className="flex gap-3">{[0, 1].map((i) => <Skeleton key={i} className="h-[202px] flex-1 rounded-[18px]" />)}</div>
           ) : picks.length ? (
             <div className="flex gap-3">{picks.map((card) => <PickCard key={card.id} card={card} />)}</div>
           ) : (
@@ -108,13 +109,16 @@ export function Today() {
 
 function PickCard({ card }: { card: DeckCard }) {
   const slots = card.recommendation.commonSlots.length;
-  const sub = [card.major, gradeLabel(card.grade), slots ? `${slots} 段共同空闲` : card.recommendation.reasons[0]].filter(Boolean).join(' · ');
+  const sub = [card.major, gradeLabel(card.grade)].filter(Boolean).join(' · ');
+  // 共同空闲单独一行：卡片窄，和专业挤在一行时会被截掉
+  const reason = slots ? `每周 ${slots} 段共同空闲` : card.recommendation.reasons[0];
   return (
     <Link to={`/match/u/${card.id}`} className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] bg-surface text-ink">
       <Plate nickname={card.nickname} photo={card.cover} className="h-28 w-full" fit="cover" pad="0" />
       <span className="flex flex-col gap-0.5 px-3 pt-2.5 pb-3">
         <span className="truncate text-[15px] font-semibold">{card.nickname}</span>
         <span className="truncate text-[12px] text-ink-3">{sub}</span>
+        {reason && <span className="truncate text-[12px] text-brand-text">{reason}</span>}
       </span>
     </Link>
   );
@@ -131,49 +135,24 @@ function NoBuddy({ invites }: { invites: number }) {
         </span>
         <Chevron />
       </Link>
-      <p className="text-[14px] leading-relaxed text-ink-3">在私聊或对方主页上点「邀请成为搭子」。绑定后，两人打卡同一件事就能一起计分、上搭子榜。</p>
+      <p className="text-[14px] leading-relaxed text-ink-3">在私聊或对方主页上点「邀请成为搭子」。绑定后，两人约好时间各自拍照打卡，就能一起累计积分、参与排名。</p>
     </div>
   );
 }
 
 function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<typeof beijingNow> }) {
   const pair = status.pair!;
-  const { week, rank } = status;
-  const [freeToday, setFreeToday] = useState<number[]>([]);
-  const [both, setBoth] = useState<Set<number>>(new Set());
+  const { week, rank, score } = status;
+  const { config } = useActivityConfig();
   const weekNo = pair.started ? Math.floor((Date.parse(today.date) - Date.parse(pair.startsOn)) / (7 * DAY)) + 1 : 0;
-
-  // 今天两人都有空的时段（来自双方问卷里的学习时间表）
-  useEffect(() => {
-    let live = true;
-    Promise.all([api.myProfile(), api.profile(pair.partner.id)])
-      .then(([mine, theirs]) => {
-        if (live) setFreeToday(overlapSlots(mine.profile.schedule, theirs.profile.schedule).filter((s) => slotDay(s) === today.day).map(slotPeriod));
-      })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [pair.partner.id, today.day]);
-
-  // 本周哪几天两人都打了卡：用双方最近的打卡记录按北京时间日期对齐
-  useEffect(() => {
-    if (!week) return;
-    let live = true;
-    const days = (items: Checkin[]) => new Set(items.map((c) => bjDate(Date.parse(c.stampedAt))).filter((d) => d >= week.start && d <= week.end));
-    Promise.all([api.checkins.list({ scope: 'mine' }), api.checkins.list({ scope: 'buddies' })])
-      .then(([mine, buddies]) => {
-        if (!live) return;
-        const a = days(mine.items);
-        const b = days(buddies.items.filter((c) => c.author.id === pair.partner.id));
-        const out = new Set<number>();
-        for (let i = 0; i < 7; i++) {
-          const d = bjDate(Date.parse(week.start) + i * DAY);
-          if (a.has(d) && b.has(d)) out.add(i);
-        }
-        setBoth(out);
-      })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [week, pair.partner.id]);
+  // 本周哪几天算了一次相同事件（服务器按计分规则判定，和积分一致）
+  const both = new Set((week?.events ?? []).map((e) => (new Date(`${e.date}T00:00:00Z`).getUTCDay() + 6) % 7));
+  const freeToday = status.today?.free ?? [];
+  const partnerToday = status.today?.partner;
+  const minutesAgo = partnerToday ? Math.floor((Date.now() - Date.parse(partnerToday.at)) / 60_000) : null;
+  // 搭子刚打过卡（而且那次能计分）、我今天还没打卡：提醒现在去拍
+  const nudge = pair.started && status.season.status === 'running' && !status.today?.mine && !!partnerToday?.counts
+    && minutesAgo !== null && minutesAgo <= config.windowMinutes;
 
   return (
     <>
@@ -191,9 +170,11 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
 
       {week ? (
         <div className="flex flex-col gap-2">
-          <div className="flex items-baseline justify-between">
+          <div className="flex items-baseline justify-between gap-2">
             <p className="text-[15px] font-semibold text-ink">本周同时打卡 <span className="text-brand-text tabular">{week.count}</span> 次</p>
-            {rank && <Link to="/community?tab=board" className="text-[13px] text-ink-3">搭子榜第 {rank.rank} 名</Link>}
+            <Link to="/buddy" className="shrink-0 text-[13px] text-ink-3 tabular">
+              {[score && score.through ? `累计 ${score.total} 分` : '', rank ? `第 ${rank.rank} 名` : ''].filter(Boolean).join(' · ') || '周一结算'}
+            </Link>
           </div>
           <div className="grid grid-cols-7 gap-1.5">
             {WEEK_LABELS.map((label, i) => (
@@ -209,7 +190,16 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
       )}
       {pair.ineligible && <p className="-mt-2 text-[13px] text-danger">{pair.ineligible}</p>}
 
-      {freeToday.length > 0 && (
+      {nudge ? (
+        <Link to="/community/checkin/new" className="flex items-center gap-2.5 rounded-[14px] bg-brand-soft px-3.5 py-3 text-[14px] text-ink">
+          <CameraIcon size={18} className="shrink-0 text-brand-text" />
+          <span className="min-w-0 flex-1">
+            {splitNickname(pair.partner.nickname).word} {minutesAgo! < 1 ? '刚刚' : `${minutesAgo} 分钟前`}
+            {config.distanceMeters > 0 ? `在${partnerToday!.place}打卡了，${config.distanceMeters} 米以内拍就能算一次` : '打卡了，现在拍就能算一次'}
+          </span>
+          <Chevron />
+        </Link>
+      ) : freeToday.length > 0 && (
         <div className="flex items-center gap-2.5 rounded-[14px] bg-accent-soft px-3.5 py-3">
           <ClockIcon size={18} width={2} className="shrink-0 text-accent" />
           <p className="min-w-0 flex-1 text-[14px] text-ink">

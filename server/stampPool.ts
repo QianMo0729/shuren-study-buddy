@@ -34,14 +34,20 @@ export class StampError extends Error {
   }
 }
 
+/** 盖好章的照片与盖章前画面的指纹（见 watermark.ts 的 photoHash） */
+export interface StampResult {
+  image: Buffer;
+  hash: string;
+}
+
 interface Job {
   jpeg: Buffer;
   lines: string[];
-  resolve: (out: Buffer) => void;
+  resolve: (out: StampResult) => void;
   reject: (error: StampError) => void;
 }
 
-type Reply = { ok: true; data: Uint8Array } | { ok: false };
+type Reply = { ok: true; data: Uint8Array; hash: string } | { ok: false };
 
 export function createStampPool(options: StampPoolOptions = STAMP_POOL, workerUrl = new URL('./stampWorker.ts', import.meta.url)) {
   const idle: { worker: Worker; timer: NodeJS.Timeout; release: () => void }[] = [];
@@ -61,10 +67,10 @@ export function createStampPool(options: StampPoolOptions = STAMP_POOL, workerUr
     let settled = false;
     const onMessage = (reply: Reply) => {
       // 解码失败只说明这张照片有问题，线程可以继续使用
-      finish(reply.ok ? Buffer.from(reply.data.buffer, reply.data.byteOffset, reply.data.byteLength) : new StampError('failed'), true);
+      finish(reply.ok ? { image: Buffer.from(reply.data.buffer, reply.data.byteOffset, reply.data.byteLength), hash: reply.hash } : new StampError('failed'), true);
     };
     const onBroken = () => finish(new StampError('failed'), false);
-    const finish = (result: Buffer | StampError, reusable: boolean) => {
+    const finish = (result: StampResult | StampError, reusable: boolean) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -112,8 +118,8 @@ export function createStampPool(options: StampPoolOptions = STAMP_POOL, workerUr
       return queue.length;
     },
     /** 盖章；失败时以 StampError 拒绝（busy：已满；timeout：超时；failed：照片无法解码或线程异常） */
-    stamp(jpeg: Buffer, lines: string[]): Promise<Buffer> {
-      return new Promise<Buffer>((resolve, reject) => {
+    stamp(jpeg: Buffer, lines: string[]): Promise<StampResult> {
+      return new Promise<StampResult>((resolve, reject) => {
         const job: Job = { jpeg, lines, resolve, reject };
         if (running < options.workers) start(job);
         else if (queue.length < options.maxQueue) queue.push(job);

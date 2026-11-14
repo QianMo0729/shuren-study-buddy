@@ -13,7 +13,7 @@ import { iso, q } from './db.ts';
 import { reviewState } from './autoModeration.ts';
 import { HttpError } from './auth.ts';
 import { matchStateFor } from './matches.ts';
-import { hasActiveBuddy, relationBetween } from './buddyState.ts';
+import { hasActiveBuddy, publicBuddyOf, relationBetween } from './buddyState.ts';
 import { noteForOwner } from './notes.ts';
 import { registerAccountCleanup } from './social.ts';
 import { invalidSelectedSemesterCourses, invalidSelectedSubjects, normalizeSelectedSemesterCourses, normalizeSelectedSubjects } from '../shared/courseCatalog.ts';
@@ -313,6 +313,7 @@ export function toPublic(row: ProfileRow, d: ProfileInput, viewerId: number, myS
     matchState: relation.state,
     matchId: relation.matchId,
     buddy: relationBetween(viewerId, row.user_id),
+    publicBuddy: publicBuddyOf(row.user_id, viewerId),
   };
 }
 

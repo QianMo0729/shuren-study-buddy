@@ -195,7 +195,7 @@ test('ordinary content publishes immediately while only high-risk public text is
       const session = await api('/checkins/session', author.cookie, 'POST', {});
       assert.equal(session.status, 200, session.text);
       db.prepare('UPDATE checkin_sessions SET created_at=? WHERE user_id=? AND used=0').run(new Date(Date.now() - 2_000).toISOString(), author.id);
-      const result = await api('/checkins', author.cookie, 'POST', { token: session.body.token, image, caption, visibility: 'all', location: null });
+      const result = await api('/checkins', author.cookie, 'POST', { token: session.body.token, image, caption, visibility: 'all', location: { lat: 22.6025, lng: 113.994, accuracy: 30 } });
       assert.equal(result.status, 200, result.text);
       expectReview(result.body.checkin, caption === HELD);
       const expected = caption === HELD ? 404 : 200;

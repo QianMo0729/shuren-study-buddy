@@ -832,7 +832,7 @@ function Logs() {
     takedown: { text: '撤下', danger: true }, restore: { text: '恢复' }, invalidate: { text: '判无效', danger: true }, audit_pass: { text: '抽检有效' },
     appeal_upheld: { text: '申诉维持', danger: true }, appeal_overturned: { text: '申诉撤销' }, bonus_approve: { text: 'Bonus 通过' },
     bonus_reject: { text: 'Bonus 不通过', danger: true }, disqualify: { text: '取消资格', danger: true }, requalify: { text: '恢复资格' },
-    role_change: { text: '修改角色' }, activity_config: { text: '活动设置' },
+    role_change: { text: '修改角色' }, activity_config: { text: '活动设置' }, college_roster: { text: '书院名单' },
   };
   return (
     <div className="overflow-x-auto rounded-xl bg-surface">

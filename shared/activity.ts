@@ -7,6 +7,10 @@ export interface ActivityConfig {
   seasonEnd: string;
   /** 两人打卡时间差不超过多少分钟算一次相同事件打卡 */
   windowMinutes: number;
+  /** 两人打卡位置相距不超过多少米算一次相同事件打卡；0 表示不检查距离 */
+  distanceMeters: number;
+  /** 打卡定位误差超过多少米时，这次打卡不计分（定位不准就没法核对距离） */
+  accuracyMeters: number;
   /** 每周最多计几次相同事件打卡 */
   weeklyCap: number;
   /** 阶梯分：ladder[n] 是当周计入 n 次时的得分，长度 = weeklyCap + 1，ladder[0] = 0 */
@@ -33,12 +37,15 @@ export const DEFAULT_ACTIVITY_CONFIG: ActivityConfig = {
   seasonStart: '2026-11-23',
   seasonEnd: '2027-01-10',
   windowMinutes: 30,
-  weeklyCap: 5,
-  ladder: [0, 1, 3, 4, 6, 8],
+  distanceMeters: 300,
+  accuracyMeters: 150,
+  weeklyCap: 7,
+  // 策划案 2.0 的阶梯分：1 次 1 分 … 7 次 10 分
+  ladder: [0, 1, 3, 4, 6, 7, 8, 10],
   captionMin: 5,
   bonusPoints: 2,
   bonusWeeklyMax: 1,
-  bonusSeasonMax: 6,
+  bonusSeasonMax: 10,
   auditRate: 3,
   prizePairs: 15,
   appealHours: 48,
@@ -87,6 +94,8 @@ export function validateActivityConfig(input: unknown): { config: ActivityConfig
   if (!DATE_RE.test(seasonEnd) || Number.isNaN(Date.parse(seasonEnd)) || weekdayOf(seasonEnd) !== 0) return { error: '赛季结束日期必须是周日' };
   if (seasonEnd <= seasonStart) return { error: '赛季结束日期要晚于开始日期' };
   const windowMinutes = int(src.windowMinutes, 1, 180);
+  const distanceMeters = int(src.distanceMeters, 0, 5000);
+  const accuracyMeters = int(src.accuracyMeters, 10, 2000);
   const weeklyCap = int(src.weeklyCap, 1, 7);
   const captionMin = int(src.captionMin, 0, 100);
   const bonusPoints = int(src.bonusPoints, 0, 20);
@@ -97,6 +106,8 @@ export function validateActivityConfig(input: unknown): { config: ActivityConfig
   const appealHours = int(src.appealHours, 1, 720);
   const strikeLimit = int(src.strikeLimit, 1, 50);
   if (windowMinutes === null) return { error: '时间窗应为 1–180 分钟' };
+  if (distanceMeters === null) return { error: '距离应为 0–5000 米（0 表示不检查距离）' };
+  if (accuracyMeters === null) return { error: '定位误差上限应为 10–2000 米' };
   if (weeklyCap === null) return { error: '每周上限应为 1–7 次' };
   if (captionMin === null) return { error: '说明字数下限应为 0–100' };
   if (bonusPoints === null || bonusWeeklyMax === null || bonusSeasonMax === null) return { error: 'Bonus 设置不正确' };
@@ -112,7 +123,7 @@ export function validateActivityConfig(input: unknown): { config: ActivityConfig
   for (let i = 1; i < ladder.length; i++) if (ladder[i]! < ladder[i - 1]!) return { error: '阶梯分不能随次数增加而减少' };
   return {
     config: {
-      seasonStart, seasonEnd, windowMinutes, weeklyCap, ladder: ladder as number[], captionMin,
+      seasonStart, seasonEnd, windowMinutes, distanceMeters, accuracyMeters, weeklyCap, ladder: ladder as number[], captionMin,
       bonusPoints, bonusWeeklyMax, bonusSeasonMax, auditRate, prizePairs, appealHours, strikeLimit,
     },
   };

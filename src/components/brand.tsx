@@ -20,6 +20,16 @@ export function Wordmark({ className, size = 'md' }: { className?: string; size?
 /** 旧名保留，避免其它地方引用出错 */
 export const Logo = Wordmark;
 
+/** 网站备案号：按工信部要求悬挂在页面底部，并链接到 ICP 备案管理系统首页 */
+export const ICP_NUMBER = '粤ICP备2026174393号';
+export function IcpNotice({ className }: { className?: string }) {
+  return (
+    <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer" className={cx('whitespace-nowrap hover:text-ink hover:underline', className)}>
+      {ICP_NUMBER}
+    </a>
+  );
+}
+
 export const typeTone = (studyType: string) => STUDY_TYPES.find((t) => t.value === studyType)?.tone ?? '#005C65';
 
 /**
@@ -85,7 +95,8 @@ export function Plate({
     photo ? (
       <img src={src} alt={`${nickname} 的照片`} loading="lazy" className="h-full w-full object-cover" />
     ) : (
-      <div className="grid h-full w-full place-items-center bg-mat" style={{ padding: pad }}>
+      // 用 flex 居中：放在 grid 里时 max-h-full 不生效，竖长的图版会撑出画框、被裁掉下半截
+      <div className="flex h-full w-full items-center justify-center bg-mat" style={{ padding: pad }}>
         <img
           src={src}
           alt={sp ? `${sp.zh}（${sp.latin}）的博物画` : ''}
@@ -120,10 +131,16 @@ export function Plate({
   );
 }
 
+const ILLUSTRATION_MASK = {
+  maskImage: 'radial-gradient(closest-side, #000 72%, transparent 100%)',
+  WebkitMaskImage: 'radial-gradient(closest-side, #000 72%, transparent 100%)',
+} as const;
+
 /** 吉祥物插画位：把 GPT 生成的图片放到 public/assets 下同名文件即可显示；缺图时不显示任何东西 */
 export function Illustration({ name, className }: { name: string; className?: string }) {
   const [ok, setOk] = useState(true);
   if (!ok) return null;
   // 由 scripts/gen-mascots.mjs 从 docs/mascots/ 的原图导出，512px
-  return <img src={`/assets/${name}.webp`} alt="" width={512} height={512} decoding="async" className={cx('object-contain', className)} onError={() => setOk(false)} />;
+  // 原图带米色纸底：四周柔和渐隐，放在白色卡片上不会出现一块方形底色
+  return <img src={`/assets/${name}.webp`} alt="" width={512} height={512} decoding="async" className={cx('object-contain', className)} style={ILLUSTRATION_MASK} onError={() => setOk(false)} />;
 }

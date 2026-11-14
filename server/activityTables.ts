@@ -117,10 +117,34 @@ for (const [name, ddl] of [
   ['invalid_at', 'invalid_at TEXT'],
   ['invalid_by', 'invalid_by INTEGER'],
   ['device_hash', 'device_hash TEXT'],
+  // 盖章前画面的指纹（dHash），用来提示「两人的照片几乎一样」
+  ['photo_hash', 'photo_hash TEXT'],
+  // 打卡时的定位（保留 4 位小数，约 10 米）与误差：只用来核对两人是否在同一处，不给任何同学看
+  ['geo_lat', 'geo_lat REAL'],
+  ['geo_lng', 'geo_lng REAL'],
+  ['geo_accuracy', 'geo_accuracy INTEGER'],
 ] as const) {
   if (!checkinColumns.has(name)) db.exec(`ALTER TABLE checkins ADD COLUMN ${ddl}`);
 }
+
+// 搭子组合：两人各自是否同意在主页上公开「我们是搭子」（两人都同意才显示）
+const pairColumns = columns('buddy_pairs');
+for (const [name, ddl] of [
+  ['show_a', 'show_a INTEGER NOT NULL DEFAULT 0'],
+  ['show_b', 'show_b INTEGER NOT NULL DEFAULT 0'],
+] as const) {
+  if (!pairColumns.has(name)) db.exec(`ALTER TABLE buddy_pairs ADD COLUMN ${ddl}`);
+}
 db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_date ON checkins(local_date)');
+// 同一台设备同一天只能给一个账号打卡：按设备和日期查找
+db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_device_day ON checkins(device_hash, local_date)');
+
+// 树仁书院学生名单（学号）：管理员从书院拿到名单后导入。导入后按登录邮箱里的学号判断书院身份，不再由本人填写
+db.exec(`
+CREATE TABLE IF NOT EXISTS college_roster (
+  student_id TEXT PRIMARY KEY,
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
 
 // 私聊消息：发送时命中的敏感词类别（逗号分隔）
 const messageColumns = columns('messages');

@@ -5,14 +5,14 @@ import { RouterProvider } from 'react-router/dom';
 import { MotionConfig, MotionGlobalConfig } from 'motion/react';
 import './styles.css';
 
-// 网页字体（按 unicode-range 切片、按需加载、本地托管，不依赖境外 CDN）。苹果设备优先用系统的苹方，其余设备用 MiSans。
-// 字体声明较长，异步加载，避免阻塞首屏；加载完成前先用系统字体显示。
-import('./fonts/misans.css');
+// 网页字体（按 unicode-range 切片、按需加载、本地托管，不依赖境外 CDN）。苹果设备用系统的苹方，其余设备用 MiSans。
+// 字体声明较长（几百 KB 的 CSS），异步加载，避免阻塞首屏；苹果设备根本用不到，直接不加载。
+if (!/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent)) import('./fonts/misans.css');
 import('@fontsource/source-sans-3/400-italic.css');
 import { App } from './App';
 import { AuthProvider } from './lib/auth';
 import { ToastProvider } from './lib/toast';
-import { registerServiceWorker } from './lib/pwa';
+import { lockZoomWhenStandalone, registerServiceWorker } from './lib/pwa';
 
 // 仅开发调试：localStorage.setItem('dz-skip-anim', '1') 可跳过所有动效（便于自动化测试）
 if (import.meta.env.DEV) {
@@ -35,6 +35,7 @@ const router = createBrowserRouter([{
 }]);
 
 registerServiceWorker();
+lockZoomWhenStandalone();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode><RouterProvider router={router} /></StrictMode>,

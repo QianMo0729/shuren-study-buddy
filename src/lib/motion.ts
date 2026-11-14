@@ -8,9 +8,8 @@ export const layoutSpring: Transition = { type: 'spring', stiffness: 340, dampin
 
 // 只动 transform 和 opacity：便宜、稳定，也不会影响页面内的 position: fixed 元素
 export const page: Variants = {
-  initial: { opacity: 0, y: 10 },
-  enter: { opacity: 1, y: 0, transition: { duration: 0.36, ease } },
-  exit: { opacity: 0, transition: { duration: 0.14 } },
+  initial: { opacity: 0, y: 6 },
+  enter: { opacity: 1, y: 0, transition: { duration: 0.2, ease } },
 };
 
 export const stagger = (gap = 0.045, delay = 0): Variants => ({
