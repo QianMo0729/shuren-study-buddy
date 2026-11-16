@@ -104,7 +104,7 @@ export function Landing() {
           <CampusCaption file="dusk.jpg" credits={credits} />
         </figure>
 
-        <div className="mt-10 grid gap-x-16 gap-y-6 pb-20 md:grid-cols-[1.1fr_1fr] md:pb-28">
+        <div className="mt-10 grid gap-x-16 gap-y-6 pb-8 md:grid-cols-[1.1fr_1fr] md:pb-10">
           <p className="font-display text-[clamp(26px,3.3vw,40px)] leading-[1.35] tracking-[-0.02em] text-ink">
             在南科大，找一个
             <br className="hidden sm:inline" />
@@ -130,6 +130,8 @@ export function Landing() {
           </div>
         </div>
       </section>
+
+      <section className="mx-auto max-w-[1180px] px-5 pb-12 sm:px-8 md:pb-16"><BenefitBanner /></section>
 
       {/* 本期收录 */}
       <section className="border-t border-line bg-surface">
@@ -200,7 +202,6 @@ export function Landing() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-[1180px] px-5 pb-10 sm:px-8"><BenefitBanner /></section>
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-[1180px] flex-col gap-6 px-5 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-4">
