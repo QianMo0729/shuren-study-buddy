@@ -45,7 +45,6 @@
 .benefits-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .benefits-hero .benefits-actions, .benefits-hero .benefits-primary { margin-top: 24px; }
 .benefits-hero .benefits-actions .benefits-primary { margin-top: 0; }
-.benefits-hero-link { margin-top: 24px; }
 .mn-hero h1 { font-size: clamp(30px, 3.6vw, 46px); }
 .benefits-primary, .benefits-secondary { min-height: 44px; padding: 11px 18px; font-size: 14px; font-weight: 650; border-radius: 8px; }
 .benefits-primary { background: var(--brand); color: #fff; }

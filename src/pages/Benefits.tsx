@@ -104,8 +104,6 @@ export function XmindBenefit() {
     <section className="benefits-hero xmind-hero"><div>
       <div className="benefits-hero-logo"><PartnerLogo brand="xmind" size="hero" /></div>
       <p className="benefits-eyebrow">Xmind × 树仁搭子</p><h1>Xmind，<br />你的学习好搭子</h1>
-      <p>把课程考点连起来，为小组汇报列提纲，<br />或参考模板安排复习。</p>
-      <a className="benefits-secondary benefits-hero-link" href="#xmind-register">查看点数福利与登记方式 ↓</a>
     </div><figure className="xmind-hero-preview">
       <figcaption><span>Xmind 导图示例 · 考前复习</span><a href="https://xmind.cn/mindmaps-gallery/map/cMBtgn/" target="_blank" rel="noreferrer">查看完整模板 <ArrowUpRight size={16} /></a></figcaption>
       <a className="xmind-hero-image" href="https://xmind.cn/mindmaps-gallery/map/cMBtgn/" target="_blank" rel="noreferrer"><img src="/partners/xmind/image10.jpeg" alt="Xmind 考前复习导图：从回归课本、题型分析，到二次复习和模拟考试" width={640} height={303} fetchPriority="high" /></a>
