@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { Link, useLocation } from 'react-router';
 import { ArrowLeft, ArrowUpRight, BookOpen, Check, Clock3, Gift, Layers3, Play, Sparkles } from 'lucide-react';
 import { Button, Modal } from '../components/ui';
+import { PartnerLogo, type PartnerBrand } from '../components/PartnerLogo';
 import { useAuth } from '../lib/auth';
 import { benefitsApi, marginNoteStatusLabel, useBenefitsStatus } from '../lib/benefits';
 import { xmindFeatures, xmindTemplates, xmindVideos } from '../lib/partnerContent';
@@ -12,11 +13,12 @@ const errorText = (e: unknown) => e instanceof Error ? e.message : '网络连接
 export function BenefitsLayout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { pathname } = useLocation();
+  const brand: PartnerBrand | null = pathname === '/benefits/xmind' ? 'xmind' : pathname === '/benefits/marginnote' ? 'marginnote' : null;
   return <div className="benefits-page">
     <header className="benefits-nav"><Link to={user ? '/today' : '/'} className="benefits-back"><ArrowLeft size={17} /> 树仁搭子</Link>
       <Link to="/benefits" className="benefits-nav-title">学习工具福利</Link><span className="benefits-eyebrow">品牌合作</span></header>
     <main key={pathname}>{children}</main>
-    <footer className="benefits-footer"><span>树仁书院 · 学习搭子</span><Link to="/privacy">隐私说明</Link><Link to="/benefits">全部福利</Link></footer>
+    <footer className="benefits-footer">{brand && <div className="benefits-footer-logo"><PartnerLogo brand={brand} size="compact" /></div>}<span>树仁书院 · 学习搭子</span><Link to="/privacy">隐私说明</Link><Link to="/benefits">全部福利</Link></footer>
   </div>;
 }
 
@@ -30,7 +32,7 @@ export function Benefits() {
     </section>
     <div className="benefits-brand-grid">
       <Link to="/benefits/xmind" className="benefits-brand-card benefits-xmind-card">
-        <div className="benefits-card-top"><span className="benefits-wordmark">Xmind</span><ArrowUpRight /></div>
+        <div className="benefits-card-top"><PartnerLogo brand="xmind" /><ArrowUpRight /></div>
         <div className="benefits-map" aria-hidden="true"><span>我的学习计划</span><div><i>梳理知识</i><i>考试复习</i><i>灵感与想法</i></div></div>
         <p className="benefits-eyebrow">梳理考点 · 汇报提纲 · 复习计划</p><h2>50 AI 点数</h2>
         <p>用导图梳理课程考点、列汇报提纲，也可以参考现成的复习和论文阅读模板。</p>
@@ -39,7 +41,7 @@ export function Benefits() {
         <div className="benefits-card-link">查看福利与登记方式 <ArrowUpRight size={18} /></div>
       </Link>
       <Link to="/benefits/marginnote" className="benefits-brand-card benefits-mn-card">
-        <div className="benefits-card-top"><span className="benefits-wordmark">MarginNote 5</span><ArrowUpRight /></div>
+        <div className="benefits-card-top"><PartnerLogo brand="marginnote" /><ArrowUpRight /></div>
         <img className="benefits-brand-preview" src="/partners/marginnote/english.png" alt="MarginNote 阅读、摘录与知识脑图示例" />
         <p className="benefits-eyebrow">讲义阅读 · 论文笔记 · 知识整理</p><h2>3 个月 Max 订阅</h2>
         <p>阅读讲义和论文时，把摘录、笔记和知识关系整理在一起。适用于 iPad、iPhone 和 Mac。</p>
@@ -100,6 +102,7 @@ export function XmindBenefit() {
   }
   return <BenefitsLayout>
     <section className="benefits-hero xmind-hero"><div>
+      <div className="benefits-hero-logo"><PartnerLogo brand="xmind" size="hero" /></div>
       <p className="benefits-eyebrow">Xmind × 树仁搭子</p><h1>Xmind，<br />你的学习好搭子</h1>
       <p>把课程考点连起来，为小组汇报列提纲，<br />或参考模板安排复习。</p>
       <a className="benefits-secondary benefits-hero-link" href="#xmind-register">查看点数福利与登记方式 ↓</a>
@@ -108,6 +111,7 @@ export function XmindBenefit() {
       <a className="xmind-hero-image" href="https://xmind.cn/mindmaps-gallery/map/cMBtgn/" target="_blank" rel="noreferrer"><img src="/partners/xmind/image10.jpeg" alt="Xmind 考前复习导图：从回归课本、题型分析，到二次复习和模拟考试" width={640} height={303} fetchPriority="high" /></a>
     </figure></section>
     <section id="xmind-register" className="benefits-registration">
+      <div className="benefits-claim-brand"><PartnerLogo brand="xmind" size="compact" /><span>活动点数登记</span></div>
       <ol className="benefits-flow" aria-label="Xmind 点数参与流程"><li><span>1</span>登录并浏览本页 30 秒</li><li><span>2</span>登记账号绑定手机号</li><li><span>3</span>Xmind 核对后统一充值</li></ol>
       <div className="benefits-claim-strip" aria-label="Xmind 点数登记"><span className="benefits-gift"><Sparkles size={26} /></span>
         <div className="benefits-claim-copy"><p className="benefits-eyebrow">活动福利 · 共 200 份</p><h2>{success ? '登记已提交' : '50 AI 点数'}</h2>
@@ -174,7 +178,7 @@ export function MarginNoteBenefit() {
     finally { setBusy(false); }
   }
   return <BenefitsLayout>
-    <section className="benefits-hero mn-hero"><div><p className="benefits-eyebrow">MarginNote 5 × 树仁搭子</p><h1>读讲义、看论文，<br />把重点和笔记放在一起</h1><p>在阅读中摘录重点，再整理成知识结构，方便回看与复习。<br />适用于 iPad、iPhone 和 Mac。</p>
+    <section className="benefits-hero mn-hero"><div><div className="benefits-hero-logo"><PartnerLogo brand="marginnote" size="hero" /></div><p className="benefits-eyebrow">MarginNote 5 × 树仁搭子</p><h1>读讲义、看论文，<br />把重点和笔记放在一起</h1><p>在阅读中摘录重点，再整理成知识结构，方便回看与复习。<br />适用于 iPad、iPhone 和 Mac。</p>
       <div className="benefits-availability"><strong>活动福利：3 个月 Max 订阅</strong><p>共 100 个兑换码 · <span role="status">{availability}</span></p>{!statusError && status?.marginnote.phase === 'upcoming' && <p>兑换说明确认后，将在本页开放领取。</p>}</div>
       <div className="benefits-actions"><a className="benefits-primary" href="#mn-examples">查看学习示例 ↓</a><a className="benefits-secondary" href="#mn-claim">{ownCode ? '查看我的兑换码' : '查看兑换条件'} ↓</a></div></div>
       <div className="benefits-hero-art"><span className="benefits-image-label">MarginNote 5 · 英语学习示例</span><img src="/partners/marginnote/english.png" alt="MarginNote 5 英语阅读与知识整理界面" /></div>
@@ -188,7 +192,7 @@ export function MarginNoteBenefit() {
     </section>
     <section id="mn-examples" className="benefits-section"><SectionHead number="02" title="看看你正在学的课程，能怎么整理" subtitle="以下为合作方提供的笔记示例。" /><div className="benefits-video-grid">{[['english', '英语 · 把词汇放回语境'], ['anatomy', '解剖 · 看清知识之间的关系'], ['math', '高数 · 从公式到解题思路']].map(([image, title]) => <figure className="benefits-media-card" key={image}><img src={`/partners/marginnote/${image}.png`} alt={title} loading="lazy" /><figcaption><h3>{title}</h3></figcaption></figure>)}</div></section>
     <section className="benefits-resource"><div><p className="benefits-eyebrow">更多学习资源</p><h2>真题、词汇和错题，放在一起学。</h2><p>在 MarginNote 5 首页点击「更多学习集」，获取四六级、考研英语真题及高频词汇资源。也可以选择刷题卡片、外刊生词等学习场景。</p></div><img src="/partners/marginnote/resources.png" alt="在 MarginNote 首页找到更多学习集的操作示意" loading="lazy" /></section>
-    <section id="mn-claim" className="benefits-mn-claim"><p className="benefits-eyebrow">3 个月 Max 订阅 · 共 100 个兑换码</p><h2>领取前，先确认这些条件</h2>
+    <section id="mn-claim" className="benefits-mn-claim"><div className="benefits-claim-brand"><PartnerLogo brand="marginnote" /><span>订阅兑换福利</span></div><p className="benefits-eyebrow">3 个月 Max 订阅 · 共 100 个兑换码</p><h2>领取前，先确认这些条件</h2>
       <ul className="benefits-rules"><li>每个树仁搭子账号可领取 1 个兑换码。</li><li>每个 Apple 账户只能兑换 1 张，不可叠加。</li><li>兑换码需在 App Store 使用，请在 <strong>2027 年 2 月 12 日前</strong>完成兑换。</li></ul>
       <h3 className="benefits-subheading">开放后的参与流程</h3><p>登录树仁搭子 → 领取兑换码 → 在 App Store 完成兑换</p>
       <ol><li>打开 App Store，点击账号头像，选择「兑换充值卡或代码」。</li><li>输入兑换码，阅读兑换确认页显示的条件后完成兑换。</li><li>使用同一 Apple 账户打开 MarginNote 5。</li></ol>

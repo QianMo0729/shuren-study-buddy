@@ -76,7 +76,7 @@ node --import tsx --test --test-isolation=none --test-name-pattern='partner sour
 
 ## 入口品牌图形来源
 
-福利入口分别展示两家产品的官网 Logo，保持原始比例和颜色，不使用礼物图标代替产品标识。
+福利入口、福利专区及产品详情页统一使用两家产品的官网 Logo，保持原始比例和颜色。详情页在首屏、领取区和页尾展示对应品牌，首屏使用更大尺寸；白色底板保证深色主题下仍可识别品牌原图。
 
 - Xmind：[官方设计资源](https://xmind.cn/design-resources/)，入口引用官网提供的 [Logo SVG](https://assets.xmind.cn/www/assets/images/new-xmind-logo-dark-60f56e9142.svg)。
 - MarginNote 5：[官网](https://www.marginnote.com/en/index.html)页脚使用的 [MN5 Logo PNG](https://www.marginnote.com/assets/mn5/mn5-logo.png)。

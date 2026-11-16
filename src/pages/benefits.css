@@ -14,9 +14,6 @@
 .benefits-brand-card { padding: 32px; border: 1px solid var(--line); border-radius: 24px; background: var(--surface); overflow: hidden; transition: transform .2s, box-shadow .2s; }
 .benefits-brand-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
 .benefits-card-top { display: flex; justify-content: space-between; align-items: center; }
-.benefits-wordmark { font-size: 25px; letter-spacing: -.04em; font-weight: 750; }
-.benefits-xmind-card .benefits-wordmark { color: #df5534; }
-.benefits-mn-card .benefits-wordmark { color: var(--brand-text); }
 .benefits-brand-card h2 { font-size: 28px; font-weight: 720; margin: 10px 0; }
 .benefits-brand-card > p:not(.benefits-eyebrow) { font-size: 14px; line-height: 1.7; color: var(--ink-2); }
 .benefits-brand-card .benefits-card-condition { margin-top: 16px; font-size: 13px; color: var(--ink-3); }
@@ -30,6 +27,10 @@
 .benefits-footnote { font-size: 12px; line-height: 1.8; color: var(--ink-3); margin: 24px 0 0; }
 .benefits-footer { max-width: 1180px; padding: 26px 28px; margin: auto; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 20px; color: var(--ink-3); font-size: 12px; }
 .benefits-footer > span { margin-right: auto; }
+.benefits-footer-logo { width: 100%; }
+.benefits-hero-logo { margin-bottom: 24px; }
+.benefits-claim-brand { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 22px; }
+.benefits-claim-brand > span:last-child { font-size: 13px; font-weight: 650; color: var(--ink-3); }
 .benefits-hero { padding: 64px 0 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 36px; align-items: center; }
 .benefits-hero h1 { font-size: clamp(34px, 4.7vw, 58px); font-weight: 750; line-height: 1.2; letter-spacing: -.04em; margin: 20px 0 24px; }
 .benefits-hero-art { border-radius: 20px; border: 1px solid var(--line); padding: 20px; background: var(--surface); transform: rotate(-2deg); box-shadow: var(--shadow-md); }
