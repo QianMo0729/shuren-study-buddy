@@ -103,7 +103,10 @@ export function XmindBenefit() {
       <p className="benefits-eyebrow">Xmind × 树仁搭子</p><h1>Xmind，<br />你的学习好搭子</h1>
       <p>把课程考点连起来，为小组汇报列提纲，<br />或参考模板安排复习。</p>
       <a className="benefits-secondary benefits-hero-link" href="#xmind-register">查看点数福利与登记方式 ↓</a>
-    </div><div className="benefits-hero-art"><span className="benefits-image-label">Xmind 导图示例 · 线性代数考点</span><img src="/partners/xmind/image8.jpeg" alt="Xmind 线性代数考点知识导图" /></div></section>
+    </div><figure className="xmind-hero-preview">
+      <figcaption><span>Xmind 导图示例 · 考前复习</span><a href="https://xmind.cn/mindmaps-gallery/map/cMBtgn/" target="_blank" rel="noreferrer">查看完整模板 <ArrowUpRight size={16} /></a></figcaption>
+      <a className="xmind-hero-image" href="https://xmind.cn/mindmaps-gallery/map/cMBtgn/" target="_blank" rel="noreferrer"><img src="/partners/xmind/image10.jpeg" alt="Xmind 考前复习导图：从回归课本、题型分析，到二次复习和模拟考试" width={640} height={303} fetchPriority="high" /></a>
+    </figure></section>
     <section id="xmind-register" className="benefits-registration">
       <ol className="benefits-flow" aria-label="Xmind 点数参与流程"><li><span>1</span>登录并浏览本页 30 秒</li><li><span>2</span>登记账号绑定手机号</li><li><span>3</span>Xmind 核对后统一充值</li></ol>
       <div className="benefits-claim-strip" aria-label="Xmind 点数登记"><span className="benefits-gift"><Sparkles size={26} /></span>
