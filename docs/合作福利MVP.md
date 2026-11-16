@@ -73,3 +73,12 @@ node --import tsx --test --test-isolation=none --test-name-pattern='partner sour
 新增用例覆盖：30 秒等待、凭证过期与账号绑定、手机号格式和同意用途、重复提交、200 条上限、兑换码分配与账号隔离、注销后不回收旧码、名单授权与 CSV 导出。原有开发服务器测试继续保留；当前受限执行环境不能监听网络端口，完整 HTTP 回归及浏览器检查需在可启动服务的 WSL 环境运行。
 
 素材 ZIP 含尚未分配的真实兑换码，原始 ZIP、CSV、DOCX 已在开发服务器静态访问规则中禁用。公开页面只使用从素材中提取的指定图片。
+
+## 入口品牌图形来源
+
+福利入口分别展示两家产品的官网 Logo，保持原始比例和颜色，不使用礼物图标代替产品标识。
+
+- Xmind：[官方设计资源](https://xmind.cn/design-resources/)，入口引用官网提供的 [Logo SVG](https://assets.xmind.cn/www/assets/images/new-xmind-logo-dark-60f56e9142.svg)。
+- MarginNote 5：[官网](https://www.marginnote.com/en/index.html)页脚使用的 [MN5 Logo PNG](https://www.marginnote.com/assets/mn5/mn5-logo.png)。
+
+当前执行环境无法下载外部图片，入口直接引用以上官网图链，并设置不发送来源页地址；图片加载失败时保留品牌名称。后续取得品牌方本地 Logo 文件后，可以替换为本地静态资源。
