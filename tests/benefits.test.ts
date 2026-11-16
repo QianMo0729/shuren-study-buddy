@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 test('partner benefits preserve quotas, private access and single-code allocation', async (t) => {
+  t.mock.method(Date, 'now', () => Date.parse('2026-11-16T00:00:00Z'));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shuren-benefits-'));
   process.env.DATA_DIR = dir;
   process.env.XMIND_LIST_TOKEN = 'fixture-partner-token-with-at-least-32-characters';
@@ -57,8 +58,10 @@ test('partner benefits preserve quotas, private access and single-code allocatio
   await t.test('codes stay private, claims are idempotent, and deleted accounts never release a used code', () => {
     assert.equal(benefits.importMarginNoteCodes(['TESTCODE001', 'TESTCODE002', 'TESTCODE001']), 2);
     assert.equal(benefits.benefitStatus().marginnote.enabled, false);
+    assert.equal(benefits.benefitStatus().marginnote.phase, 'upcoming');
     assert.throws(() => benefits.claimMarginNote(a), /暂未开放/);
     process.env.MARGINNOTE_RENEWAL_TERMS = 'Fixture terms for tests only';
+    assert.equal(benefits.benefitStatus().marginnote.phase, 'open');
     const first = benefits.claimMarginNote(a);
     assert.deepEqual(benefits.claimMarginNote(a), first);
     assert.notEqual(benefits.claimMarginNote(b).code, first.code);
@@ -66,8 +69,21 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.throws(() => benefits.claimMarginNote(c), /领完/);
     q.run('DELETE FROM users WHERE id = ?', b);
     assert.equal(benefits.benefitStatus().marginnote.remaining, 0);
+    assert.equal(benefits.benefitStatus().marginnote.phase, 'exhausted');
     assert.throws(() => benefits.claimMarginNote(c), /领完/);
     assert.equal(JSON.stringify(benefits.benefitStatus()).includes('TESTCODE'), false);
+  });
+
+  await t.test('expiry is distinct from an unopened activity, even when renewal terms are absent', (subtest) => {
+    subtest.mock.method(Date, 'now', () => Date.parse('2027-02-13T00:00:00+08:00'));
+    const terms = process.env.MARGINNOTE_RENEWAL_TERMS;
+    try {
+      assert.equal(benefits.benefitStatus().marginnote.phase, 'ended');
+      delete process.env.MARGINNOTE_RENEWAL_TERMS;
+      assert.equal(benefits.benefitStatus().marginnote.phase, 'ended');
+      assert.equal(benefits.benefitStatus().marginnote.enabled, false);
+      assert.throws(() => benefits.claimMarginNote(c), /暂未开放或已结束/);
+    } finally { process.env.MARGINNOTE_RENEWAL_TERMS = terms; }
   });
 
   await t.test('the list accepts only admins or the partner credential and exports no unrelated user fields', async () => {

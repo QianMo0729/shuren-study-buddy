@@ -44,9 +44,11 @@ export function benefitStatus() {
   const count = q.get<{ n: number }>('SELECT count(*) AS n FROM benefit_xmind')!.n;
   const remaining = q.get<{ n: number }>('SELECT count(*) AS n FROM benefit_marginnote WHERE claimed_at IS NULL')!.n;
   const renewalTerms = process.env.MARGINNOTE_RENEWAL_TERMS?.trim() || '';
+  const ended = Date.now() >= MN_EXPIRES;
+  const phase = ended ? 'ended' : !renewalTerms ? 'upcoming' : remaining === 0 ? 'exhausted' : 'open';
   return {
     xmind: { limit: XMIND_LIMIT, remaining: Math.max(0, XMIND_LIMIT - count), waitSeconds: XMIND_WAIT_MS / 1000 },
-    marginnote: { remaining, enabled: !!renewalTerms && Date.now() < MN_EXPIRES, renewalTerms, redeemBefore: '2027-02-12' },
+    marginnote: { remaining, enabled: !!renewalTerms && !ended, phase, renewalTerms, redeemBefore: '2027-02-12' },
   };
 }
 
