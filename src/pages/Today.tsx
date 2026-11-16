@@ -12,6 +12,7 @@ import { MeAvatar } from '../components/Shell';
 import { Button, PageHeader, Skeleton } from '../components/ui';
 import { CameraIcon, Chevron, ClockIcon } from '../components/icons';
 import { InstallSheet } from '../components/InstallSheet';
+import { BenefitBanner } from '../components/BenefitBanner';
 
 const DAY = 86_400_000;
 /** 北京时间的日期字符串 YYYY-MM-DD */
@@ -102,6 +103,7 @@ export function Today() {
         </section>
       </div>
 
+      <div className="mt-[22px]"><BenefitBanner /></div>
       <InstallSheet />
     </div>
   );

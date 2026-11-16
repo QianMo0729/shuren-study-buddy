@@ -3,13 +3,21 @@ import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import test from 'node:test';
-import { createServer, resolveConfig } from 'vite';
+import { createServer, isFileServingAllowed, resolveConfig } from 'vite';
 
 // The development server serves the repository directory, which is also where the database,
 // uploaded images and local secrets live by default. These tests run the real vite.config.ts.
 const root = path.resolve(import.meta.dirname, '..');
 const configFile = path.join(root, 'vite.config.ts');
 const resolve = () => resolveConfig({ root, configFile, logLevel: 'silent' }, 'serve');
+
+test('partner source archives and code lists are denied while public campaign images remain accessible', async () => {
+  const config = await resolve();
+  for (const file of ['MarginNote 活动素材.zip', 'codes.csv', 'Xmind树仁搭子合作页策划与素材.docx', 'Xmind树仁搭子网页排版视觉参考图.pdf']) {
+    assert.equal(isFileServingAllowed(config, path.join(root, file)), false, file);
+  }
+  assert.equal(isFileServingAllowed(config, path.join(root, 'public/partners/xmind/image1.jpeg')), true);
+});
 
 test('the dev server listens on this machine only unless LAN access is requested, and tells the API who is calling', async (t) => {
   const previous = process.env.DEV_LAN;

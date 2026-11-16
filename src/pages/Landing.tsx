@@ -10,6 +10,8 @@ import { Button } from '../components/ui';
 import { Plate, Stamp, Wordmark, IcpNotice } from '../components/brand';
 import { CampusPhoto, useCredits } from '../components/credits';
 
+import { BenefitBanner } from '../components/BenefitBanner';
+
 const CN_DIGITS = '〇一二三四五六七八九';
 function edition(d = new Date()) {
   const y = String(d.getFullYear()).split('').map((c) => CN_DIGITS[Number(c)]).join('');
@@ -198,6 +200,7 @@ export function Landing() {
         </div>
       </section>
 
+      <section className="mx-auto max-w-[1180px] px-5 pb-10 sm:px-8"><BenefitBanner /></section>
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-[1180px] flex-col gap-6 px-5 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-4">
