@@ -45,14 +45,44 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.equal(benefits.benefitStatus().xmind.remaining, 198);
   });
 
+  await t.test('an account keeps one place however many times it opens the page, and cannot swap in another number', () => {
+    const first = benefits.registerXmind(a, body(matureVisit(a)));
+    for (let i = 0; i < 5; i++) assert.deepEqual(benefits.registerXmind(a, body(matureVisit(a))), first);
+    assert.throws(() => benefits.registerXmind(a, { ...body(matureVisit(a)), phone: '13900139000' }), /已经登记过/);
+    assert.equal(benefits.xmindRegistrations().length, 2);
+    // The student sees enough to recognise the number, never the whole of it.
+    const mine = benefits.myXmindRegistration(a)!;
+    assert.equal(mine.phone, '138****8000');
+    assert.ok(!Number.isNaN(Date.parse(mine.createdAt)));
+    assert.equal(benefits.myXmindRegistration(c), null);
+  });
+
   await t.test('the 200th registration succeeds, record 201 is refused, and a successful retry still works', () => {
     for (let i = 2; i < 199; i++) q.run('INSERT INTO benefit_xmind (visit_hash, phone) VALUES (?, ?)', `fixture-${i}`, '13800138000');
-    const tokenA = matureVisit(a), tokenB = matureVisit(b);
-    const last = benefits.registerXmind(a, body(tokenA));
-    assert.throws(() => benefits.registerXmind(b, body(tokenB)), /名额已满/);
+    const d = user('benefits-d@mail.sustech.edu.cn');
+    const tokenC = matureVisit(c), tokenD = matureVisit(d);
+    const last = benefits.registerXmind(c, body(tokenC));
+    assert.throws(() => benefits.registerXmind(d, body(tokenD)), /名额已满/);
     assert.equal(benefits.xmindRegistrations().length, 200);
     assert.equal(benefits.benefitStatus().xmind.remaining, 0);
-    assert.deepEqual(benefits.registerXmind(a, body(tokenA)), last);
+    assert.deepEqual(benefits.registerXmind(c, body(tokenC)), last);
+    // An account that already holds a place is still told so when the list is full and its visit is new.
+    assert.deepEqual(benefits.registerXmind(c, body(matureVisit(c))), last);
+  });
+
+  await t.test('removing a registration frees its place for a corrected number, and closing an account removes its number', async () => {
+    const { runAccountCleanup } = await import('../server/social.ts');
+    const mine = () => q.get<{ id: number }>('SELECT id FROM benefit_xmind WHERE user_id = ?', c);
+    assert.equal(benefits.deleteXmindRegistration(mine()!.id), true);
+    assert.equal(benefits.deleteXmindRegistration(999_999), false);
+    assert.equal(benefits.benefitStatus().xmind.remaining, 1);
+    benefits.registerXmind(c, { ...body(matureVisit(c)), phone: '13900139000' });
+    assert.equal(benefits.myXmindRegistration(c)!.phone, '139****9000');
+    assert.equal(benefits.benefitStatus().xmind.remaining, 0);
+    runAccountCleanup(c);
+    assert.equal(mine(), undefined);
+    assert.equal(q.get<{ n: number }>('SELECT count(*) AS n FROM benefit_visits WHERE user_id = ?', c)!.n, 0);
+    assert.equal(benefits.benefitStatus().xmind.remaining, 1);
   });
 
   await t.test('codes stay private, claims are idempotent, and deleted accounts never release a used code', () => {
@@ -89,7 +119,7 @@ test('partner benefits preserve quotas, private access and single-code allocatio
   await t.test('the list accepts only admins or the partner credential and exports no unrelated user fields', async () => {
     const { benefitsRouter } = await import('../server/routes/benefits.ts');
     // Exercise the real router middleware without needing a listening network socket.
-    const call = (url: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: any; headers: Record<string, string> }>((resolve) => {
+    const call = (url: string, headers: Record<string, string> = {}, method = 'GET') => new Promise<{ status: number; body: any; headers: Record<string, string> }>((resolve) => {
       const role = headers['x-fixture-role'];
       const [pathname, search = ''] = url.split('?');
       const responseHeaders: Record<string, string> = {};
@@ -99,7 +129,7 @@ test('partner benefits preserve quotas, private access and single-code allocatio
         json: (value: unknown) => { resolve({ status: 200, body: value, headers: responseHeaders }); },
         send: (value: unknown) => { resolve({ status: 200, body: value, headers: responseHeaders }); },
       };
-      const req = { method: 'GET', url: pathname, headers: { ...headers, authorization: headers.Authorization }, query: Object.fromEntries(new URLSearchParams(search)), ip: '127.0.0.1',
+      const req = { method, url: pathname, headers: { ...headers, authorization: headers.Authorization }, query: Object.fromEntries(new URLSearchParams(search)), ip: '127.0.0.1',
         user: role ? { id: a, email: 'fixture@example.com', role } : undefined };
       benefitsRouter.handle(req as any, res as any, (error: any) => resolve({ status: error?.status ?? 404, body: error?.message, headers: responseHeaders }));
     });
@@ -116,5 +146,14 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.equal(csv.status, 200);
     assert.match(csv.body, /手机号/);
     assert.equal((await call('/marginnote/mine', headers)).status, 401);
+    assert.equal((await call('/xmind/mine', headers)).status, 401);
+    assert.equal((await call('/xmind/mine', { 'x-fixture-role': 'user' })).body.registration.phone, '138****8000');
+    // The partner credential reads the list; only a site administrator can remove a record.
+    const target = `${endpoint}/${records.body.items[0].id}`;
+    assert.equal((await call(target, headers, 'DELETE')).status, 401);
+    assert.equal((await call(target, { 'x-fixture-role': 'moderator' }, 'DELETE')).status, 403);
+    assert.equal((await call(target, { 'x-fixture-role': 'admin' }, 'DELETE')).status, 200);
+    assert.equal((await call(target, { 'x-fixture-role': 'admin' }, 'DELETE')).status, 404);
+    assert.equal((await call(endpoint, headers)).body.items.length, records.body.items.length - 1);
   });
 });

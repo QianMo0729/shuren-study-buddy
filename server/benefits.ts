@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { db, iso, q } from './db.ts';
 import { HttpError, sha256 } from './auth.ts';
+import { registerAccountCleanup } from './social.ts';
 
 export const XMIND_LIMIT = 200;
 export const XMIND_WAIT_MS = 30_000;
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS benefit_visits (
 );
 CREATE TABLE IF NOT EXISTS benefit_xmind (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   visit_hash TEXT NOT NULL UNIQUE,
   phone TEXT NOT NULL,
   consent_version TEXT NOT NULL DEFAULT 'xmind-2026-11',
@@ -26,6 +28,18 @@ CREATE TABLE IF NOT EXISTS benefit_marginnote (
   claimed_at TEXT
 );
 `);
+// Databases created by an earlier build of this feature have no owner column yet.
+if (!(db.prepare('PRAGMA table_info(benefit_xmind)').all() as { name: string }[]).some((c) => c.name === 'user_id')) {
+  db.exec('ALTER TABLE benefit_xmind ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE');
+}
+// One place per account, however many times the page is opened.
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS benefit_xmind_user ON benefit_xmind(user_id)');
+
+// 注销账号时删除登记的手机号；已领取的 MarginNote 兑换码保持占用，不会再发给别人
+registerAccountCleanup((uid) => {
+  q.run('DELETE FROM benefit_xmind WHERE user_id = ?', uid);
+  q.run('DELETE FROM benefit_visits WHERE user_id = ?', uid);
+});
 
 /** BEGIN IMMEDIATE also serializes quota checks across multiple API processes. */
 function atomic<T>(fn: () => T): T {
@@ -63,18 +77,34 @@ export function registerXmind(userId: number, input: { token?: unknown; phone?: 
   if (input.consent !== true) throw new HttpError(400, '请同意手机号用于本次 Xmind 点数发放');
   if (typeof input.phone !== 'string' || !/^1[3-9]\d{9}$/.test(input.phone.trim())) throw new HttpError(400, '请填写正确的 11 位手机号');
   if (typeof input.token !== 'string' || input.token.length > 100) throw new HttpError(400, '请重新打开活动页');
+  const phone = input.phone.trim();
   const hash = sha256(input.token);
   return atomic(() => {
+    // An account holds one place. Sending the same number again is a retry and never takes a second
+    // place, even when the list is full; a different number needs the first registration removed.
+    const mine = q.get<{ id: number; phone: string }>('SELECT id, phone FROM benefit_xmind WHERE user_id = ?', userId);
+    if (mine) {
+      if (mine.phone !== phone) throw new HttpError(409, '这个账号已经登记过了。如需更正手机号，请联系树仁书院活动负责人员');
+      return { id: mine.id };
+    }
     const visit = q.get<{ user_id: number; started_at: number }>('SELECT * FROM benefit_visits WHERE token_hash = ?', hash);
     if (!visit || visit.user_id !== userId || Date.now() - visit.started_at >= VISIT_TTL_MS) throw new HttpError(400, '登记页面已过期，请重新打开活动页');
-    // Retrying the same submission never consumes a second place, even when the list is full.
-    const existing = q.get<{ id: number }>('SELECT id FROM benefit_xmind WHERE visit_hash = ?', hash);
-    if (existing) return { id: existing.id };
     if (Date.now() - visit.started_at < XMIND_WAIT_MS) throw new HttpError(400, '请先浏览活动页满 30 秒');
     if (benefitStatus().xmind.remaining === 0) throw new HttpError(409, '200 份领取名额已满');
-    const result = q.run('INSERT INTO benefit_xmind (visit_hash, phone) VALUES (?, ?)', hash, (input.phone as string).trim());
+    const result = q.run('INSERT INTO benefit_xmind (user_id, visit_hash, phone) VALUES (?, ?, ?)', userId, hash, phone);
     return { id: Number(result.lastInsertRowid) };
   });
+}
+
+/** What the student sees about their own registration: enough to recognise the number, not the number itself. */
+export function myXmindRegistration(userId: number) {
+  const row = q.get<{ phone: string; created_at: string }>('SELECT phone, created_at FROM benefit_xmind WHERE user_id = ?', userId);
+  return row ? { phone: `${row.phone.slice(0, 3)}****${row.phone.slice(-4)}`, createdAt: iso(row.created_at)! } : null;
+}
+
+/** Removing a registration frees its place, and lets that account register again with the right number. */
+export function deleteXmindRegistration(id: number) {
+  return Number(q.run('DELETE FROM benefit_xmind WHERE id = ?', id).changes) > 0;
 }
 
 export function xmindRegistrations() {

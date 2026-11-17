@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { HttpError, rateLimit, requireAdmin, requireUser, sha256, clientKey } from '../auth.ts';
-import { benefitStatus, claimMarginNote, myMarginNoteCode, registerXmind, startBenefitVisit, xmindRegistrations } from '../benefits.ts';
+import { benefitStatus, claimMarginNote, deleteXmindRegistration, myMarginNoteCode, myXmindRegistration, registerXmind, startBenefitVisit, xmindRegistrations } from '../benefits.ts';
 
 export const benefitsRouter = Router();
 
@@ -13,6 +13,7 @@ benefitsRouter.post('/xmind/register', requireUser, (req, res) => {
   rateLimit(`benefit:register:${req.user!.id}`, 10, 60_000);
   res.json(registerXmind(req.user!.id, req.body ?? {}));
 });
+benefitsRouter.get('/xmind/mine', requireUser, (req, res) => res.json({ registration: myXmindRegistration(req.user!.id) }));
 
 // A partner credential grants only access to this list, never to other admin APIs.
 benefitsRouter.get('/xmind/registrations', (req, res, next) => {
@@ -30,6 +31,12 @@ benefitsRouter.get('/xmind/registrations', (req, res, next) => {
       `${r.id},${r.phone},${new Date(r.createdAt).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' })}`).join('\r\n'));
   }
   res.json({ items, limit: 200 });
+});
+// Corrections and removals are for site administrators only; the partner credential can read, not change.
+benefitsRouter.delete('/xmind/registrations/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0 || !deleteXmindRegistration(id)) throw new HttpError(404, '这条登记不存在或已删除');
+  res.json({ ok: true });
 });
 
 benefitsRouter.get('/marginnote/mine', requireUser, (req, res) => res.json({ code: myMarginNoteCode(req.user!.id) }));

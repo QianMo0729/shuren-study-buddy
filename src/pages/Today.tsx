@@ -81,8 +81,6 @@ export function Today() {
           </Link>
         </section>
 
-        <BenefitBanner />
-
         <section aria-labelledby="picks-title" className="flex flex-col gap-2.5">
           <div className="flex items-baseline justify-between px-1">
             <h2 id="picks-title" className="text-[22px] font-bold text-ink">今日推荐</h2>
@@ -103,6 +101,8 @@ export function Today() {
             </Link>
           )}
         </section>
+
+        <BenefitBanner />
       </div>
 
       <InstallSheet />
