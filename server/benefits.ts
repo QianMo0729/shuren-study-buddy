@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { db, iso, q } from './db.ts';
+import { db, getSetting, iso, q, setSetting } from './db.ts';
 import { HttpError, sha256 } from './auth.ts';
 import { registerAccountCleanup } from './social.ts';
 
@@ -41,6 +41,13 @@ registerAccountCleanup((uid) => {
   q.run('DELETE FROM benefit_visits WHERE user_id = ?', uid);
 });
 
+// 登记默认关闭：上线不等于开始收集手机号，由管理员在后台手动开放，也可以随时暂停
+const XMIND_OPEN_KEY = 'benefit_xmind_open';
+export const xmindOpen = () => getSetting(XMIND_OPEN_KEY, '0') === '1';
+export function setXmindOpen(open: boolean) {
+  setSetting(XMIND_OPEN_KEY, open ? '1' : '0');
+}
+
 /** BEGIN IMMEDIATE also serializes quota checks across multiple API processes. */
 function atomic<T>(fn: () => T): T {
   db.exec('BEGIN IMMEDIATE');
@@ -61,12 +68,13 @@ export function benefitStatus() {
   const ended = Date.now() >= MN_EXPIRES;
   const phase = ended ? 'ended' : !renewalTerms ? 'upcoming' : remaining === 0 ? 'exhausted' : 'open';
   return {
-    xmind: { limit: XMIND_LIMIT, remaining: Math.max(0, XMIND_LIMIT - count), waitSeconds: XMIND_WAIT_MS / 1000 },
+    xmind: { open: xmindOpen(), limit: XMIND_LIMIT, remaining: Math.max(0, XMIND_LIMIT - count), waitSeconds: XMIND_WAIT_MS / 1000 },
     marginnote: { remaining, enabled: !!renewalTerms && !ended, phase, renewalTerms, redeemBefore: '2027-02-12' },
   };
 }
 
 export function startBenefitVisit(userId: number) {
+  if (!xmindOpen()) throw new HttpError(409, 'Xmind 点数登记暂未开放');
   q.run('DELETE FROM benefit_visits WHERE started_at < ?', Date.now() - VISIT_TTL_MS);
   const token = crypto.randomBytes(32).toString('base64url');
   q.run('INSERT INTO benefit_visits (token_hash, user_id, started_at) VALUES (?, ?, ?)', sha256(token), userId, Date.now());
@@ -87,6 +95,8 @@ export function registerXmind(userId: number, input: { token?: unknown; phone?: 
       if (mine.phone !== phone) throw new HttpError(409, '这个账号已经登记过了。如需更正手机号，请联系树仁书院活动负责人员');
       return { id: mine.id };
     }
+    // Closing the registration stops new places at once, including for pages opened while it was open.
+    if (!xmindOpen()) throw new HttpError(409, 'Xmind 点数登记暂未开放');
     const visit = q.get<{ user_id: number; started_at: number }>('SELECT * FROM benefit_visits WHERE token_hash = ?', hash);
     if (!visit || visit.user_id !== userId || Date.now() - visit.started_at >= VISIT_TTL_MS) throw new HttpError(400, '登记页面已过期，请重新打开活动页');
     if (Date.now() - visit.started_at < XMIND_WAIT_MS) throw new HttpError(400, '请先浏览活动页满 30 秒');

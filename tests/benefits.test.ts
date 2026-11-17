@@ -25,6 +25,19 @@ test('partner benefits preserve quotas, private access and single-code allocatio
   };
   const body = (token: string) => ({ token, phone: '13800138000', consent: true });
 
+  await t.test('registration stays closed until an administrator opens it, and closes again on request', () => {
+    assert.equal(benefits.benefitStatus().xmind.open, false);
+    assert.throws(() => benefits.startBenefitVisit(a), /暂未开放/);
+    benefits.setXmindOpen(true);
+    assert.equal(benefits.benefitStatus().xmind.open, true);
+    const token = matureVisit(a);
+    // A page opened while registration was open cannot register after it closes.
+    benefits.setXmindOpen(false);
+    assert.throws(() => benefits.registerXmind(a, body(token)), /暂未开放/);
+    assert.equal(benefits.xmindRegistrations().length, 0);
+    benefits.setXmindOpen(true);
+  });
+
   await t.test('requires consent, a valid phone, a user-bound visit and the waiting period', () => {
     const token = benefits.startBenefitVisit(a).token;
     assert.throws(() => benefits.registerXmind(a, { ...body(token), consent: false }), /同意/);
@@ -119,7 +132,7 @@ test('partner benefits preserve quotas, private access and single-code allocatio
   await t.test('the list accepts only admins or the partner credential and exports no unrelated user fields', async () => {
     const { benefitsRouter } = await import('../server/routes/benefits.ts');
     // Exercise the real router middleware without needing a listening network socket.
-    const call = (url: string, headers: Record<string, string> = {}, method = 'GET') => new Promise<{ status: number; body: any; headers: Record<string, string> }>((resolve) => {
+    const call = (url: string, headers: Record<string, string> = {}, method = 'GET', body?: unknown) => new Promise<{ status: number; body: any; headers: Record<string, string> }>((resolve) => {
       const role = headers['x-fixture-role'];
       const [pathname, search = ''] = url.split('?');
       const responseHeaders: Record<string, string> = {};
@@ -129,7 +142,7 @@ test('partner benefits preserve quotas, private access and single-code allocatio
         json: (value: unknown) => { resolve({ status: 200, body: value, headers: responseHeaders }); },
         send: (value: unknown) => { resolve({ status: 200, body: value, headers: responseHeaders }); },
       };
-      const req = { method, url: pathname, headers: { ...headers, authorization: headers.Authorization }, query: Object.fromEntries(new URLSearchParams(search)), ip: '127.0.0.1',
+      const req = { method, body, url: pathname, headers: { ...headers, authorization: headers.Authorization }, query: Object.fromEntries(new URLSearchParams(search)), ip: '127.0.0.1',
         user: role ? { id: a, email: 'fixture@example.com', role } : undefined };
       benefitsRouter.handle(req as any, res as any, (error: any) => resolve({ status: error?.status ?? 404, body: error?.message, headers: responseHeaders }));
     });
@@ -155,5 +168,15 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.equal((await call(target, { 'x-fixture-role': 'admin' }, 'DELETE')).status, 200);
     assert.equal((await call(target, { 'x-fixture-role': 'admin' }, 'DELETE')).status, 404);
     assert.equal((await call(endpoint, headers)).body.items.length, records.body.items.length - 1);
+    // Opening and pausing registration is an administrator's decision, recorded in the moderation log.
+    const toggle = '/xmind/open';
+    assert.equal((await call(toggle, headers, 'PUT', { open: false })).status, 401);
+    assert.equal((await call(toggle, { 'x-fixture-role': 'moderator' }, 'PUT', { open: false })).status, 403);
+    assert.equal((await call(toggle, { 'x-fixture-role': 'admin' }, 'PUT', { open: 'yes' })).status, 400);
+    assert.equal((await call(toggle, { 'x-fixture-role': 'admin' }, 'PUT', { open: false })).body.xmind.open, false);
+    assert.equal((await call('/status')).body.xmind.open, false);
+    // An account that already registered still sees its registration while registration is paused.
+    assert.equal((await call('/xmind/mine', { 'x-fixture-role': 'user' })).status, 200);
+    assert.equal(q.get<{ reason: string }>("SELECT reason FROM moderation_logs WHERE action = 'benefit_xmind' ORDER BY id DESC")!.reason, '暂停登记');
   });
 });

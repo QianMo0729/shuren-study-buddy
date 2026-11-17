@@ -23,9 +23,9 @@ export function BenefitBanner() {
   const mn = status?.marginnote;
   const tickets = [
     <Ticket key="xmind" to="/benefits/xmind" amount="50" unit="AI 点数" name="Xmind" claimed={xmindClaimed}
-      rule={xmindClaimed ? '已登记，等待统一充值' : '浏览活动页 30 秒即可领取'}
+      rule={xmindClaimed ? '已登记，等待统一充值' : xmind && !xmind.open ? '即将开放，可以先看看介绍' : '浏览活动页 30 秒即可领取'}
       meta={!xmind ? '共 200 份' : xmind.remaining === 0 ? `名额已满 · 共 ${xmind.limit} 份` : `还剩 ${xmind.remaining} 份 · 共 ${xmind.limit} 份`}
-      action={xmind?.remaining === 0 ? '查看' : '领取'} />,
+      action={!xmind || !xmind.open || xmind.remaining === 0 ? '查看' : '领取'} />,
     <Ticket key="marginnote" to="/benefits/marginnote" amount="3" unit="个月 Max 订阅" name="MarginNote" claimed={marginNoteClaimed}
       rule={marginNoteClaimed ? '兑换码已领取，到 App Store 兑换' : mn?.phase === 'open' ? '领取兑换码，到 App Store 兑换' : '读讲义和论文的笔记工具'}
       meta={!mn ? `共 ${MARGINNOTE_TOTAL} 个` : mn.phase === 'open' ? `还剩 ${mn.remaining} 个 · 共 ${MARGINNOTE_TOTAL} 个` : { upcoming: '暂未开放领取', exhausted: '本批兑换码已领完', ended: '活动已结束' }[mn.phase]}

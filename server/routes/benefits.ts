@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { HttpError, rateLimit, requireAdmin, requireUser, sha256, clientKey } from '../auth.ts';
-import { benefitStatus, claimMarginNote, deleteXmindRegistration, myMarginNoteCode, myXmindRegistration, registerXmind, startBenefitVisit, xmindRegistrations } from '../benefits.ts';
+import { benefitStatus, claimMarginNote, deleteXmindRegistration, myMarginNoteCode, myXmindRegistration, registerXmind, setXmindOpen, startBenefitVisit, xmindRegistrations } from '../benefits.ts';
+import { q } from '../db.ts';
 
 export const benefitsRouter = Router();
 
@@ -12,6 +13,17 @@ benefitsRouter.post('/xmind/visit', requireUser, (req, res) => {
 benefitsRouter.post('/xmind/register', requireUser, (req, res) => {
   rateLimit(`benefit:register:${req.user!.id}`, 10, 60_000);
   res.json(registerXmind(req.user!.id, req.body ?? {}));
+});
+// 开放或暂停 Xmind 登记：只有网站管理员能操作，并记入处理记录
+benefitsRouter.put('/xmind/open', requireAdmin, (req, res) => {
+  const open = req.body?.open;
+  if (typeof open !== 'boolean') throw new HttpError(400, '请指定开放还是暂停');
+  setXmindOpen(open);
+  q.run(
+    "INSERT INTO moderation_logs (admin_id, action, target_type, target_id, target_label, reason) VALUES (?, 'benefit_xmind', 'settings', 0, 'Xmind 点数登记', ?)",
+    req.user!.id, open ? '开放登记' : '暂停登记',
+  );
+  res.json(benefitStatus());
 });
 benefitsRouter.get('/xmind/mine', requireUser, (req, res) => res.json({ registration: myXmindRegistration(req.user!.id) }));
 

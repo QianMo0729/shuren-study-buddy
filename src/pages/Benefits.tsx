@@ -40,7 +40,7 @@ export function Benefits() {
         <div className="benefits-map" aria-hidden="true"><span>我的学习计划</span><div><i>梳理知识</i><i>考试复习</i><i>灵感与想法</i></div></div>
         <p className="benefits-eyebrow">梳理考点 · 汇报提纲 · 复习计划</p><h2>50 AI 点数</h2>
         <p>用导图梳理课程考点、列汇报提纲，也可以参考现成的复习和论文阅读模板。</p>
-        <span className="benefits-pill"><Sparkles size={15} /> 共 200 份 · {!error && status?.xmind.remaining === 0 ? '登记名额已满' : '登记后统一发放'}</span>
+        <span className="benefits-pill"><Sparkles size={15} /> 共 200 份 · {!error && status?.xmind.remaining === 0 ? '登记名额已满' : !error && status && !status.xmind.open ? '即将开放登记' : '登记后统一发放'}</span>
         <p className="benefits-card-condition">登录后浏览活动页满 30 秒，登记本人 Xmind 账号绑定手机号。</p>
       </Link>
       <Link to="/benefits/marginnote" className="benefits-brand-card benefits-mn-card">
@@ -60,8 +60,10 @@ export function XmindBenefit() {
   const { user } = useAuth();
   const { status, error: statusError, reload: reloadStatus } = useBenefitsStatus();
   const full = status?.xmind.remaining === 0;
-  // 计时从打开本页开始；名额已满时不必再计时
-  const claim = useXmindClaim(user, { start: !!status && !full });
+  // 登记由管理员在后台开放；没开放时只能浏览，不计时也不能登记
+  const closed = !!status && !status.xmind.open;
+  // 计时从打开本页开始；没开放或名额已满时不必计时
+  const claim = useXmindClaim(user, { start: !!status && !closed && !full });
   const registered = claim.registration ?? null;
   const error = user ? claim.error : '';
   return <BenefitsLayout>
@@ -77,15 +79,15 @@ export function XmindBenefit() {
       <ol className="benefits-flow" aria-label="Xmind 点数参与流程"><li><span>1</span>登录并浏览本页 30 秒</li><li><span>2</span>登记账号绑定手机号</li><li><span>3</span>Xmind 核对后统一充值</li></ol>
       <div className="benefits-claim-strip" aria-label="Xmind 点数登记"><span className="benefits-gift"><Sparkles size={26} /></span>
         <div className="benefits-claim-copy"><p className="benefits-eyebrow">活动福利 · 共 200 份</p><h2>{registered ? '已登记' : '50 AI 点数'}</h2>
-          <p>{registered ? `登记号码 ${registered.phone}，提交于 ${new Date(registered.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}。后续由 Xmind 核对账号并统一充值，当前不表示点数已到账。` : full ? '200 份登记名额已满，下方的功能指南、视频和模板仍可查看。' : '登录后浏览满 30 秒，即可登记本人已注册 Xmind 账号绑定的手机号。'}</p>
+          <p>{registered ? `登记号码 ${registered.phone}，提交于 ${new Date(registered.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}。后续由 Xmind 核对账号并统一充值，当前不表示点数已到账。` : full ? '200 份登记名额已满，下方的功能指南、视频和模板仍可查看。' : closed ? '登记还没有开放。开放后，登录并浏览满 30 秒即可登记本人 Xmind 账号绑定的手机号。' : '登录后浏览满 30 秒，即可登记本人已注册 Xmind 账号绑定的手机号。'}</p>
         </div>
-        {registered ? <a className="benefits-secondary" href="#xmind-templates">继续查看学习模板 ↓</a> : full ? <span className="benefits-success">登记名额已满</span> : user ?
+        {registered ? <a className="benefits-secondary" href="#xmind-templates">继续查看学习模板 ↓</a> : full ? <span className="benefits-success">登记名额已满</span> : closed ? <span className="benefits-success">即将开放</span> : user ?
           <Button variant="primary" size="lg" disabled={!status || !!statusError || !claim.ready} onClick={openXmindForm}>
             {statusError ? '登记状态暂时无法加载' : !status || claim.registration === undefined || !claim.timing ? '正在加载…' : claim.ready ? '填写点数登记' : `还需浏览 ${claim.remaining} 秒`}
           </Button> : <Link className="benefits-primary" to="/login?next=%2Fbenefits%2Fxmind">登录后开始 30 秒计时</Link>}
       </div>
       {registered ? <p className="benefits-footnote">每个账号登记一次。号码填错了？请联系树仁书院活动负责人员更正。</p>
-        : !full && <p className="benefits-footnote">{user ? '倒计时在右下角，可以随意浏览，时间到了点它登记。' : '介绍、视频和模板可直接查看，登录后开始 30 秒计时。'}</p>}
+        : !full && !closed && <p className="benefits-footnote">{user ? '倒计时在右下角。浏览福利页面、打开模板或视频时计时，离开后暂停；时间到了点它登记。' : '介绍、视频和模板可直接查看，登录后开始 30 秒计时。'}</p>}
       {!registered && <p className="benefits-account-link">还没有 Xmind 账号？<a href="https://app.xmind.cn/" target="_blank" rel="noreferrer">前往 Xmind 注册 ↗</a></p>}
     </section>
     <div className="benefits-notice"><Clock3 size={16} /><p>到账安排与点数有效期尚未确认，以后续活动通知为准。</p></div>

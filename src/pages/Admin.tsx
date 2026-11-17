@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { ActivitySettingsTab, AuditTab, BoardTab, BonusTab, StaffTab, WordsTab } from './AdminActivity';
+import { XmindOpenSwitch } from '../components/XmindOpenSwitch';
 import type { ModerationTargetType, ReportTargetType, Role } from '../../shared/types';
 import {
   api, ApiError, fileUrl, type AdminContent, type AdminContentType, type AdminLog, type AdminOverview, type AdminPost, type AdminProfile,
@@ -70,7 +71,7 @@ export function Admin() {
     <div className="pt-2">
       <PageHeader title="管理后台" desc={`树仁学发内部使用（当前身份：${user ? ROLE_LABELS[user.role] : ''}）。定期查看新发布的内容、处理举报与抽检；撤下或判无效后，系统会自动给当事人发站内通知和邮件。`} />
 
-      {isAdmin && <Link to="/benefits/records" className="mb-5 inline-flex items-center gap-2 text-sm text-brand-text underline">查看 Xmind 福利领取名单 <ExternalLink size={14} /></Link>}
+      {isAdmin && <XmindOpenSwitch />}
       <div className="-mx-4 flex gap-6 overflow-x-auto border-b border-line px-4 no-scrollbar sm:mx-0 sm:px-0" role="tablist">
         {tabs.map((t) => {
           const on = t.id === tab;
@@ -833,7 +834,7 @@ function Logs() {
     takedown: { text: '撤下', danger: true }, restore: { text: '恢复' }, invalidate: { text: '判无效', danger: true }, audit_pass: { text: '抽检有效' },
     appeal_upheld: { text: '申诉维持', danger: true }, appeal_overturned: { text: '申诉撤销' }, bonus_approve: { text: 'Bonus 通过' },
     bonus_reject: { text: 'Bonus 不通过', danger: true }, disqualify: { text: '取消资格', danger: true }, requalify: { text: '恢复资格' },
-    role_change: { text: '修改角色' }, activity_config: { text: '活动设置' }, college_roster: { text: '书院名单' },
+    role_change: { text: '修改角色' }, activity_config: { text: '活动设置' }, college_roster: { text: '书院名单' }, benefit_xmind: { text: 'Xmind 登记' },
   };
   return (
     <div className="overflow-x-auto rounded-xl bg-surface">

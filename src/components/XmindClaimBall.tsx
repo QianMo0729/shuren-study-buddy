@@ -23,10 +23,11 @@ function digitsOnly(raw: string) {
 export function XmindClaimBall() {
   const { user } = useAuth();
   const { status } = useBenefitsStatus();
-  const claim = useXmindClaim(user);
+  // 这个小球所在的福利页面在屏幕上时，浏览时间才累计
+  const claim = useXmindClaim(user, { track: true });
   const toast = useToast();
   const full = status?.xmind.remaining === 0;
-  const visible = !!user && claim.registration === null && claim.timing && !full;
+  const visible = !!user && claim.registration === null && claim.timing && !full && status?.xmind.open !== false;
 
   // 时间到的那一刻提示一次；进入页面时已经到时间的不再提示
   const [hint, setHint] = useState(false);
@@ -43,7 +44,7 @@ export function XmindClaimBall() {
 
   function press() {
     if (claim.ready) { setHint(false); openXmindForm(); return; }
-    toast.info(`再过 ${claim.remaining} 秒就可以登记 50 AI 点数`, '可以继续浏览或打开模板，计时不会中断');
+    toast.info(`再浏览 ${claim.remaining} 秒就可以登记 50 AI 点数`, '看福利页面、模板或视频时计时，离开后暂停');
   }
 
   return <>
