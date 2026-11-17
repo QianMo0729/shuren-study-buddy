@@ -229,12 +229,14 @@ export function Login() {
         </figcaption>
       </figure>
 
-      <div className="relative flex flex-col">
+      {/* min-w-0：否则输入框的固有宽度会把这一栏撑得比手机屏幕还宽，页面就能左右滑动 */}
+      <div className="relative flex min-w-0 flex-col">
         <div className="flex items-center justify-between px-6 pt-6 lg:px-12 lg:pt-10">
           <Link to="/" className="lg:hidden" aria-label="返回首页"><Wordmark /></Link>
           <Link to="/" className="ml-auto text-[13.5px] text-ink-3 hover:text-ink">返回首页</Link>
         </div>
-        <div className="flex flex-1 items-center justify-center px-6 py-10 lg:px-12">
+        {/* 手机上多出来的空白按 1:4 分给表单的上方和下方：顶栏已经占了一截高度，上下平分的话表单看起来偏低。平板和电脑仍然上下居中 */}
+        <div className="flex flex-1 flex-col items-center px-6 pt-4 pb-6 before:flex-[1] before:content-[''] after:flex-[4] after:content-[''] sm:py-10 sm:after:flex-[1] lg:px-12">
           <motion.div initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.22, ease }} className="w-full max-w-[420px]">
             {mode !== 'login' && <button type="button" disabled={disabled} onClick={() => switchMode('login')} className="mb-6 inline-flex items-center gap-1.5 py-1 text-[13.5px] text-ink-3 transition-colors hover:text-brand-text disabled:opacity-60"><ArrowLeft size={15} aria-hidden />返回登录</button>}
             <h1 ref={headingRef} tabIndex={-1} className="font-display text-[32px] tracking-[-0.02em] text-ink outline-none sm:text-[36px]">{titles[mode]}</h1>
