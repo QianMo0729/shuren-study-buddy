@@ -1,0 +1,51 @@
+/* 品牌合作入口的票据。票根和票面之间是一条打孔线，上下两端各有一个半圆缺口。 */
+.ticket {
+  --stub: 92px;
+  --notch: 7px;
+  --cut: radial-gradient(circle var(--notch) at var(--stub) 0, #0000 97%, #000), radial-gradient(circle var(--notch) at var(--stub) 100%, #0000 97%, #000);
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 92px;
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--ink);
+  /* 缺口是真的镂空，叠在后面的那张票能从缺口里露出来 */
+  -webkit-mask-image: var(--cut);
+  mask-image: var(--cut);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.ticket-stub { display: flex; flex: none; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: var(--stub); padding: 10px 6px; background: var(--surface-2); border-right: 1.5px dashed var(--line-strong); text-align: center; }
+.ticket-stub strong { font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ticket-stub small { font-size: 11px; line-height: 1.3; color: var(--ink-3); }
+.ticket-body { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 12px 4px 12px 16px; }
+.ticket-name { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; line-height: 1.3; }
+.ticket-check { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border: 1.5px dashed var(--ink-4); border-radius: 5px; color: #fff; }
+.ticket-rule { font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+.ticket-meta { font-size: 12.5px; line-height: 1.4; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.ticket-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-action { display: inline-flex; flex: none; align-items: center; align-self: center; gap: 1px; padding: 0 12px 0 8px; font-size: 15px; font-weight: 700; color: var(--brand-text); white-space: nowrap; }
+.ticket-stamp { flex: none; align-self: center; margin: 0 16px 0 8px; opacity: 0.88; }
+
+/* 检过的票：方框打勾，票根角上多一个检票孔，票面盖「已领」章 */
+.ticket[data-claimed] { --cut: radial-gradient(circle var(--notch) at var(--stub) 0, #0000 97%, #000), radial-gradient(circle var(--notch) at var(--stub) 100%, #0000 97%, #000), radial-gradient(circle 5px at 17px 17px, #0000 96%, #000); }
+.ticket[data-claimed] .ticket-check { border: 0; background: var(--brand); }
+.ticket[data-claimed] .ticket-stub strong { color: var(--ink-3); }
+
+/* 手机上的票叠：两张票占同一个位置，后面那张缩小一点，从下边露出一条 */
+.ticket-deck { touch-action: pan-y; }
+/* minmax(0, 1fr)：票的宽度跟着屏幕走，不被里面的文字撑宽 */
+.ticket-deck-stack { display: grid; grid-template-columns: minmax(0, 1fr); padding-bottom: 9px; }
+.ticket-deck-card { display: grid; grid-area: 1 / 1; grid-template-columns: minmax(0, 1fr); min-width: 0; transform-origin: 50% 100%; z-index: 1; filter: drop-shadow(0 1px 1.5px rgba(28, 35, 32, 0.1)); /* 等让位的那张淡出之后再换前后顺序 */ transition: z-index 0s linear 0.17s; }
+.ticket-deck-card[data-front] { z-index: 2; }
+.ticket-deck-dots { display: flex; justify-content: center; gap: 6px; margin-top: 8px; }
+.ticket-deck-dots button { position: relative; width: 6px; height: 6px; border-radius: 999px; background: var(--ink-4); transition: width 0.25s, background-color 0.25s; }
+/* 圆点本身很小，点按范围放大到手指好按的尺寸 */
+.ticket-deck-dots button::after { content: ''; position: absolute; inset: -12px -6px; }
+.ticket-deck-dots button[aria-current] { width: 18px; background: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .ticket-deck-card, .ticket-deck-dots button { transition: none; } }

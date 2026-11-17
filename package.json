@@ -14,6 +14,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "seed": "tsx server/seed.ts",
+    "benefits:import": "tsx scripts/import-marginnote.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts"
   },

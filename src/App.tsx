@@ -13,6 +13,10 @@ import { isStaff } from '../shared/roles';
 // 首页与登录页随主包加载；其余页面各自成块，用到时才下载（管理后台、问卷的课程目录、打卡相机的楼栋数据都不小）
 const Admin = lazyPage(() => import('./pages/Admin').then((m) => m.Admin));
 const Credits = lazyPage(() => import('./pages/Credits').then((m) => m.Credits));
+const Benefits = lazyPage(() => import('./pages/Benefits').then((m) => m.Benefits));
+const XmindBenefit = lazyPage(() => import('./pages/Benefits').then((m) => m.XmindBenefit));
+const MarginNoteBenefit = lazyPage(() => import('./pages/Benefits').then((m) => m.MarginNoteBenefit));
+const BenefitRecords = lazyPage(() => import('./pages/BenefitRecords').then((m) => m.BenefitRecords));
 const EditProfile = lazyPage(() => import('./pages/EditProfile').then((m) => m.EditProfile));
 const EventDetail = lazyPage(() => import('./pages/EventDetail').then((m) => m.EventDetail));
 const EventForm = lazyPage(() => import('./pages/EventForm').then((m) => m.EventForm));
@@ -118,7 +122,7 @@ export function App() {
     if (!stay) window.scrollTo({ top: 0 });
   }, [location.pathname, section]);
 
-  const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy' || section === 'rules';
+  const bare = section === 'home' || section === 'login' || section === 'credits' || section === 'privacy' || section === 'rules' || section === 'benefits';
 
   const routes = (
       <Routes location={location} key={section === 'match' || section === 'messages' ? section : location.pathname}>
@@ -127,6 +131,10 @@ export function App() {
         <Route path="/privacy" element={<Page><Privacy /></Page>} />
         <Route path="/rules" element={<Page><Rules /></Page>} />
         <Route path="/credits" element={<Page><Credits /></Page>} />
+        <Route path="/benefits" element={<Page><Benefits /></Page>} />
+        <Route path="/benefits/xmind" element={<Page><XmindBenefit /></Page>} />
+        <Route path="/benefits/marginnote" element={<Page><MarginNoteBenefit /></Page>} />
+        <Route path="/benefits/records" element={<Page><BenefitRecords /></Page>} />
         <Route path="/square/*" element={<LegacySquare />} />
         <Route path="/today" element={<RequireAuth><Page><Today /></Page></RequireAuth>} />
         <Route path="/match/search/*" element={<RequireAuth><Page><PeopleSearch /></Page></RequireAuth>} />

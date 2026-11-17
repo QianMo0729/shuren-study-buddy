@@ -22,6 +22,8 @@ export default defineConfig(({ mode }) => {
         // 数据库、上传的图片与本机配置都在仓库目录里，开发服务器不能把它们当静态文件读出来
         deny: [
           '.env', '.env.*', '*.{crt,pem,key}', '**/.git/**',
+          // Partner source packages contain unassigned redemption codes and must never be downloadable.
+          '**/*.{zip,csv,docx}', '**/*视觉参考图.pdf',
           '*.{db,db-wal,db-shm,sqlite,sqlite3,sqlite-wal,sqlite-shm}',
           `${sealed(dataDir)}/**`, `${sealed('data')}/**`, `${sealed('uploads')}/**`, `${sealed('deploy')}/**`,
         ],

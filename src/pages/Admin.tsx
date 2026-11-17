@@ -70,6 +70,7 @@ export function Admin() {
     <div className="pt-2">
       <PageHeader title="管理后台" desc={`树仁学发内部使用（当前身份：${user ? ROLE_LABELS[user.role] : ''}）。定期查看新发布的内容、处理举报与抽检；撤下或判无效后，系统会自动给当事人发站内通知和邮件。`} />
 
+      {isAdmin && <Link to="/benefits/records" className="mb-5 inline-flex items-center gap-2 text-sm text-brand-text underline">查看 Xmind 福利领取名单 <ExternalLink size={14} /></Link>}
       <div className="-mx-4 flex gap-6 overflow-x-auto border-b border-line px-4 no-scrollbar sm:mx-0 sm:px-0" role="tablist">
         {tabs.map((t) => {
           const on = t.id === tab;

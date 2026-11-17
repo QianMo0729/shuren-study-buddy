@@ -10,6 +10,8 @@ import { Button } from '../components/ui';
 import { Plate, Stamp, Wordmark, IcpNotice } from '../components/brand';
 import { CampusPhoto, useCredits } from '../components/credits';
 
+import { BenefitBanner } from '../components/BenefitBanner';
+
 const CN_DIGITS = '〇一二三四五六七八九';
 function edition(d = new Date()) {
   const y = String(d.getFullYear()).split('').map((c) => CN_DIGITS[Number(c)]).join('');
@@ -102,7 +104,7 @@ export function Landing() {
           <CampusCaption file="dusk.jpg" credits={credits} />
         </figure>
 
-        <div className="mt-10 grid gap-x-16 gap-y-6 pb-20 md:grid-cols-[1.1fr_1fr] md:pb-28">
+        <div className="mt-10 grid gap-x-16 gap-y-6 pb-8 md:grid-cols-[1.1fr_1fr] md:pb-10">
           <p className="font-display text-[clamp(26px,3.3vw,40px)] leading-[1.35] tracking-[-0.02em] text-ink">
             在南科大，找一个
             <br className="hidden sm:inline" />
@@ -128,6 +130,8 @@ export function Landing() {
           </div>
         </div>
       </section>
+
+      <section className="mx-auto max-w-[1180px] px-5 pb-12 sm:px-8 md:pb-16"><BenefitBanner /></section>
 
       {/* 本期收录 */}
       <section className="border-t border-line bg-surface">

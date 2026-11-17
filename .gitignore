@@ -24,6 +24,9 @@
 # Local operations records and source design attachment
 /deploy/
 /*.docx
+/*活动素材.zip
+/*视觉参考图.pdf
+/*OfferCode*.csv
 
 # Local caches and editor files
 .DS_Store
