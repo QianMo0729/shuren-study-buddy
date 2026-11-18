@@ -6,7 +6,7 @@ import { PartnerLogo, type PartnerBrand } from '../components/PartnerLogo';
 import { XmindClaimBall } from '../components/XmindClaimBall';
 import { useAuth } from '../lib/auth';
 import { benefitsApi, marginNoteStatusLabel, openXmindForm, refreshBenefitsStatus, retryXmindClaim, useBenefitsStatus, useXmindClaim } from '../lib/benefits';
-import { xmindFeatures, xmindTemplates, xmindVideos } from '../lib/partnerContent';
+import { marginNoteGroup, xmindFeatures, xmindTemplates, xmindVideos } from '../lib/partnerContent';
 import './benefits.css';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : '网络连接失败，请稍后重试';
@@ -126,6 +126,9 @@ export function MarginNoteBenefit() {
   const ownCode = code?.userId === user?.id ? code?.value : null;
   const claimOpen = !statusError && status?.marginnote.phase === 'open';
   const availability = marginNoteStatusLabel(status, statusError);
+  // 企业微信群码 7 天过期，过期后不再显示
+  const groupOpen = Date.now() < Date.parse(`${marginNoteGroup.validBefore}T00:00:00+08:00`);
+  const [, groupMonth, groupDay] = marginNoteGroup.validBefore.split('-').map(Number);
   async function claim() {
     if (!user || busy) return;
     setBusy(true); setError('');
@@ -158,7 +161,9 @@ export function MarginNoteBenefit() {
         : user ? <><label className="benefits-checkbox"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /><span>我已阅读兑换条件及续订说明，了解需要在 Apple 订阅设置中管理自动续订。</span></label><Button variant="primary" size="lg" onClick={claim} loading={busy} disabled={!accepted || loadedFor !== user.id}>{busy ? '正在领取兑换码…' : loadedFor !== user.id ? '正在查看领取记录…' : '领取我的兑换码'}</Button></>
         : <Link className="benefits-primary" to="/login?next=%2Fbenefits%2Fmarginnote">登录后领取兑换码</Link>}
       {(error || statusError) && <p className="benefits-error" role="alert">{error || statusError}</p>}
-      <p className="benefits-footnote">使用及兑换问题，请在 MarginNote App 内「反馈与客服」联系官方。福利不支持返现或退款。</p>
+      {groupOpen && <figure className="benefits-group"><img src={marginNoteGroup.qr} alt={`MarginNote × 树仁搭子 ${marginNoteGroup.name}二维码`} width={677} height={677} />
+        <figcaption><h3>{marginNoteGroup.name}</h3><p>兑换或使用时遇到问题，可以进群提问。用微信或企业微信扫码加入，在手机上可长按二维码识别。</p><p className="benefits-group-valid">二维码 {groupMonth} 月 {groupDay} 日前有效</p></figcaption></figure>}
+      <p className="benefits-footnote">使用及兑换问题，{groupOpen ? '也可以' : '请'}在 MarginNote App 内「反馈与客服」联系官方。福利不支持返现或退款。</p>
     </section>
   </BenefitsLayout>;
 }

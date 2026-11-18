@@ -139,3 +139,11 @@ export const xmindTemplates = [
     "image": "/partners/xmind/image14.jpeg"
   }
 ];
+
+// MarginNote 答疑群（企业微信）。群二维码 7 天过期：换新码时替换图片，并把 validBefore 改成新码下方写的日期。
+// 到了这一天页面不再显示二维码，免得同学扫到失效的码。
+export const marginNoteGroup = {
+  name: 'Max 试用答疑群',
+  qr: '/partners/marginnote/qa-group-qr.png',
+  validBefore: '2026-11-25',
+};
