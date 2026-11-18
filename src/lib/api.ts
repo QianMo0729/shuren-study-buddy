@@ -1,7 +1,7 @@
 import type { ActivityConfig, SensitiveCategory } from '../../shared/activity';
 import type {
   AdvancedQuery, BuddyStatus, LeaderboardResponse, Role, SeasonInfo, ShurenMember, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal, ContentReviewState,
-  DeckCard, DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, ForumComment, ForumPost, ForumTargetType, ModerationTargetType,
+  DeckCard, DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, ForumComment, IncomingInterest, ForumPost, ForumTargetType, ModerationTargetType,
   MyProfile, NotificationItem, Post, PostSearchQuery, ProfileCard, ProfileDraft, ProfileInput, PublicProfile, QuestionnaireSection, RecommendationResponse, ReportTargetType, SessionUser,
 } from '../../shared/types';
 
@@ -135,6 +135,8 @@ export const api = {
     feedback: (targetId: number, action: FeedbackAction) => post<FeedbackResult>('/match/feedback', { targetId, action }),
     undoFeedback: (targetId: number) => del<{ ok: true }>(`/match/feedback/${targetId}`),
     feedbackList: (action: FeedbackAction) => get<{ items: FeedbackItem[] }>(`/match/feedback${qs({ action })}`),
+    /** 对我选了「感兴趣」、我还没有回应的同学 */
+    incoming: () => get<{ items: IncomingInterest[] }>('/match/incoming'),
   },
 
   // ---------- 私聊 ----------

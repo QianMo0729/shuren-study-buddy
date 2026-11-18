@@ -39,7 +39,7 @@ export function useMatchActions(profile: PublicProfile, onChanged?: () => void):
       } else {
         setState(action === 'like' ? 'liked' : action === 'dislike' ? 'disliked' : 'skipped');
         setMatchId(null);
-        if (action === 'like') toast.success('已表示感兴趣', '对方也感兴趣时，你们就可以私聊。对方不会知道你的选择，除非互相感兴趣。');
+        if (action === 'like') toast.success('已表示感兴趣', '对方会在「联系请求」里看到你；TA 也感兴趣时，你们就可以私聊。');
         else if (action === 'dislike') toast.success('已标记不感兴趣', 'TA 不会再出现在你的推荐里，可随时撤销。');
       }
       onChanged?.();

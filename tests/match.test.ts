@@ -112,6 +112,12 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
   const ids = (items: DeckCard[]) => items.map((item) => item.id);
   const feedback = (from: Member, to: Member | number, action: string) =>
     api('/match/feedback', from.cookie, 'POST', { targetId: typeof to === 'number' ? to : to.id, action });
+  /** 对这位同学选了「感兴趣」、等 TA 回应的同学（联系请求里显示的顺序） */
+  const incoming = async (member: Member): Promise<number[]> => {
+    const response = await api('/match/incoming', member.cookie);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    return response.body.items.map((item: { user: { id: number } }) => item.user.id);
+  };
   const notifications = (member: Member) =>
     (db.prepare('SELECT title, link FROM notifications WHERE user_id = ? ORDER BY id').all(member.id) as { title: string; link: string }[])
       .map((row) => ({ title: row.title, link: row.link }));
@@ -122,7 +128,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
 
   await t.test('every endpoint requires a session', async () => {
     reset();
-    for (const [endpoint, method, body] of [['/match/deck', 'GET'], ['/match/ranked', 'GET'], ['/match/feedback?action=like', 'GET'],
+    for (const [endpoint, method, body] of [['/match/deck', 'GET'], ['/match/ranked', 'GET'], ['/match/feedback?action=like', 'GET'], ['/match/incoming', 'GET'],
       ['/match/feedback', 'POST', { targetId: 1, action: 'like' }], ['/match/feedback/1', 'DELETE']] as const) {
       assert.equal((await api(endpoint, '', method, body)).status, 401, endpoint);
     }
@@ -205,7 +211,7 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal((await api(`/profiles/${hidden.id}`, viewer.cookie)).body.profile.gender, '');
   });
 
-  await t.test('mutual likes create a match and notify both people; a one-way like does not', async () => {
+  await t.test('a one-way like reaches the other person\'s contact requests; mutual likes create a match and notify both', async () => {
     reset();
     const a = createUser();
     const b = createUser();
@@ -214,9 +220,11 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.deepEqual(first.body, { action: 'like', matched: false, matchId: null });
     assert.equal(db.prepare('SELECT COUNT(*) n FROM matches').get()!.n, 0);
     assert.deepEqual(notifications(a), []);
-    assert.deepEqual(notifications(b), [], 'a one-way like is never announced');
+    assert.deepEqual(notifications(b), [{ title: '有同学对你感兴趣', link: '/messages/requests' }], 'the liked person is told in-app');
+    assert.deepEqual(await incoming(b), [a.id], 'and finds the like under contact requests');
+    assert.deepEqual(await incoming(a), []);
     assert.equal((await api(`/profiles/${b.id}`, a.cookie)).body.profile.matchState, 'liked');
-    assert.equal((await api(`/profiles/${a.id}`, b.cookie)).body.profile.matchState, 'none', 'the like stays private');
+    assert.equal((await api(`/profiles/${a.id}`, b.cookie)).body.profile.matchState, 'none', 'b has not answered yet');
     assert.ok(!ids((await deck(a)).items).includes(b.id), 'people I already like wait outside the deck');
     assert.ok(ids((await deck(b)).items).includes(a.id));
 
@@ -226,8 +234,10 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     const matchId = second.body.matchId;
     assert.ok(Number.isInteger(matchId));
     assert.equal(db.prepare("SELECT COUNT(*) n FROM matches WHERE status = 'active'").get()!.n, 1);
+    assert.deepEqual(await incoming(a), []);
+    assert.deepEqual(await incoming(b), [], 'an answered like leaves the contact requests');
     for (const member of [a, b]) {
-      assert.deepEqual(notifications(member), [{ title: '你们互相感兴趣了', link: `/messages/${matchId}` }]);
+      assert.deepEqual(notifications(member).filter((n) => n.link !== '/messages/requests'), [{ title: '你们互相感兴趣了', link: `/messages/${matchId}` }]);
       const profile = (await api(`/profiles/${member === a ? b.id : a.id}`, member.cookie)).body.profile;
       assert.equal(profile.matchState, 'matched');
       assert.equal(profile.matchId, matchId);
@@ -237,9 +247,55 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     const again = await feedback(a, b, 'like');
     assert.deepEqual(again.body, { action: 'like', matched: true, matchId });
     assert.equal(notifications(a).length, 1);
+    assert.equal(notifications(b).length, 2);
     // Undoing a like keeps the existing match.
     assert.equal((await api(`/match/feedback/${b.id}`, a.cookie, 'DELETE')).status, 200);
     assert.equal(db.prepare("SELECT status FROM matches WHERE id = ?").get(matchId)!.status, 'active');
+  });
+
+  await t.test('contact requests list only likes still waiting for my answer, and never announce the same like twice', async () => {
+    reset();
+    const me = createUser();
+    const [liker, withdrawn, rejected, later, hidden, excluded] = Array.from({ length: 6 }, () => createUser());
+    // 我先对 rejected 选了不感兴趣：TA 之后再点感兴趣，我这边不显示、也不提醒
+    assert.equal((await feedback(me, rejected, 'dislike')).status, 200);
+    for (const from of [liker, withdrawn, rejected, later, hidden, excluded]) {
+      assert.deepEqual((await feedback(from, me, 'like')).body, { action: 'like', matched: false, matchId: null });
+    }
+    assert.deepEqual((await incoming(me)).sort(), [liker.id, withdrawn.id, later.id, hidden.id, excluded.id].sort());
+    assert.equal(notifications(me).length, 5, 'one notice per new like, none for the person I already declined');
+    assert.ok(notifications(me).every((n) => n.title === '有同学对你感兴趣' && n.link === '/messages/requests'));
+    const raw = await api('/match/incoming', me.cookie);
+    assert.deepEqual(Object.keys(raw.body.items[0]).sort(), ['createdAt', 'user']);
+    assert.deepEqual(Object.keys(raw.body.items[0].user).sort(), ['cover', 'id', 'nickname']);
+    assert.ok(!JSON.stringify(raw.body).includes('SECRET-'), 'no name, student number or contact detail is returned');
+
+    // 撤回后不再显示；重新点回来会显示，但不再提醒第二次
+    assert.equal((await api(`/match/feedback/${me.id}`, withdrawn.cookie, 'DELETE')).status, 200);
+    assert.ok(!(await incoming(me)).includes(withdrawn.id));
+    assert.equal((await feedback(withdrawn, me, 'like')).status, 200);
+    assert.ok((await incoming(me)).includes(withdrawn.id));
+    assert.equal(notifications(me).length, 5);
+
+    // 稍后再看仍在等我回应；不感兴趣后从列表消失，对方不会收到任何提示
+    assert.equal((await feedback(me, later, 'skip')).status, 200);
+    assert.ok((await incoming(me)).includes(later.id));
+    assert.equal((await feedback(me, liker, 'dislike')).status, 200);
+    assert.ok(!(await incoming(me)).includes(liker.id));
+    assert.deepEqual(notifications(liker), [], 'declining is silent');
+    assert.equal((await api(`/profiles/${me.id}`, liker.cookie)).body.profile.matchState, 'liked', 'the sender still sees a pending like');
+
+    // 对方主页撤回公开、或双方互相排除后不再显示
+    db.prepare('UPDATE profiles SET published = 0 WHERE user_id = ?').run(hidden.id);
+    db.prepare('INSERT INTO exclusions (user_id, target_id) VALUES (?, ?)').run(excluded.id, me.id);
+    assert.deepEqual((await incoming(me)).sort(), [withdrawn.id, later.id].sort());
+    // 别人看不到我的联系请求
+    assert.deepEqual(await incoming(liker), []);
+
+    // 我也选感兴趣：配对成功，离开联系请求
+    const answered = await feedback(me, withdrawn, 'like');
+    assert.equal(answered.body.matched, true);
+    assert.deepEqual(await incoming(me), [later.id]);
   });
 
   await t.test('feedback hides assigned people; saved-for-later never expires and undo restores only their assigned slot', async () => {

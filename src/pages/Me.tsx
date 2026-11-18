@@ -417,7 +417,7 @@ const FEEDBACK_LISTS = {
   like: {
     id: 'pref-liked',
     title: '我感兴趣、等待回应的同学',
-    desc: '你选了「感兴趣」、对方还没有回应的同学。对方看不到这份名单；等对方也选了「感兴趣」，TA 会出现在「私聊」里。',
+    desc: '你选了「感兴趣」、对方还没有回应的同学。对方会在「消息 → 联系请求」里看到你对 TA 感兴趣，撤回后就不再显示；等对方也选了「感兴趣」，TA 会出现在「私聊」里。',
     empty: '没有正在等待回应的同学。',
     note: (p: FeedbackItem) => `${timeAgo(p.createdAt)}表示感兴趣`,
     button: '撤回',

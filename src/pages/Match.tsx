@@ -98,7 +98,7 @@ function MatchResults() {
     limit: 5,
     onMatched: (card, result) => setCelebration({ matchId: result.matchId!, nickname: card.nickname, cover: card.cover }),
     onLiked: (card) => {
-      toast.success(`已对 ${card.nickname} 表示感兴趣`, explained.current ? undefined : '对方也感兴趣时，你们就可以私聊；在那之前对方不会知道。');
+      toast.success(`已对 ${card.nickname} 表示感兴趣`, explained.current ? undefined : '对方会在「联系请求」里看到你；TA 也感兴趣时，你们就可以私聊。');
       explained.current = true;
     },
     onError: (title, desc) => toast.error(title, desc),

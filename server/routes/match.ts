@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { hasPrivacyConsent, missingFields, pickProfileInput } from '../../shared/profileRules.ts';
-import type { DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult } from '../../shared/types.ts';
+import type { DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, IncomingInterest } from '../../shared/types.ts';
 import { HttpError, rateLimit, requireUser } from '../auth.ts';
+import { otherOfSummary } from '../chat.ts';
 import { isExcluded } from '../connections.ts';
 import { iso, q, tx } from '../db.ts';
 import { sendMatchMail } from '../mail.ts';
-import { feedbackOf, recordFeedback, removeFeedback } from '../matches.ts';
+import { feedbackOf, matchBetween, recordFeedback, removeFeedback } from '../matches.ts';
 import {
   buildDeck, buildRanked, featuresBetween, feedbackTarget, learnFromFeedback, unlearnFeedback, viewerContext,
 } from '../matching.ts';
@@ -17,6 +18,9 @@ import { ensureProfile } from '../profiles.ts';
 // 匹配推荐：滑卡、按契合度排序的列表、感兴趣 / 不感兴趣 / 稍后再看
 export const matchRouter = Router();
 matchRouter.use(requireUser);
+
+/** 「联系请求」页的站内链接：对我感兴趣、等我回应的同学列在那里 */
+const INCOMING_LINK = '/messages/requests';
 
 /** 主页仍对他人公开（四项隐私同意完整）；已撤回同意的同学不出现在列表中 */
 function consented(data: string, complete = false) {
@@ -72,7 +76,7 @@ matchRouter.post('/feedback', (req, res) => {
     const previous = before ? { features: parseFeatures(before.features), action: before.action } : undefined;
     const recorded = recordFeedback(uid, targetId, action, features ?? {});
     learnFromFeedback(uid, features, action, previous);
-    return recorded;
+    return { ...recorded, firstLike: action === 'like' && before?.action !== 'like' };
   });
 
   if (result.newlyMatched && result.matchId) {
@@ -82,8 +86,43 @@ matchRouter.post('/feedback', (req, res) => {
     notify(targetId, '你们互相感兴趣了', `你和 ${me} 互相感兴趣，现在可以私聊了。`, link);
     // 先表示感兴趣的一方此刻可能不在线，额外发一封邮件；失败不影响本次操作
     void sendMatchMail(target.email, me, result.matchId).catch(() => undefined);
+  } else if (result.firstLike && !result.matched && feedbackOf(targetId, uid)?.action !== 'dislike' && !matchBetween(uid, targetId)) {
+    // 对方会在「消息 → 联系请求」里看到我，发一条站内通知（不发邮件）。对方已经选了不感兴趣、或配对解除过的，不出现在那里，也不提醒。
+    // 撤回后再点一次不重复提醒
+    const body = `${ensureProfile(uid).nickname} 对你感兴趣。可以在「消息 → 联系请求」里查看 TA 的主页并回应。`;
+    if (!q.get('SELECT 1 FROM notifications WHERE user_id = ? AND link = ? AND body = ?', targetId, INCOMING_LINK, body)) {
+      notify(targetId, '有同学对你感兴趣', body, INCOMING_LINK);
+    }
   }
   res.json({ action, matched: result.matched, matchId: result.matchId } satisfies FeedbackResult);
+});
+
+/**
+ * 对我选了「感兴趣」、我还没有回应的同学。我选过感兴趣（已配对）或不感兴趣的不算，「稍后再看」仍算等待回应；
+ * 配对过（含已解除）的、互相排除的、主页已不公开的也不列出。
+ */
+matchRouter.get('/incoming', (req, res) => {
+  const uid = req.user!.id;
+  const rows = q.all<{ user_id: number; created_at: string; data: string }>(
+    `SELECT f.user_id, f.updated_at AS created_at, p.data
+     FROM match_feedback f
+     JOIN profiles p ON p.user_id = f.user_id
+     JOIN users u ON u.id = f.user_id
+     WHERE f.target_id = ? AND f.action = 'like' AND p.published = 1 AND p.taken_down = 0
+       AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> ''
+       AND NOT EXISTS (SELECT 1 FROM match_feedback mine WHERE mine.user_id = f.target_id AND mine.target_id = f.user_id AND mine.action IN ('like', 'dislike'))
+       AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.user_a = min(f.user_id, f.target_id) AND m.user_b = max(f.user_id, f.target_id))
+       AND NOT EXISTS (SELECT 1 FROM exclusions e WHERE (e.user_id = f.user_id AND e.target_id = f.target_id) OR (e.user_id = f.target_id AND e.target_id = f.user_id))
+     ORDER BY f.updated_at DESC, f.user_id DESC LIMIT 200`,
+    uid,
+  );
+  const items: IncomingInterest[] = rows
+    .filter((row) => consented(row.data))
+    .map((row) => {
+      const { id, nickname, cover } = otherOfSummary(row.user_id);
+      return { user: { id, nickname, cover }, createdAt: iso(row.created_at)! };
+    });
+  res.json({ items });
 });
 
 matchRouter.delete('/feedback/:targetId', (req, res) => {

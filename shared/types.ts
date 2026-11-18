@@ -235,6 +235,12 @@ export interface FeedbackItem {
   closedMatch?: boolean;
 }
 
+/** 对我选了「感兴趣」、我还没有回应的同学（消息 → 联系请求） */
+export interface IncomingInterest {
+  user: { id: number; nickname: string; cover: string | null };
+  createdAt: string;
+}
+
 // ---------- 私聊 ----------
 
 export type ContactState = 'none' | 'pending_outgoing' | 'pending_incoming' | 'accepted' | 'rejected';

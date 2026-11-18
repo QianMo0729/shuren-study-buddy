@@ -62,7 +62,7 @@ export function contactStateOf(viewerId: number, otherId: number): ContactState 
 }
 
 /** 对方的昵称与封面。封面规则同卡片：主页公开可见、隐私同意完整、照片设为公开时才返回 */
-function otherOfSummary(otherId: number): ChatSummary['other'] {
+export function otherOfSummary(otherId: number): ChatSummary['other'] {
   const row = getProfileRow(otherId);
   if (!row) return { id: otherId, nickname: '同学', cover: null };
   const d = parseData(row);
