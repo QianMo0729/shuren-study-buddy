@@ -7,6 +7,7 @@ import { cx } from '../lib/format';
 import { Empty, GroupList, PageHeader } from '../components/ui';
 import { useAuth } from '../lib/auth';
 import { Illustration } from '../components/brand';
+import { NavBar } from '../components/Shell';
 import { ChatWindow } from '../components/chat/ChatWindow';
 import { ConversationList } from '../components/chat/ConversationList';
 
@@ -15,13 +16,14 @@ const LIST_POLL_MS = 15_000;
 
 /**
  * 私聊：桌面端左右分栏（会话列表 + 聊天窗）；手机端按路由切换（/messages 列表，/messages/:id 聊天）。
- * 只有互相感兴趣的两人才有会话。
+ * /messages/requests 是联系请求列表，和聊天窗占同一个位置。只有互相感兴趣的两人才有会话。
  */
 export function Messages() {
   const { matchId: param } = useParams();
   const nav = useNavigate();
   const { user } = useAuth();
   const matchId = param && /^\d{1,15}$/.test(param) ? Number(param) : null;
+  const requestsOpen = param === 'requests';
   const chatOpen = param !== undefined;
   const [items, setItems] = useState<ChatSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +92,7 @@ export function Messages() {
 
         <div className="mt-4 flex flex-col gap-4">
           <GroupList>
-            <Link to={requests[0] ? `/messages/${requests[0].matchId}` : '/messages'} className="flex h-[52px] items-center gap-3 px-4 text-ink">
+            <Link to="/messages/requests" aria-current={requestsOpen ? 'page' : undefined} className={cx('flex h-[52px] items-center gap-3 px-4 text-ink', requestsOpen && 'md:bg-brand-softer')}>
               <span className="grid size-[30px] place-items-center rounded-lg bg-brand text-white"><HeartFill size={18} /></span>
               <span className="flex-1 text-[17px]">联系请求</span>
               {requests.length > 0 && <span className="text-[15px] text-ink-3 tabular">{requests.length}</span>}
@@ -123,9 +125,11 @@ export function Messages() {
       <section className={cx('md:flex md:min-w-0 md:flex-1 md:flex-col md:bg-surface', !chatOpen && 'hidden md:flex')} aria-label="聊天">
         {chatOpen ? (
           <div className="fixed inset-0 z-30 flex flex-col bg-paper pt-[env(safe-area-inset-top)] md:static md:z-auto md:h-full md:min-h-0 md:flex-1 md:bg-surface md:pt-0">
-            {matchId !== null
-              ? <ChatWindow key={matchId} matchId={matchId} onActivity={scheduleReload} onGone={onGone} />
-              : <NotFoundChat />}
+            {requestsOpen
+              ? <ContactRequestList items={items && requests} error={error} onRetry={() => void load()} />
+              : matchId !== null
+                ? <ChatWindow key={matchId} matchId={matchId} onActivity={scheduleReload} onGone={onGone} />
+                : <NotFoundChat />}
           </div>
         ) : (
           <div className="grid flex-1 place-items-center p-8 text-center">
@@ -136,6 +140,27 @@ export function Messages() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+/** 联系请求：对方申请交换联系方式、等你回应的聊天。点开进入聊天，在顶部同意或拒绝 */
+function ContactRequestList({ items, error, onRetry }: { items: ChatSummary[] | null; error: string | null; onRetry: () => void }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+20px)] md:px-8 md:pb-8">
+      <NavBar label="消息" to="/messages" className="md:hidden" />
+      <h1 className="mt-1 text-[28px] leading-[34px] font-bold text-ink md:mt-10">联系请求</h1>
+      <p className="mt-1.5 mb-4 text-[15px] text-ink-3">同学申请和你交换联系方式后会出现在这里，点开聊天就能同意或拒绝。</p>
+      <div className="md:max-w-[560px]">
+        {items?.length === 0 ? (
+          <p className="rounded-2xl bg-surface px-4 py-6 text-center text-[15px] text-ink-3 md:bg-paper">现在没有等你回应的联系请求</p>
+        ) : (
+          <>
+            <div className="md:hidden"><ConversationList items={items} activeId={null} error={error} onRetry={onRetry} /></div>
+            <div className="hidden md:block"><ConversationList compact items={items} activeId={null} error={error} onRetry={onRetry} /></div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
