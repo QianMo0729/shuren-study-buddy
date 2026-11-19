@@ -17,7 +17,8 @@ export const benefitsApi = {
   removeRecord: (id: number) => del<{ ok: true }>(`/benefits/xmind/registrations/${id}`),
   setXmindOpen: (open: boolean) => put<BenefitStatus>('/benefits/xmind/open', { open }),
   myCode: () => get<{ code: string | null }>('/benefits/marginnote/mine'),
-  claim: () => post<{ code: string }>('/benefits/marginnote/claim', { acceptTerms: true }),
+  watch: () => post<{ token: string; watchSeconds: number }>('/benefits/marginnote/watch'),
+  claim: (watchToken: string) => post<{ code: string }>('/benefits/marginnote/claim', { acceptTerms: true, watchToken }),
 };
 
 const message = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
@@ -72,6 +73,73 @@ export function marginNoteStatusLabel(status: BenefitStatus | null, error: strin
   if (error) return '状态暂时无法加载';
   if (!status) return '正在加载活动状态';
   return { upcoming: '暂未开放领取', open: '已开放领取', exhausted: '本批兑换码已领完', ended: '活动已结束' }[status.marginnote.phase];
+}
+
+// ---------- MarginNote 宣传片 ----------
+// 领取兑换码前要完整看一遍宣传片。打开领取区时向服务器取一个观看凭证（服务器据此确认从开始观看到领取至少过了一部片子的时间），
+// 看完后把「已看完」连同凭证记在本机：刷新页面、切出去再回来都不用重看。凭证过期后需要重新观看。
+
+interface PromoWatch { userId: number; token: string; startedAt: number; watched: boolean }
+
+const WATCH_KEY = 'dz:mn-watch';
+// 服务器上的观看凭证 24 小时后过期，提前换新的
+const WATCH_MAX_AGE_MS = 20 * 3_600_000;
+
+function storedWatch(userId: number): PromoWatch | null {
+  try {
+    const watch = JSON.parse(localStorage.getItem(WATCH_KEY) ?? 'null') as PromoWatch | null;
+    const age = watch ? Date.now() - watch.startedAt : NaN;
+    if (watch && watch.userId === userId && typeof watch.token === 'string' && watch.token && age >= 0 && age < WATCH_MAX_AGE_MS) return { userId, token: watch.token, startedAt: watch.startedAt, watched: watch.watched === true };
+  } catch { /* 读不到就重新观看 */ }
+  return null;
+}
+function saveWatch(watch: PromoWatch | null) {
+  try {
+    if (watch) localStorage.setItem(WATCH_KEY, JSON.stringify(watch));
+    else localStorage.removeItem(WATCH_KEY);
+  } catch { /* 无法保存时，观看记录只在本次打开的页面内有效 */ }
+}
+
+/** `active`：这位同学现在需要先看宣传片才能领取（已登录、领取开放、还没有码）。 */
+export function useMarginNoteWatch(userId: number | undefined, active: boolean) {
+  const [watch, setWatch] = useState<PromoWatch | null>(null);
+  // 重新观看时加一，播放器据此从头开始
+  const [round, setRound] = useState(0);
+  useEffect(() => {
+    if (userId === undefined || !active) { setWatch(null); return; }
+    const stored = storedWatch(userId);
+    setWatch(stored ?? { userId, token: '', startedAt: 0, watched: false });
+    if (stored) return;
+    let live = true;
+    // 取不到凭证不拦着同学看片，领取时会再取一次
+    requestWatch(userId).then((next) => { if (live) setWatch((current) => (current?.userId === userId ? { ...next, watched: current.watched } : current)); }).catch(() => {});
+    return () => { live = false; };
+  }, [userId, active, round]);
+  useEffect(() => { if (watch?.token) saveWatch(watch); }, [watch]);
+
+  const mine = watch && watch.userId === userId ? watch : null;
+  return {
+    round,
+    watched: !!mine?.watched,
+    finish: () => setWatch((current) => current && { ...current, watched: true }),
+    /** 领取时交给服务器的凭证；看片时没取到的话现在取。 */
+    token: async () => {
+      if (mine?.token) return mine.token;
+      if (userId === undefined) throw new Error('请先登录');
+      const next = await requestWatch(userId);
+      setWatch((current) => (current?.userId === userId ? { ...next, watched: current.watched } : current));
+      return next.token;
+    },
+    /** 凭证失效：清掉记录，从头再看一遍。 */
+    restart: () => { saveWatch(null); setRound((n) => n + 1); },
+    /** 领到码之后不再需要观看记录。 */
+    clear: () => saveWatch(null),
+  };
+}
+
+async function requestWatch(userId: number): Promise<PromoWatch> {
+  const data = await benefitsApi.watch();
+  return { userId, token: data.token, startedAt: Date.now(), watched: false };
 }
 
 // ---------- Xmind 浏览计时与登记 ----------

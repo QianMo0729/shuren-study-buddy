@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 test('partner benefits preserve quotas, private access and single-code allocation', async (t) => {
-  t.mock.method(Date, 'now', () => Date.parse('2026-11-16T00:00:00Z'));
+  let clock = Date.parse('2026-11-16T00:00:00Z');
+  t.mock.method(Date, 'now', () => clock);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shuren-benefits-'));
   process.env.DATA_DIR = dir;
   process.env.XMIND_LIST_TOKEN = 'fixture-partner-token-with-at-least-32-characters';
@@ -24,6 +25,11 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     return visit.token;
   };
   const body = (token: string) => ({ token, phone: '13800138000', consent: true });
+  // A watch token issued long enough ago for the whole promo to have played.
+  const watched = (id: number, secondsAgo = 82) => {
+    clock -= secondsAgo * 1000;
+    try { return benefits.startMarginNoteWatch(id).token; } finally { clock += secondsAgo * 1000; }
+  };
 
   await t.test('registration stays closed until an administrator opens it, and closes again on request', () => {
     assert.equal(benefits.benefitStatus().xmind.open, false);
@@ -105,9 +111,10 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.throws(() => benefits.claimMarginNote(a), /暂未开放/);
     process.env.MARGINNOTE_RENEWAL_TERMS = 'Fixture terms for tests only';
     assert.equal(benefits.benefitStatus().marginnote.phase, 'open');
-    const first = benefits.claimMarginNote(a);
+    const first = benefits.claimMarginNote(a, watched(a));
+    // Seeing the code again needs no second viewing.
     assert.deepEqual(benefits.claimMarginNote(a), first);
-    assert.notEqual(benefits.claimMarginNote(b).code, first.code);
+    assert.notEqual(benefits.claimMarginNote(b, watched(b)).code, first.code);
     assert.equal(benefits.myMarginNoteCode(c), null);
     assert.throws(() => benefits.claimMarginNote(c), /领完/);
     q.run('DELETE FROM users WHERE id = ?', b);
@@ -122,7 +129,7 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.equal(benefits.importMarginNoteCodes(['TESTCODE101', 'TESTCODE102']), 2);
     const email = 'benefits-returning@mail.sustech.edu.cn';
     const first = user(email);
-    const code = benefits.claimMarginNote(first).code;
+    const code = benefits.claimMarginNote(first, watched(first)).code;
     assert.equal(benefits.benefitStatus().marginnote.remaining, 1);
     assert.equal(q.get<{ n: number }>("SELECT count(*) AS n FROM settings WHERE key = 'benefit_claimant_secret'")!.n, 0, 'nothing is kept until an account with a code is deleted');
     // 注销：先跑各模块的清理，再把邮箱匿名化（与 DELETE /api/auth/account 的顺序一致）
@@ -144,7 +151,7 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     const none = user('benefits-nocode@mail.sustech.edu.cn');
     runAccountCleanup(none);
     assert.equal(q.get<{ n: number }>('SELECT count(*) AS n FROM benefit_marginnote WHERE claimant IS NOT NULL')!.n, 0);
-    assert.notEqual(benefits.claimMarginNote(other).code, code);
+    assert.notEqual(benefits.claimMarginNote(other, watched(other)).code, code);
     assert.equal(benefits.benefitStatus().marginnote.remaining, 0);
     // 领完之后，注销重来的同学仍然能找回自己的码
     runAccountCleanup(other);
@@ -152,6 +159,51 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     const back = user('benefits-other@mail.sustech.edu.cn');
     assert.equal(benefits.benefitStatus().marginnote.phase, 'exhausted');
     assert.equal(benefits.claimMarginNote(back).code, 'TESTCODE102');
+  });
+
+  await t.test('a new code is handed out only after the whole promo has been watched by that account', async () => {
+    assert.equal(benefits.importMarginNoteCodes(['TESTCODE201']), 1);
+    const viewer = user('benefits-viewer@mail.sustech.edu.cn');
+    const refused = (token: unknown, pattern: RegExp) => {
+      assert.throws(() => benefits.claimMarginNote(viewer, token), pattern);
+      assert.equal(benefits.myMarginNoteCode(viewer), null);
+      assert.equal(benefits.benefitStatus().marginnote.remaining, 1);
+    };
+    // A page opened before this rule existed sends no token.
+    refused(undefined, /刷新页面/);
+    refused('', /刷新页面/);
+    refused({ token: 'x' }, /刷新页面/);
+    refused(`${clock - 82_000}.forged-signature`, /刷新页面/);
+    // Someone else's token, or one with the start moved back, is not accepted.
+    refused(watched(a), /刷新页面/);
+    const [, signature] = benefits.startMarginNoteWatch(viewer).token.split('.');
+    refused(`${clock - 82_000}.${signature}`, /刷新页面/);
+    // Not enough time has passed for the promo to have played to the end.
+    refused(benefits.startMarginNoteWatch(viewer).token, /还没有看完，请在 80 秒后/);
+    refused(watched(viewer, 79), /还没有看完，请在 1 秒后/);
+    // A viewing from more than a day ago no longer counts.
+    refused(watched(viewer, 24 * 3600), /刷新页面/);
+    assert.equal(benefits.startMarginNoteWatch(viewer).watchSeconds, 80);
+
+    // The claim endpoint passes the token on, and needs the terms accepted as before.
+    const { benefitsRouter } = await import('../server/routes/benefits.ts');
+    const post = (url: string, body: unknown) => new Promise<{ status: number; body: any }>((resolve) => {
+      const res = { json: (value: unknown) => resolve({ status: 200, body: value }) };
+      const req = { method: 'POST', url, body, headers: {}, query: {}, ip: '127.0.0.1', user: { id: viewer, email: 'benefits-viewer@mail.sustech.edu.cn', role: 'user' } };
+      try { benefitsRouter.handle(req as any, res as any, (error: any) => resolve({ status: error?.status ?? 404, body: error?.message })); }
+      catch (error: any) { resolve({ status: error?.status ?? 500, body: error?.message }); }
+    });
+    assert.equal((await post('/marginnote/claim', { acceptTerms: true })).status, 400);
+    assert.equal((await post('/marginnote/claim', { watchToken: watched(viewer) })).status, 400);
+    const issued = await post('/marginnote/watch', {});
+    assert.equal(issued.status, 200);
+    assert.match((await post('/marginnote/claim', { acceptTerms: true, watchToken: issued.body.token })).body, /还没有看完/);
+    clock += 80_000;
+    const claimed = await post('/marginnote/claim', { acceptTerms: true, watchToken: issued.body.token });
+    clock -= 80_000;
+    assert.deepEqual(claimed, { status: 200, body: { code: 'TESTCODE201' } });
+    assert.equal(benefits.myMarginNoteCode(viewer), 'TESTCODE201');
+    assert.equal(benefits.benefitStatus().marginnote.remaining, 0);
   });
 
   await t.test('expiry is distinct from an unopened activity, even when renewal terms are absent', (subtest) => {

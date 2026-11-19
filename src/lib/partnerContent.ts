@@ -147,3 +147,11 @@ export const marginNoteGroup = {
   qr: '/partners/marginnote/qa-group-qr.png',
   validBefore: '2026-11-25',
 };
+
+// MarginNote 宣传片：合作方原片是 4K（约 293 MB），这里是压缩成 720p 的网页版。换片时同时改 seconds（片长，向上取整），
+// 并把 server/benefits.ts 的 MN_WATCH_MS 改成比片长少 2 秒。
+export const marginNotePromo = {
+  src: '/partners/marginnote/promo-720p.mp4',
+  poster: '/partners/marginnote/promo-poster.webp',
+  seconds: 82,
+};

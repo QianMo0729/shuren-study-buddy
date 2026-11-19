@@ -3,13 +3,16 @@ import { Link, useLocation } from 'react-router';
 import { ArrowLeft, ArrowUpRight, BookOpen, Check, Clock3, Copy, Gift, Layers3, Play, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui';
 import { PartnerLogo, type PartnerBrand } from '../components/PartnerLogo';
+import { PromoVideo } from '../components/PromoVideo';
 import { XmindClaimBall } from '../components/XmindClaimBall';
+import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { benefitsApi, marginNoteStatusLabel, openXmindForm, refreshBenefitsStatus, retryXmindClaim, useBenefitsStatus, useXmindClaim } from '../lib/benefits';
-import { marginNoteGroup, xmindFeatures, xmindTemplates, xmindVideos } from '../lib/partnerContent';
+import { benefitsApi, marginNoteStatusLabel, openXmindForm, refreshBenefitsStatus, retryXmindClaim, useBenefitsStatus, useMarginNoteWatch, useXmindClaim } from '../lib/benefits';
+import { marginNoteGroup, marginNotePromo, xmindFeatures, xmindTemplates, xmindVideos } from '../lib/partnerContent';
 import './benefits.css';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : '网络连接失败，请稍后重试';
+const promoLength = `${Math.floor(marginNotePromo.seconds / 60)} 分 ${marginNotePromo.seconds % 60} 秒`;
 
 export function BenefitsLayout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -49,7 +52,7 @@ export function Benefits() {
         <p className="benefits-eyebrow">讲义阅读 · 论文笔记 · 知识整理</p><h2>3 个月 Max 订阅</h2>
         <p>阅读讲义和论文时，把摘录、笔记和知识关系整理在一起。适用于 iPad、iPhone 和 Mac。</p>
         <span className="benefits-pill"><Gift size={15} /> 共 100 个兑换码 · {marginNoteStatusLabel(status, error)}</span>
-        <p className="benefits-card-condition">开放后领取兑换码，再前往 App Store 完成兑换。</p>
+        <p className="benefits-card-condition">看完宣传片后领取兑换码，再前往 App Store 完成兑换。</p>
       </Link>
     </div>
     <p className="benefits-footnote">福利规则以各活动页说明为准。请选择适合自己的工具，自愿参与领取。</p>
@@ -125,6 +128,11 @@ export function MarginNoteBenefit() {
   }, [user?.id]);
   const ownCode = code?.userId === user?.id ? code?.value : null;
   const claimOpen = !statusError && status?.marginnote.phase === 'open';
+  // 还没有码的同学，领取前要完整看一遍宣传片。活动状态一时读不到（statusError）不打断正在看的片子，沿用上一次读到的状态
+  const mustWatch = !!user && status?.marginnote.phase === 'open' && loadedFor === user.id && !ownCode;
+  const watch = useMarginNoteWatch(user?.id, mustWatch);
+  const [seen, setSeen] = useState(0);
+  useEffect(() => { setSeen(0); }, [user?.id, watch.round]);
   const availability = marginNoteStatusLabel(status, statusError);
   // 企业微信群码 7 天过期，过期后不再显示
   const groupOpen = Date.now() < Date.parse(`${marginNoteGroup.validBefore}T00:00:00+08:00`);
@@ -132,8 +140,12 @@ export function MarginNoteBenefit() {
   async function claim() {
     if (!user || busy) return;
     setBusy(true); setError('');
-    try { const data = await benefitsApi.claim(); setCode({ userId: user.id, value: data.code }); void refreshBenefitsStatus(); }
-    catch (e) { setError(errorText(e)); }
+    try { const data = await benefitsApi.claim(await watch.token()); watch.clear(); setCode({ userId: user.id, value: data.code }); void refreshBenefitsStatus(); }
+    catch (e) {
+      // 看完后隔了一天才来领，观看凭证已经失效：从头再看一遍
+      if (e instanceof ApiError && e.data?.code === 'watch_required') { watch.restart(); setError('观看记录已过期，请重新看一遍宣传片再领取'); }
+      else setError(errorText(e));
+    }
     finally { setBusy(false); }
   }
   return <BenefitsLayout>
@@ -152,14 +164,19 @@ export function MarginNoteBenefit() {
     <section id="mn-examples" className="benefits-section"><SectionHead title="看看你正在学的课程，能怎么整理" subtitle="以下为合作方提供的笔记示例。" /><div className="benefits-video-grid">{[['english', '英语 · 把词汇放回语境'], ['anatomy', '解剖 · 看清知识之间的关系'], ['math', '高数 · 从公式到解题思路']].map(([image, title]) => <figure className="benefits-media-card" key={image}><img src={`/partners/marginnote/${image}.webp`} alt={title} loading="lazy" decoding="async" /><figcaption><h3>{title}</h3></figcaption></figure>)}</div></section>
     <section className="benefits-resource"><div><p className="benefits-eyebrow">更多学习资源</p><h2>真题、词汇和错题，放在一起学。</h2><p>在 MarginNote 5 首页点击「更多学习集」，获取四六级、考研英语真题及高频词汇资源。也可以选择刷题卡片、外刊生词等学习场景。</p></div><img src="/partners/marginnote/resources.webp" alt="在 MarginNote 首页找到更多学习集的操作示意" width={1070} height={1110} loading="lazy" decoding="async" /></section>
     <section id="mn-claim" className="benefits-mn-claim"><div className="benefits-claim-brand"><PartnerLogo brand="marginnote" /><span>订阅兑换福利</span></div><p className="benefits-eyebrow">3 个月 Max 订阅 · 共 100 个兑换码</p><h2>领取前，先确认这些条件</h2>
-      <ul className="benefits-rules"><li>每个树仁搭子账号可领取 1 个兑换码。</li><li>每个 Apple 账户只能兑换 1 张，不可叠加。</li><li>兑换码需在 App Store 使用，请在 <strong>2027 年 2 月 12 日前</strong>完成兑换。</li></ul>
-      <h3 className="benefits-subheading">开放后的参与流程</h3><p>登录树仁搭子 → 领取兑换码 → 在 App Store 完成兑换</p>
+      <ul className="benefits-rules"><li>领取前需要完整看一遍 MarginNote 宣传片（{promoLength}）。</li><li>每个树仁搭子账号可领取 1 个兑换码。</li><li>每个 Apple 账户只能兑换 1 张，不可叠加。</li><li>兑换码需在 App Store 使用，请在 <strong>2027 年 2 月 12 日前</strong>完成兑换。</li></ul>
+      <h3 className="benefits-subheading">开放后的参与流程</h3><p>登录树仁搭子 → 看完宣传片 → 领取兑换码 → 在 App Store 完成兑换</p>
       <ol><li>打开 App Store，点击账号头像，选择「兑换充值卡或代码」。</li><li>输入兑换码，阅读兑换确认页显示的条件后完成兑换。</li><li>使用同一 Apple 账户打开 MarginNote 5。</li></ol>
       {status?.marginnote.renewalTerms && <p className="benefits-renewal">{status.marginnote.renewalTerms}</p>}
+      {!ownCode && (!user || loadedFor === user.id) && <div className="benefits-promo"><h3 className="benefits-subheading">{claimOpen ? '看完宣传片，再领取兑换码' : 'MarginNote 宣传片'}</h3>
+        <PromoVideo key={`${user?.id}-${watch.round}`} src={marginNotePromo.src} poster={marginNotePromo.poster} label="MarginNote 宣传片" mustFinish={mustWatch && !watch.watched} onProgress={setSeen} onFinished={watch.finish}
+          status={watch.watched ? <><Check size={15} /> 已看完，可以领取了。</>
+            : mustWatch ? `片长 ${promoLength}，需要完整看一遍，播放时不能快进或倍速。`
+            : claimOpen ? `片长 ${promoLength}。登录后观看才计入领取条件。` : `片长 ${promoLength}。`} /></div>}
       {ownCode ? <div className="benefits-code"><span><Check size={17} /> 你的兑换码</span><strong>{ownCode}</strong><p>取得兑换码后，还需在 App Store 完成兑换。再次打开本页可查看同一个码。</p><Button icon={copied ? <Check size={15} /> : <Copy size={15} />} onClick={async () => { try { if (!navigator.clipboard) throw new Error(); await navigator.clipboard.writeText(ownCode); setCopied(true); window.setTimeout(() => setCopied(false), 2500); } catch { setError('复制失败，请长按兑换码手动复制'); } }}>{copied ? '已复制' : '复制兑换码'}</Button></div>
         : !claimOpen ? <div className="benefits-availability"><strong role="status">{availability}</strong>{!statusError && status?.marginnote.phase === 'upcoming' && <p>完整兑换说明确认后，将与领取入口一同公布。</p>}</div>
-        : user ? <><label className="benefits-checkbox"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /><span>我已阅读兑换条件及续订说明，了解需要在 Apple 订阅设置中管理自动续订。</span></label><Button variant="primary" size="lg" onClick={claim} loading={busy} disabled={!accepted || loadedFor !== user.id}>{busy ? '正在领取兑换码…' : loadedFor !== user.id ? '正在查看领取记录…' : '领取我的兑换码'}</Button></>
-        : <Link className="benefits-primary" to="/login?next=%2Fbenefits%2Fmarginnote">登录后领取兑换码</Link>}
+        : user ? <><label className="benefits-checkbox"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /><span>我已阅读兑换条件及续订说明，了解需要在 Apple 订阅设置中管理自动续订。</span></label><Button variant="primary" size="lg" onClick={claim} loading={busy} disabled={!accepted || loadedFor !== user.id || !watch.watched}>{busy ? '正在领取兑换码…' : loadedFor !== user.id ? '正在查看领取记录…' : !watch.watched ? (seen > 0 ? `还需观看 ${Math.max(1, marginNotePromo.seconds - seen)} 秒` : '看完宣传片后可领取') : '领取我的兑换码'}</Button></>
+        : <Link className="benefits-primary" to="/login?next=%2Fbenefits%2Fmarginnote">登录后看宣传片领取</Link>}
       {(error || statusError) && <p className="benefits-error" role="alert">{error || statusError}</p>}
       {groupOpen && <figure className="benefits-group"><img src={marginNoteGroup.qr} alt={`MarginNote × 树仁搭子 ${marginNoteGroup.name}二维码`} width={677} height={677} />
         <figcaption><h3>{marginNoteGroup.name}</h3><p>兑换或使用时遇到问题，可以进群提问。用微信或企业微信扫码加入，在手机上可长按二维码识别。</p><p className="benefits-group-valid">二维码 {groupMonth} 月 {groupDay} 日前有效</p></figcaption></figure>}

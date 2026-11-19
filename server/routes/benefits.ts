@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { HttpError, rateLimit, requireAdmin, requireUser, sha256, clientKey } from '../auth.ts';
-import { benefitStatus, claimMarginNote, deleteXmindRegistration, myMarginNoteCode, myXmindRegistration, registerXmind, setXmindOpen, startBenefitVisit, xmindRegistrations } from '../benefits.ts';
+import { benefitStatus, claimMarginNote, deleteXmindRegistration, myMarginNoteCode, myXmindRegistration, registerXmind, setXmindOpen, startBenefitVisit, startMarginNoteWatch, xmindRegistrations } from '../benefits.ts';
 import { q } from '../db.ts';
 
 export const benefitsRouter = Router();
@@ -52,8 +52,13 @@ benefitsRouter.delete('/xmind/registrations/:id', requireAdmin, (req, res) => {
 });
 
 benefitsRouter.get('/marginnote/mine', requireUser, (req, res) => res.json({ code: myMarginNoteCode(req.user!.id) }));
+// 开始看宣传片时取观看凭证，领取时交回
+benefitsRouter.post('/marginnote/watch', requireUser, (req, res) => {
+  rateLimit(`benefit:mn-watch:${req.user!.id}`, 60, 3_600_000);
+  res.json(startMarginNoteWatch(req.user!.id));
+});
 benefitsRouter.post('/marginnote/claim', requireUser, (req, res) => {
   rateLimit(`benefit:mn:${req.user!.id}`, 10, 60_000);
   if (req.body?.acceptTerms !== true) throw new HttpError(400, '请先阅读并同意兑换及续订说明');
-  res.json(claimMarginNote(req.user!.id));
+  res.json(claimMarginNote(req.user!.id, req.body?.watchToken));
 });

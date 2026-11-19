@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { config } from './config.ts';
 import { db, getSetting, iso, q, setSetting } from './db.ts';
 import { HttpError, sha256 } from './auth.ts';
 import { registerAccountCleanup } from './social.ts';
@@ -7,6 +8,9 @@ export const XMIND_LIMIT = 200;
 export const XMIND_WAIT_MS = 30_000;
 const VISIT_TTL_MS = 3_600_000;
 const MN_EXPIRES = Date.parse('2027-02-13T00:00:00+08:00');
+// 领取 MarginNote 兑换码前要看完宣传片。片长 82 秒，留 2 秒给观看凭证在路上的时间
+export const MN_WATCH_MS = 80_000;
+const MN_WATCH_TTL_MS = 24 * 3_600_000;
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS benefit_visits (
@@ -150,7 +154,30 @@ export function myMarginNoteCode(userId: number) {
   return q.get<{ code: string }>('SELECT code FROM benefit_marginnote WHERE user_id = ? AND claimed_at IS NOT NULL', userId)?.code ?? null;
 }
 
-export function claimMarginNote(userId: number) {
+// 观看凭证：开始观看时发给同学，里面只有开始时间和一个签名，服务器不保存。
+// 领取时据此确认凭证是发给本人的，并且从开始观看到现在至少过了一整部片子的时间。
+const watchSignature = (userId: number, startedAt: number) =>
+  crypto.createHmac('sha256', config.codePepper).update(`mn-watch:${userId}:${startedAt}`).digest('base64url');
+
+export function startMarginNoteWatch(userId: number) {
+  const startedAt = Date.now();
+  return { token: `${startedAt}.${watchSignature(userId, startedAt)}`, watchSeconds: MN_WATCH_MS / 1000 };
+}
+
+function assertPromoWatched(userId: number, token: unknown) {
+  const [at, signature] = typeof token === 'string' && token.length <= 100 ? token.split('.') : [];
+  const startedAt = Number(at);
+  const expected = Buffer.from(watchSignature(userId, startedAt));
+  const supplied = Buffer.from(signature ?? '');
+  const age = Date.now() - startedAt;
+  // 没带凭证的多半是发布前就打开着的旧页面，刷新后才有宣传片
+  if (!Number.isSafeInteger(startedAt) || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected) || age < 0 || age >= MN_WATCH_TTL_MS) {
+    throw new HttpError(400, '请刷新页面，看完宣传片后再领取', { code: 'watch_required' });
+  }
+  if (age < MN_WATCH_MS) throw new HttpError(400, `宣传片还没有看完，请在 ${Math.ceil((MN_WATCH_MS - age) / 1000)} 秒后再领取`, { code: 'watch_unfinished' });
+}
+
+export function claimMarginNote(userId: number, watchToken?: unknown) {
   return atomic(() => {
     const existing = myMarginNoteCode(userId);
     if (existing) return { code: existing };
@@ -165,6 +192,8 @@ export function claimMarginNote(userId: number) {
     if (!benefitStatus().marginnote.enabled) throw new HttpError(409, '订阅福利暂未开放或已结束');
     const row = q.get<{ code: string }>('SELECT code FROM benefit_marginnote WHERE claimed_at IS NULL ORDER BY code LIMIT 1');
     if (!row) throw new HttpError(409, '本批兑换码已领完');
+    // 发新码之前才要求看完宣传片；已经领过的同学查看或找回自己的码不受影响
+    assertPromoWatched(userId, watchToken);
     q.run("UPDATE benefit_marginnote SET user_id = ?, claimed_at = datetime('now') WHERE code = ? AND claimed_at IS NULL", userId, row.code);
     return { code: row.code };
   });
