@@ -14,7 +14,7 @@ import { useCheckinSession } from '../components/checkin/useCheckinSession';
 import { useGeoLabel } from '../components/checkin/useGeoLabel';
 import { captureFrame, useLiveCamera } from '../components/checkin/useLiveCamera';
 import { Viewfinder } from '../components/checkin/Viewfinder';
-import { PHOTO_MUST, captionLength, shortDate } from '../../shared/activity';
+import { PHOTO_MUST, captionLength, shortDate, weekdayLabel } from '../../shared/activity';
 import { splitNickname } from '../components/ProfileCard';
 import { useActivityConfig } from '../lib/activity';
 
@@ -344,7 +344,7 @@ function BuddyHint({ status, windowMinutes, distanceMeters, captionMissing }: {
   let text: string;
   let tone: 'good' | 'plain' | 'warn' = 'plain';
   if (!pair.started) {
-    text = `你们从 ${shortDate(pair.startsOn)}（周一）开始计分。`;
+    text = `你们从 ${shortDate(pair.startsOn)}（${weekdayLabel(pair.startsOn)}）开始计分。`;
   } else if (today.mine) {
     text = today.mine.counts
       ? `今天的计分打卡已经在 ${hm(today.mine.at)} 完成了，这次只发到社区，不再计分。`

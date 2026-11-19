@@ -12,7 +12,7 @@ import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
 import { activeMatchBetween } from '../matches.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
-import { currentWeek, dayCheckin, ineligibleReason, leaderboard, pairScore, type DayCheckin } from '../scoring.ts';
+import { currentWeek, dayCheckin, ineligibleReason, leaderboard, pairScore, scoringStart, type DayCheckin } from '../scoring.ts';
 
 // 搭子打卡活动：规则参数（公开）、我的搭子、邀请与解绑、搭子榜、打卡申诉
 export const activityRouter = Router();
@@ -71,8 +71,9 @@ function statusOf(uid: number): BuddyStatus {
       id: pair.id,
       partner: buddyPartner(partnerId, uid),
       createdAt: iso(pair.created_at)!,
-      startsOn: pair.starts_on,
-      started: date >= pair.starts_on,
+      // 赛季推迟后，早先绑定的组合也从新的赛季第一天开始计分
+      startsOn: scoringStart(pair),
+      started: date >= scoringStart(pair),
       matchId: activeMatchBetween(uid, partnerId)?.id ?? null,
       ineligible,
       showOnProfile: pair.user_a === uid ? { mine: !!pair.show_a, partner: !!pair.show_b } : { mine: !!pair.show_b, partner: !!pair.show_a },

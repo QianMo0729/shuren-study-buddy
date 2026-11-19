@@ -12,7 +12,7 @@ import { type PairRow, replaceRoster, rosterInfo, shurenOf } from '../buddyState
 import { checkMessage, saveWordLists, wordLists } from '../chatSafety.ts';
 import { iso, q } from '../db.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
-import { ineligibleReason, leaderboard, pairScore, scoredThrough, strikesOf, touchScores } from '../scoring.ts';
+import { ineligibleReason, leaderboard, pairScore, scoredThrough, scoringStart, strikesOf, touchScores } from '../scoring.ts';
 
 // 管理后台中与搭子打卡活动有关的部分。审核员和管理员都能用；活动设置与人员授权只有管理员能用。
 export const adminActivityRouter = Router();
@@ -184,7 +184,7 @@ adminActivityRouter.get('/board', (req, res) => {
       pairId: pair.id, rank: entry?.rank ?? null, tied: entry?.tied ?? false,
       total: score.total, checkinPoints: score.checkinPoints, bonusPoints: score.bonusPoints, fullWeeks: score.fullWeeks,
       events: score.events, reachedWeek: score.reachedWeek, weeks: score.weeks,
-      members: [memberInfo(pair.user_a, full), memberInfo(pair.user_b, full)], startsOn: pair.starts_on, createdAt: iso(pair.created_at),
+      members: [memberInfo(pair.user_a, full), memberInfo(pair.user_b, full)], startsOn: scoringStart(pair, config), createdAt: iso(pair.created_at),
       ineligible: ineligibleReason(pair, config), strikes: strikesOf(pair),
       disqualified: !!q.get('SELECT 1 FROM activity_disqualified WHERE user_id IN (?, ?)', pair.user_a, pair.user_b),
     };

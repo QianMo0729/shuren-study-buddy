@@ -172,10 +172,15 @@ export function scoredThrough(now = new Date(), config = activityConfig()): stri
   return through < config.seasonStart ? null : through;
 }
 
+/** 这个组合实际开始计分的日期：绑定时定下的开始日与赛季第一天中较晚的一个（赛季推迟后，早先绑定的组合跟着推迟） */
+export function scoringStart(pair: Pick<PairRow, 'starts_on'>, config = activityConfig()): string {
+  return pair.starts_on > config.seasonStart ? pair.starts_on : config.seasonStart;
+}
+
 /** 组合在 [开始计分日, through] 范围内的积分 */
 export function pairScore(pair: PairRow, through: string | null, config = activityConfig()): PairScore {
   const empty: PairScore = { pairId: pair.id, weeks: [], checkinPoints: 0, bonusPoints: 0, total: 0, fullWeeks: 0, events: 0, reachedWeek: null };
-  const from = pair.starts_on > config.seasonStart ? pair.starts_on : config.seasonStart;
+  const from = scoringStart(pair, config);
   if (!through || through < from) return empty;
   const events = sameEvents(pair, from, through, config);
   const perWeek = new Map<string, number>();
@@ -217,7 +222,9 @@ export function currentWeek(pair: PairRow, now = new Date(), config = activityCo
   const today = beijingDay(now);
   if (today < config.seasonStart || today > config.seasonEnd || today < pair.starts_on) return null;
   const start = mondayOf(today);
-  const events = sameEvents(pair, start, today, config);
+  // 赛季（或这个组合）在周中开始计分时，这一周只算开始计分之后的打卡
+  const from = [start, scoringStart(pair, config)].sort().at(-1)!;
+  const events = sameEvents(pair, from, today, config);
   const count = events.length;
   let used = 0;
   let bonus = 0;

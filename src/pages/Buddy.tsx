@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { DAYS } from '../../shared/options';
-import { shortDate } from '../../shared/activity';
+import { mondayOf, shortDate, weekdayLabel } from '../../shared/activity';
 import type { BuddyStatus } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { useToast } from '../lib/toast';
@@ -89,7 +89,7 @@ function Paired({ status, onUnbind, onStatus }: { status: BuddyStatus; onUnbind:
   const { week, rank, score } = status;
   const { config } = useActivityConfig();
   const today = bjDate(Date.now());
-  const weekNo = pair.started ? Math.floor((Date.parse(today) - Date.parse(pair.startsOn)) / (7 * DAY)) + 1 : 0;
+  const weekNo = pair.started ? Math.floor((Date.parse(today) - Date.parse(mondayOf(pair.startsOn))) / (7 * DAY)) + 1 : 0;
   const days = Math.max(1, Math.floor((Date.now() - Date.parse(pair.createdAt)) / DAY));
   const created = new Date(Date.parse(pair.createdAt) + 8 * 3_600_000);
   const weekday = (date: string) => (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
@@ -104,7 +104,7 @@ function Paired({ status, onUnbind, onStatus }: { status: BuddyStatus; onUnbind:
         <div className="flex flex-col items-center gap-0.5">
           <MyWord partner={pair.partner.nickname} />
           <p className="text-[14px] text-ink-3">
-            {created.getUTCMonth() + 1}月{created.getUTCDate()}日绑定 · 已 {days} 天 · {weekNo > 0 ? `第 ${weekNo} 个计分周` : `${shortDate(pair.startsOn)}（周一）开始计分`}
+            {created.getUTCMonth() + 1}月{created.getUTCDate()}日绑定 · 已 {days} 天 · {weekNo > 0 ? `第 ${weekNo} 个计分周` : `${shortDate(pair.startsOn)}（${weekdayLabel(pair.startsOn)}）开始计分`}
           </p>
         </div>
       </div>

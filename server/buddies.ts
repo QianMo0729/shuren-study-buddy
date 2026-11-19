@@ -1,6 +1,6 @@
 // 搭子绑定：邀请、接受、拒绝、撤回、解绑，以及配对关闭、注销时自动解绑。
 // 规则：一对一；双方确认才生效；从下一个完整自然周（周一）开始计分；任一方可随时解绑，解绑后组合积分清零。
-import { addDays, beijingDay, mondayOf, shortDate } from '../shared/activity.ts';
+import { addDays, beijingDay, mondayOf, shortDate, weekdayLabel } from '../shared/activity.ts';
 import type { ShurenMember } from '../shared/types.ts';
 import { HttpError } from './auth.ts';
 import { activityConfig } from './activityConfig.ts';
@@ -90,7 +90,7 @@ export function accept(inviteId: number, uid: number, shuren?: unknown): { pair:
        WHERE status = 'pending' AND (from_id IN (?, ?) OR to_id IN (?, ?))`, a, b, a, b,
     );
     const { match } = openMatch(a, b);
-    addSystemMessage(match.id, `你们已绑定为学习搭子，从 ${shortDate(startsOn)}（周一）起计分。约好时间，30 分钟内各自拍照打卡就算一次。`);
+    addSystemMessage(match.id, `你们已绑定为学习搭子，从 ${shortDate(startsOn)}（${weekdayLabel(startsOn)}）起计分。约好时间，30 分钟内各自拍照打卡就算一次。`);
     touchScores();
     notify(row.from_id, '搭子邀请已接受', `${nicknameOf(uid)} 接受了你的邀请，你们从 ${shortDate(startsOn)} 起开始计分。`, `/messages/${match.id}`);
     return { pair: activePairBetween(a, b)!, matchId: match.id };

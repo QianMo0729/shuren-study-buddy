@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
 import {
-  BONUS_RULES, INVALID_REASONS, PHOTO_INVALID, PHOTO_MUST, SENSITIVE_LABELS, BLOCKED_CATEGORIES, shortDate,
+  BONUS_RULES, INVALID_REASONS, PHOTO_INVALID, PHOTO_MUST, SENSITIVE_LABELS, BLOCKED_CATEGORIES, addDays, mondayOf, shortDate, weekdayLabel,
 } from '../../shared/activity';
 import { TAKEDOWN_REASONS } from '../../shared/options';
 import { Wordmark } from '../components/brand';
@@ -35,7 +35,7 @@ export function Rules() {
       <header className="mt-10 border-b border-ink pb-6">
         <h1 className="font-display text-4xl text-ink">搭子打卡活动规则</h1>
         <p className="mt-3 text-sm leading-relaxed text-ink-2">
-          本赛季 {shortDate(c.seasonStart)}（周一）至 {shortDate(c.seasonEnd)}（周日）。奖励只发给搭子组合，不单独发给个人。
+          本赛季 {shortDate(c.seasonStart)}（{weekdayLabel(c.seasonStart)}）至 {shortDate(c.seasonEnd)}（{weekdayLabel(c.seasonEnd)}），从 {shortDate(c.seasonStart)} 起的打卡才计分。奖励只发给搭子组合，不单独发给个人。
           <br />本页的数字与系统计分使用同一份设置，调整时会同步更新。
         </p>
         <nav aria-label="目录" className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[13.5px] text-ink-3">
@@ -74,6 +74,9 @@ export function Rules() {
             <li>每天最多算 1 次，每周最多计 <b className="text-ink">{c.weeklyCap} 次</b>。</li>
             <li>有效打卡：网页相机现场拍摄（不能从相册上传），照片符合下面的要求，并在说明里写一句学了什么（至少 {c.captionMin} 个字）。</li>
             <li>每周日 24:00 截止，周一按下表把上一周的次数换算成分数，直接累加到组合总积分。取消补卡，缺卡不能补。</li>
+            {mondayOf(c.seasonStart) !== c.seasonStart && (
+              <li>第一周不满一周：从 {shortDate(c.seasonStart)}（{weekdayLabel(c.seasonStart)}）算到 {shortDate(addDays(mondayOf(c.seasonStart), 6))}（周日），按同一张表换算；{shortDate(c.seasonStart)} 之前的打卡不计分。</li>
+            )}
           </ul>
           <table className="w-full max-w-sm border-collapse text-[14px]">
             <thead><tr className="border-b border-ink text-left"><th className="py-1.5 font-semibold text-ink">当周次数</th><th className="py-1.5 font-semibold text-ink">当周得分</th></tr></thead>

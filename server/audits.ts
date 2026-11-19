@@ -11,7 +11,7 @@ import { getSetting, iso, q, setSetting, tx } from './db.ts';
 import { sendInvalidCheckinMail } from './mail.ts';
 import { hashDistance } from './photoHash.ts';
 import { beijingTime, notify } from './notify.ts';
-import { leaderboard, sameEvents, scoredThrough, touchScores, weekEvents } from './scoring.ts';
+import { leaderboard, sameEvents, scoredThrough, scoringStart, touchScores, weekEvents } from './scoring.ts';
 
 export type AuditFlag = 'same_device' | 'near_same_time' | 'shared_device' | 'similar_photo';
 
@@ -223,7 +223,8 @@ export function ensureWeeklySamples(now = new Date()) {
   const config = activityConfig();
   const through = scoredThrough(now, config);
   if (!through) return;
-  for (let week = config.seasonStart; week <= through; week = addDays(week, 7)) {
+  // 计分周按周一编号；赛季不是从周一开始时，第一周从赛季第一天所在周的周一算起
+  for (let week = mondayOf(config.seasonStart); week <= through; week = addDays(week, 7)) {
     const key = `audit_sample_${week}`;
     if (getSetting(key, '')) continue;
     tx(() => {
@@ -256,7 +257,7 @@ export function enqueuePrizeReview(now = new Date()): { pairs: number; added: nu
   let added = 0;
   tx(() => {
     for (const item of winners) {
-      const from = item.pair.starts_on > config.seasonStart ? item.pair.starts_on : config.seasonStart;
+      const from = scoringStart(item.pair, config);
       if (!board.through) continue;
       for (const event of sameEvents(item.pair, from, board.through, config)) {
         for (const c of [event.a, event.b]) if (enqueue(c.id, mondayOf(event.date), 'prize', eventFlags(item.pair, event))) added++;

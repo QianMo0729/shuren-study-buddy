@@ -431,7 +431,7 @@ export function ActivitySettingsTab() {
     <div className="max-w-3xl space-y-6">
       <p className="text-[13.5px] leading-relaxed text-ink-3">积分每次都从打卡记录重新计算，修改后已结束的周也会按新设置重算。赛季中途请尽量不要改计分规则，确需修改时先在群里公告。</p>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="赛季开始（周一）"><Input type="date" value={form.seasonStart} onChange={(e) => set('seasonStart', e.target.value)} /></Field>
+        <Field label="赛季开始（当天起计分）"><Input type="date" value={form.seasonStart} onChange={(e) => set('seasonStart', e.target.value)} /></Field>
         <Field label="赛季结束（周日）"><Input type="date" value={form.seasonEnd} onChange={(e) => set('seasonEnd', e.target.value)} /></Field>
         <NumberField label="相同事件时间窗（分钟）" value={form.windowMinutes} onChange={(v) => set('windowMinutes', v)} />
         <NumberField label="两人相距不超过（米）" value={form.distanceMeters} onChange={(v) => set('distanceMeters', v)} hint="填 0 表示不检查距离" />

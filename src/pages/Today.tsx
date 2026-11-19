@@ -3,7 +3,7 @@ import { useCached } from '../lib/cache';
 import { splitNickname } from '../components/ProfileCard';
 import { Link } from 'react-router';
 import { DAYS, GRADES, PERIODS } from '../../shared/options';
-import { shortDate } from '../../shared/activity';
+import { mondayOf, shortDate, weekdayLabel } from '../../shared/activity';
 import type { BuddyStatus, DeckCard, DeckResponse } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
@@ -147,7 +147,7 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
   const pair = status.pair!;
   const { week, rank, score } = status;
   const { config } = useActivityConfig();
-  const weekNo = pair.started ? Math.floor((Date.parse(today.date) - Date.parse(pair.startsOn)) / (7 * DAY)) + 1 : 0;
+  const weekNo = pair.started ? Math.floor((Date.parse(today.date) - Date.parse(mondayOf(pair.startsOn))) / (7 * DAY)) + 1 : 0;
   // 本周哪几天算了一次相同事件（服务器按计分规则判定，和积分一致）
   const both = new Set((week?.events ?? []).map((e) => (new Date(`${e.date}T00:00:00Z`).getUTCDay() + 6) % 7));
   const freeToday = status.today?.free ?? [];
@@ -189,7 +189,7 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
           </div>
         </div>
       ) : (
-        <p className="text-[15px] text-ink-2">{status.season.status === 'ended' ? '本赛季已经结束。' : `从 ${shortDate(pair.startsOn)}（周一）开始计分。`}</p>
+        <p className="text-[15px] text-ink-2">{status.season.status === 'ended' ? '本赛季已经结束。' : `从 ${shortDate(pair.startsOn)}（${weekdayLabel(pair.startsOn)}）开始计分。`}</p>
       )}
       {pair.ineligible && <p className="-mt-2 text-[13px] text-danger">{pair.ineligible}</p>}
 

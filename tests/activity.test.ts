@@ -9,7 +9,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import bcrypt from 'bcryptjs';
-import { DEFAULT_ACTIVITY_CONFIG, addDays, beijingDay, mondayOf } from '../shared/activity.ts';
+import { DEFAULT_ACTIVITY_CONFIG, addDays, beijingDay, mondayOf, validateActivityConfig, weekdayLabel } from '../shared/activity.ts';
 import { emptyProfile } from '../shared/profileRules.ts';
 import type { BuddyStatus, LeaderboardResponse, ProfileInput } from '../shared/types.ts';
 
@@ -136,7 +136,11 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
   await t.test('activity settings are validated and only admins can change them', async () => {
     assert.equal((await api('/activity/config')).status, 200, 'rules are public');
     assert.equal((await api('/admin/activity-config', moderator.cookie, 'PUT', { config })).status, 403);
-    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, seasonStart: addDays(seasonStart, 1) } })).status, 400, 'season starts on a Monday');
+    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, seasonStart: '2026-13-40' } })).status, 400, 'the season start must be a real date');
+    assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, seasonEnd: addDays(config.seasonEnd, 1) } })).status, 400, 'the season still ends on a Sunday');
+    assert.ok('config' in validateActivityConfig({ ...config, seasonStart: addDays(seasonStart, 3) }), 'the season may start mid-week');
+    assert.ok('config' in validateActivityConfig(DEFAULT_ACTIVITY_CONFIG), 'the default settings are valid');
+    assert.equal(`${DEFAULT_ACTIVITY_CONFIG.seasonStart} ${weekdayLabel(DEFAULT_ACTIVITY_CONFIG.seasonStart)}`, '2026-11-26 周四', 'scoring starts on Thursday 26 November');
     assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, ladder: [0, 1, 3] } })).status, 400, 'ladder covers 0..cap');
     assert.equal((await api('/admin/activity-config', admin.cookie, 'PUT', { config: { ...config, ladder: [0, 3, 1, 4, 6, 7, 8, 10] } })).status, 400, 'ladder never decreases');
     assert.equal(config.distanceMeters, 300, 'two check-ins at most 300 m apart by default');
@@ -553,5 +557,54 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal(rows[0].device_hash, rows[1].device_hash);
     assert.match(rows[0].device_hash, /^[0-9a-f]{64}$/);
     assert.ok(!JSON.stringify(rows).includes(device), 'the raw id is never stored');
+  });
+
+  // 放在最后：这一组会改赛季设置
+  await t.test('a season that starts mid-week scores only from its first day; the first week is short and still keyed by its Monday', async () => {
+    const a = createUser();
+    const b = createUser();
+    await bind(a, b);
+    // 赛季改期之前绑定的组合：记录里的开始计分日还是三周前的周一
+    db.prepare('UPDATE buddy_pairs SET starts_on = ?, created_at = ? WHERE id = ?').run(seasonStart, `${addDays(seasonStart, -3)} 00:00:00`, pairIdOf(a));
+    // 第 1 周 7 天都打卡；赛季改为从周四开始后，只有周四到周日这 4 次计分
+    for (let d = 0; d < 7; d++) {
+      checkin(a, week(0, d), '20:00:00');
+      checkin(b, week(0, d), '20:05:00');
+    }
+    const thursday = week(0, 3);
+    await saveConfig({ seasonStart: thursday });
+    assert.equal((await api('/activity/config')).body.season.start, thursday);
+    let st = await status(a);
+    assert.equal(st.pair?.startsOn, thursday, 'a pair bound earlier follows the postponed season');
+    assert.equal(st.pair?.started, true);
+    assert.equal(st.score?.total, 6, 'four same-event check-ins from Thursday to Sunday are worth 6 points');
+    const mine = (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(a));
+    assert.equal(mine.startsOn, thursday);
+    assert.deepEqual(mine.weeks[0], { week: week(0), count: 4, counted: 4, points: 6 }, 'the short first week keeps its Monday as the key');
+    assert.equal(mine.total, 6);
+    // 同一批打卡，赛季从周一开始时是满勤 10 分
+    await saveConfig();
+    assert.equal((await status(a)).score?.total, 10);
+
+    // 本周进度也只算赛季第一天之后的打卡：把赛季第一天设成今天，本周更早的打卡不算
+    db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
+    for (let day = thisMonday; day <= today; day = addDays(day, 1)) {
+      checkin(a, day, '08:00:00');
+      checkin(b, day, '08:05:00');
+    }
+    await saveConfig({ seasonStart: today });
+    st = await status(a);
+    assert.equal(st.pair?.startsOn, today);
+    assert.equal(st.week?.count, 1, 'only today counts in the week the season starts');
+    assert.deepEqual(st.week?.events.map((e) => e.date), [today]);
+    assert.equal(st.score?.total, 0, 'nothing is added to the total before the first week ends');
+    // 抽检按周一编号：赛季从周中开始时，抽检记录的周仍然是周一
+    await saveConfig({ seasonStart: thursday });
+    db.exec("DELETE FROM settings WHERE key LIKE 'audit_sample_%'");
+    assert.equal((await api('/admin/audits', moderator.cookie)).status, 200);
+    const sampled = (db.prepare("SELECT key FROM settings WHERE key LIKE 'audit_sample_%' ORDER BY key").all() as { key: string }[]).map((row) => row.key.slice('audit_sample_'.length));
+    assert.ok(sampled.length > 0 && sampled.every((key) => mondayOf(key) === key), `audit weeks are Mondays: ${sampled.join(',')}`);
+    assert.equal(sampled[0], week(0));
+    await saveConfig();
   });
 });

@@ -1,7 +1,7 @@
 // 搭子打卡活动的规则参数与文字。服务端计分、后台设置、规则页和打卡页共用这一份，避免各处写的数字不一致。
 
 export interface ActivityConfig {
-  /** 赛季第一天（周一，北京时间日期 YYYY-MM-DD） */
+  /** 赛季第一天，从这一天开始计分（北京时间日期 YYYY-MM-DD）。可以不是周一：计分周仍是周一到周日，第一周从这一天算到周日 */
   seasonStart: string;
   /** 赛季最后一天（周日） */
   seasonEnd: string;
@@ -34,7 +34,7 @@ export interface ActivityConfig {
 }
 
 export const DEFAULT_ACTIVITY_CONFIG: ActivityConfig = {
-  seasonStart: '2026-11-23',
+  seasonStart: '2026-11-26',
   seasonEnd: '2027-01-10',
   windowMinutes: 30,
   distanceMeters: 300,
@@ -74,6 +74,10 @@ export function beijingDay(d = new Date()): string {
   return new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
 }
 
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+/** 「周四」 */
+export const weekdayLabel = (date: string) => WEEKDAYS[weekdayOf(date)];
+
 /** 「11月23日」 */
 export function shortDate(date: string): string {
   const [, m, d] = date.split('-').map(Number);
@@ -90,7 +94,7 @@ export function validateActivityConfig(input: unknown): { config: ActivityConfig
   const src = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
   const seasonStart = String(src.seasonStart ?? '');
   const seasonEnd = String(src.seasonEnd ?? '');
-  if (!DATE_RE.test(seasonStart) || Number.isNaN(Date.parse(seasonStart)) || weekdayOf(seasonStart) !== 1) return { error: '赛季开始日期必须是周一' };
+  if (!DATE_RE.test(seasonStart) || Number.isNaN(Date.parse(seasonStart))) return { error: '请填写赛季开始日期' };
   if (!DATE_RE.test(seasonEnd) || Number.isNaN(Date.parse(seasonEnd)) || weekdayOf(seasonEnd) !== 0) return { error: '赛季结束日期必须是周日' };
   if (seasonEnd <= seasonStart) return { error: '赛季结束日期要晚于开始日期' };
   const windowMinutes = int(src.windowMinutes, 1, 180);
