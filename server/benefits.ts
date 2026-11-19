@@ -34,11 +34,35 @@ if (!(db.prepare('PRAGMA table_info(benefit_xmind)').all() as { name: string }[]
 }
 // One place per account, however many times the page is opened.
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS benefit_xmind_user ON benefit_xmind(user_id)');
+// 同一个学号只领一个 MarginNote 码：账号注销时在码上留一个标记（见 claimantKey），之后同一邮箱重新注册来领取时拿回原来那个码
+if (!(db.prepare('PRAGMA table_info(benefit_marginnote)').all() as { name: string }[]).some((c) => c.name === 'claimant')) {
+  db.exec('ALTER TABLE benefit_marginnote ADD COLUMN claimant TEXT');
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS benefit_marginnote_claimant ON benefit_marginnote(claimant) WHERE claimant IS NOT NULL');
 
-// 注销账号时删除登记的手机号；已领取的 MarginNote 兑换码保持占用，不会再发给别人
+const CLAIMANT_SECRET_KEY = 'benefit_claimant_secret';
+/**
+ * 由校园邮箱算出的标记：带密钥的摘要，库里不保存邮箱本身。密钥在第一次需要时生成并存在 settings 里
+ * （生产环境另外混入 CODE_PEPPER，单拿到数据库算不出来）。create 为 false 时，从来没有留过标记就返回 null。
+ */
+function claimantKey(email: string, create: boolean): string | null {
+  let secret = getSetting(CLAIMANT_SECRET_KEY, '');
+  if (!secret) {
+    if (!create) return null;
+    secret = crypto.randomBytes(32).toString('hex');
+    setSetting(CLAIMANT_SECRET_KEY, secret);
+  }
+  return crypto.createHmac('sha256', `${process.env.CODE_PEPPER?.trim() ?? ''}:${secret}`).update(email.trim().toLowerCase()).digest('hex');
+}
+const emailOf = (uid: number) => q.get<{ email: string }>('SELECT email FROM users WHERE id = ?', uid)?.email;
+
+// 注销账号时删除登记的手机号；已领取的 MarginNote 兑换码保持占用，不会再发给别人。
+// 注销在把邮箱匿名化之前调用这里，所以还读得到原来的邮箱：给这位同学领过的码留下标记
 registerAccountCleanup((uid) => {
   q.run('DELETE FROM benefit_xmind WHERE user_id = ?', uid);
   q.run('DELETE FROM benefit_visits WHERE user_id = ?', uid);
+  const email = emailOf(uid);
+  if (email && myMarginNoteCode(uid)) q.run('UPDATE benefit_marginnote SET claimant = ? WHERE user_id = ?', claimantKey(email, true), uid);
 });
 
 // 登记默认关闭：上线不等于开始收集手机号，由管理员在后台手动开放，也可以随时暂停
@@ -130,6 +154,14 @@ export function claimMarginNote(userId: number) {
   return atomic(() => {
     const existing = myMarginNoteCode(userId);
     if (existing) return { code: existing };
+    // 注销前领过码、用同一个邮箱重新注册的同学：拿回原来那个码，不再发新的（活动结束或领完后也能找回）
+    const email = emailOf(userId);
+    const marker = email ? claimantKey(email, false) : null;
+    const earlier = marker ? q.get<{ code: string }>('SELECT code FROM benefit_marginnote WHERE claimant = ?', marker) : undefined;
+    if (earlier) {
+      q.run('UPDATE benefit_marginnote SET user_id = ?, claimant = NULL WHERE code = ?', userId, earlier.code);
+      return { code: earlier.code };
+    }
     if (!benefitStatus().marginnote.enabled) throw new HttpError(409, '订阅福利暂未开放或已结束');
     const row = q.get<{ code: string }>('SELECT code FROM benefit_marginnote WHERE claimed_at IS NULL ORDER BY code LIMIT 1');
     if (!row) throw new HttpError(409, '本批兑换码已领完');

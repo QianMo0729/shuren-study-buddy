@@ -117,6 +117,43 @@ test('partner benefits preserve quotas, private access and single-code allocatio
     assert.equal(JSON.stringify(benefits.benefitStatus()).includes('TESTCODE'), false);
   });
 
+  await t.test('a student who deletes the account and registers again gets the same code back, not a second one', async () => {
+    const { runAccountCleanup } = await import('../server/social.ts');
+    assert.equal(benefits.importMarginNoteCodes(['TESTCODE101', 'TESTCODE102']), 2);
+    const email = 'benefits-returning@mail.sustech.edu.cn';
+    const first = user(email);
+    const code = benefits.claimMarginNote(first).code;
+    assert.equal(benefits.benefitStatus().marginnote.remaining, 1);
+    assert.equal(q.get<{ n: number }>("SELECT count(*) AS n FROM settings WHERE key = 'benefit_claimant_secret'")!.n, 0, 'nothing is kept until an account with a code is deleted');
+    // 注销：先跑各模块的清理，再把邮箱匿名化（与 DELETE /api/auth/account 的顺序一致）
+    runAccountCleanup(first);
+    q.run('UPDATE users SET email = ?, activated = 0, password_hash = NULL WHERE id = ?', `deleted-${first}-abc@deleted.invalid`, first);
+    const kept = q.get<{ user_id: number; claimant: string }>('SELECT user_id, claimant FROM benefit_marginnote WHERE code = ?', code)!;
+    assert.match(kept.claimant, /^[0-9a-f]{64}$/);
+    assert.ok(!JSON.stringify(q.all('SELECT * FROM benefit_marginnote')).includes('benefits-returning'), 'the email itself is not stored with the code');
+    // 同一个学号重新注册：是一个新账号
+    const again = user(email);
+    assert.notEqual(again, first);
+    assert.equal(benefits.myMarginNoteCode(again), null);
+    assert.deepEqual(benefits.claimMarginNote(again), { code }, 'the original code comes back');
+    assert.equal(benefits.myMarginNoteCode(again), code);
+    assert.equal(benefits.benefitStatus().marginnote.remaining, 1, 'no second code is handed out');
+    assert.equal(q.get<{ claimant: string | null }>('SELECT claimant FROM benefit_marginnote WHERE code = ?', code)!.claimant, null, 'the marker is dropped once the code has an owner again');
+    // 别的同学不受影响；注销了但没领过码的同学不留标记
+    const other = user('benefits-other@mail.sustech.edu.cn');
+    const none = user('benefits-nocode@mail.sustech.edu.cn');
+    runAccountCleanup(none);
+    assert.equal(q.get<{ n: number }>('SELECT count(*) AS n FROM benefit_marginnote WHERE claimant IS NOT NULL')!.n, 0);
+    assert.notEqual(benefits.claimMarginNote(other).code, code);
+    assert.equal(benefits.benefitStatus().marginnote.remaining, 0);
+    // 领完之后，注销重来的同学仍然能找回自己的码
+    runAccountCleanup(other);
+    q.run('UPDATE users SET email = ? WHERE id = ?', `deleted-${other}-abc@deleted.invalid`, other);
+    const back = user('benefits-other@mail.sustech.edu.cn');
+    assert.equal(benefits.benefitStatus().marginnote.phase, 'exhausted');
+    assert.equal(benefits.claimMarginNote(back).code, 'TESTCODE102');
+  });
+
   await t.test('expiry is distinct from an unopened activity, even when renewal terms are absent', (subtest) => {
     subtest.mock.method(Date, 'now', () => Date.parse('2027-02-13T00:00:00+08:00'));
     const terms = process.env.MARGINNOTE_RENEWAL_TERMS;
