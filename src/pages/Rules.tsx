@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
 import {
-  BONUS_RULES, INVALID_REASONS, PHOTO_INVALID, PHOTO_MUST, SENSITIVE_LABELS, BLOCKED_CATEGORIES, addDays, mondayOf, shortDate, weekdayLabel,
+  BONUS_RULES, INVALID_REASONS, PHOTO_INVALID, PHOTO_MUST, SENSITIVE_LABELS, BLOCKED_CATEGORIES, SHUREN_ID_RANGES_TEXT, addDays, mondayOf, shortDate, weekdayLabel,
 } from '../../shared/activity';
 import { TAKEDOWN_REASONS } from '../../shared/options';
 import { Wordmark } from '../components/brand';
@@ -48,7 +48,7 @@ export function Rules() {
       <div className="mt-8 space-y-10 text-[15px] leading-8 text-ink-2">
         <Section id="join" title="参加条件">
           <p>用校园邮箱激活账号、完成问卷并发布主页后，和一位同学绑定为学习搭子即可参加。</p>
-          <p>组合中<b className="text-ink">至少一方是树仁书院学生</b>，才能参与排名和评奖；两人都不是树仁学生的组合可以照常打卡、累计积分，但不排名。书院身份按学号核对书院名单（名单导入前由本人在绑定时填写，发奖前再核对，填写不实的取消评奖资格）。</p>
+          <p>组合中<b className="text-ink">至少一方是树仁书院学生</b>，才能参与排名和评奖；两人都不是树仁学生的组合可以照常打卡、累计积分，但不排名。书院身份由系统按学号判断：学号前六位在 {SHUREN_ID_RANGES_TEXT} 之间的是树仁书院学生，其他学号暂时按非树仁学生处理，不需要自己填写。在「我的搭子」页最下面可以看到自己的判断结果。</p>
         </Section>
 
         <Section id="bind" title="绑定、解绑与重新绑定">

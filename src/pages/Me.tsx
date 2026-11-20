@@ -114,7 +114,7 @@ function MeHome() {
               <h1 className="text-[24px] font-bold text-ink">{profile.nickname}</h1>
               {latin && <p className="latin text-[13px] text-ink-3">{latin}</p>}
               <CopyId id={profile.nickname} />
-              <p className="mt-0.5 text-[15px] text-ink-3">{[buddy?.shurenSource === 'roster' && buddy.shurenMember === 'yes' ? '树仁书院' : '', profile.major, GRADES.find((g) => g.value === profile.grade)?.label, staff ? ROLE_LABELS[user!.role] : ''].filter(Boolean).join(' · ')}</p>
+              <p className="mt-0.5 text-[15px] text-ink-3">{[buddy?.shurenMember === 'yes' ? '树仁书院' : '', profile.major, GRADES.find((g) => g.value === profile.grade)?.label, staff ? ROLE_LABELS[user!.role] : ''].filter(Boolean).join(' · ')}</p>
             </div>
             <Link to="/me/edit" className="flex h-[34px] items-center rounded-full bg-brand-soft px-4 text-[15px] font-semibold text-brand-text">编辑资料与问卷</Link>
             {status !== 'live' && (

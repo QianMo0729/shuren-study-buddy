@@ -1,9 +1,10 @@
 // 搭子绑定的只读查询。只依赖数据层，主页、私聊、推荐都可以直接引用，不会形成循环依赖。
 // 绑定、解绑等操作在 server/buddies.ts。
+import { isShurenStudentId } from '../shared/activity.ts';
 import type { BuddyRelation, ShurenMember } from '../shared/types.ts';
 import './activityTables.ts';
 import { isContactEligible, isExcluded } from './connections.ts';
-import { q, tx } from './db.ts';
+import { q } from './db.ts';
 
 export interface PairRow {
   id: number;
@@ -90,47 +91,13 @@ export function publicBuddyOf(uid: number, viewerId: number): { id: number; nick
   return row ? { id: partnerId, nickname: row.nickname } : null;
 }
 
-/** 管理员是否已经导入树仁书院学生名单 */
-export const rosterLoaded = () => !!q.get('SELECT 1 FROM college_roster LIMIT 1');
-
 /** 登录邮箱里的学号 */
 export const studentIdOf = (uid: number) => q.get<{ email: string }>('SELECT email FROM users WHERE id = ?', uid)?.email.split('@')[0] ?? '';
 
 /**
- * 是否为树仁书院学生：导入名单后按学号判断（不在名单里就是「否」）；还没有名单时用本人绑定时填写的答案。
+ * 是否为树仁书院学生：只按登录邮箱里的学号号段判断（shared/activity.ts 的 SHUREN_ID_RANGES），号段以外的都是「否」。
+ * 本人填写的答案和导入的书院名单都不再参与判断。
  */
-export function shurenOf(uid: number): ShurenMember | null {
-  if (rosterLoaded()) return q.get('SELECT 1 FROM college_roster WHERE student_id = ?', studentIdOf(uid)) ? 'yes' : 'no';
-  return q.get<{ shuren: ShurenMember }>('SELECT shuren FROM activity_members WHERE user_id = ?', uid)?.shuren ?? null;
-}
-
-/** 书院身份的来源：roster 按名单；self 本人填写；null 还不知道 */
-export function shurenSource(uid: number): 'roster' | 'self' | null {
-  if (rosterLoaded()) return 'roster';
-  return shurenOf(uid) ? 'self' : null;
-}
-
-/** 用新名单替换旧名单（文本里所有 8 位学号）。返回名单人数 */
-export function replaceRoster(text: string): number {
-  const ids = [...new Set(text.match(/(?<!\d)\d{8}(?!\d)/g) ?? [])];
-  tx(() => {
-    q.run('DELETE FROM college_roster');
-    for (const id of ids) q.run('INSERT INTO college_roster (student_id) VALUES (?)', id);
-  });
-  return ids.length;
-}
-
-export function rosterInfo(): { count: number; updatedAt: string | null } {
-  const row = q.get<{ n: number; at: string | null }>('SELECT COUNT(*) n, MAX(added_at) at FROM college_roster')!;
-  return { count: row.n, updatedAt: row.at };
-}
-
-export function setShuren(uid: number, value: ShurenMember) {
-  q.run(
-    `INSERT INTO activity_members (user_id, shuren) VALUES (?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET shuren = excluded.shuren, updated_at = datetime('now')`,
-    uid, value,
-  );
-}
+export const shurenOf = (uid: number): ShurenMember => (isShurenStudentId(studentIdOf(uid)) ? 'yes' : 'no');
 
 export const isDisqualified = (uid: number) => !!q.get('SELECT 1 FROM activity_disqualified WHERE user_id = ?', uid);

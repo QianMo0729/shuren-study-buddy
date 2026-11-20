@@ -192,9 +192,8 @@ export const api = {
   activity: {
     config: () => get<{ config: ActivityConfig; season: SeasonInfo }>('/activity/config'),
     me: () => get<BuddyStatus>('/activity/me'),
-    setCollege: (shurenMember: ShurenMember) => put<BuddyStatus>('/activity/college', { shurenMember }),
-    invite: (userId: number, shurenMember?: ShurenMember) => post<BuddyStatus>('/activity/invites', { userId, shurenMember }),
-    accept: (inviteId: number, shurenMember?: ShurenMember) => post<BuddyStatus & { matchId: number }>(`/activity/invites/${inviteId}/accept`, { shurenMember }),
+    invite: (userId: number) => post<BuddyStatus>('/activity/invites', { userId }),
+    accept: (inviteId: number) => post<BuddyStatus & { matchId: number }>(`/activity/invites/${inviteId}/accept`, {}),
     decline: (inviteId: number) => post<BuddyStatus>(`/activity/invites/${inviteId}/decline`),
     cancel: (inviteId: number) => del<BuddyStatus>(`/activity/invites/${inviteId}`),
     unbind: () => post<BuddyStatus>('/activity/unbind'),
@@ -245,8 +244,6 @@ export const api = {
     activityConfig: () => get<{ config: ActivityConfig; season: SeasonInfo }>('/admin/activity-config'),
     saveActivityConfig: (config: ActivityConfig) => put<{ config: ActivityConfig; season: SeasonInfo }>('/admin/activity-config', { config }),
     staff: () => get<{ items: AdminStaff[] }>('/admin/staff'),
-    collegeRoster: () => get<{ count: number; updatedAt: string | null }>('/admin/college-roster'),
-    saveCollegeRoster: (text: string) => put<{ count: number; updatedAt: string | null }>('/admin/college-roster', { text }),
     setRole: (email: string, role: Role) => post<{ ok: true; role: Role }>('/admin/staff', { email, role }),
   },
 };
@@ -348,7 +345,7 @@ export interface AdminBonus {
 export interface AdminBoardItem {
   pairId: number; rank: number | null; tied: boolean; total: number; checkinPoints: number; bonusPoints: number; fullWeeks: number; events: number;
   reachedWeek: string | null; weeks: { week: string; count: number; counted: number; points: number }[];
-  members: { id: number; nickname: string; realName: string; studentId: string; shuren: ShurenMember | null }[];
+  members: { id: number; nickname: string; realName: string; studentId: string; shuren: ShurenMember }[];
   startsOn: string; createdAt: string; ineligible: string | null; strikes: number; disqualified: boolean;
 }
 export interface AdminStaff {

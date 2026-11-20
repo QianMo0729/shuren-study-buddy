@@ -1,11 +1,10 @@
 // 搭子绑定：邀请、接受、拒绝、撤回、解绑，以及配对关闭、注销时自动解绑。
 // 规则：一对一；双方确认才生效；从下一个完整自然周（周一）开始计分；任一方可随时解绑，解绑后组合积分清零。
 import { addDays, beijingDay, mondayOf, shortDate, weekdayLabel } from '../shared/activity.ts';
-import type { ShurenMember } from '../shared/types.ts';
 import { HttpError } from './auth.ts';
 import { activityConfig } from './activityConfig.ts';
 import {
-  type InviteRow, type PairRow, activePairBetween, activePairOf, partnerOf, pendingInvite, setShuren, shurenOf,
+  type InviteRow, type PairRow, activePairBetween, activePairOf, partnerOf, pendingInvite,
 } from './buddyState.ts';
 import { isContactEligible, isExcluded } from './connections.ts';
 import { q, tx } from './db.ts';
@@ -33,12 +32,6 @@ export function inviteById(id: number): InviteRow | undefined {
   return q.get<InviteRow>('SELECT * FROM buddy_invites WHERE id = ?', id);
 }
 
-/** 本人还没有回答是否为树仁学生时，要求在邀请或接受时一起回答 */
-function ensureShuren(uid: number, answer: unknown) {
-  if (answer === 'yes' || answer === 'no') setShuren(uid, answer as ShurenMember);
-  if (!shurenOf(uid)) throw new HttpError(400, '请先说明你是否为树仁书院学生', { needShuren: true });
-}
-
 function assertCanBind(uid: number, other: number) {
   if (uid === other) throw new HttpError(400, '不能和自己绑定');
   if (isExcluded(uid, other) || !isContactEligible(other)) throw new HttpError(404, '该主页暂不可用');
@@ -48,9 +41,8 @@ function assertCanBind(uid: number, other: number) {
 }
 
 /** 发出邀请。已有待处理的同向邀请时直接返回它；对方已经邀请了我时提示去接受 */
-export function invite(from: number, to: number, shuren?: unknown): InviteRow {
+export function invite(from: number, to: number): InviteRow {
   assertCanBind(from, to);
-  ensureShuren(from, shuren);
   const existing = pendingInvite(from, to);
   if (existing) return existing;
   const reverse = pendingInvite(to, from);
@@ -74,12 +66,11 @@ export function invite(from: number, to: number, shuren?: unknown): InviteRow {
 }
 
 /** 接受邀请：建立绑定，作废双方其他待处理的邀请，并开启（或重新开启）私聊 */
-export function accept(inviteId: number, uid: number, shuren?: unknown): { pair: PairRow; matchId: number } {
+export function accept(inviteId: number, uid: number): { pair: PairRow; matchId: number } {
   const row = inviteById(inviteId);
   if (!row || row.to_id !== uid) throw new HttpError(404, '邀请不存在');
   if (row.status !== 'pending') throw new HttpError(409, '这个邀请已经处理过了');
   assertCanBind(uid, row.from_id);
-  ensureShuren(uid, shuren);
   return tx(() => {
     const startsOn = startsOnFor();
     const [a, b] = row.from_id < uid ? [row.from_id, uid] : [uid, row.from_id];
@@ -149,6 +140,7 @@ registerAccountCleanup((uid) => {
   const pair = activePairOf(uid);
   if (pair) endPair(pair, uid, 'account', null, partnerOf(pair, uid));
   q.run("UPDATE buddy_invites SET status = 'cancelled', responded_at = datetime('now') WHERE status = 'pending' AND (from_id = ? OR to_id = ?)", uid, uid);
+  // 旧版里本人填写的书院登记：现在不再读写，注销时仍然清掉
   q.run('DELETE FROM activity_members WHERE user_id = ?', uid);
   q.run('DELETE FROM device_seen WHERE user_id = ?', uid);
 });

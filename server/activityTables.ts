@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS buddy_invites (
 CREATE INDEX IF NOT EXISTS idx_buddy_invites_to ON buddy_invites(to_id, status);
 CREATE INDEX IF NOT EXISTS idx_buddy_invites_from ON buddy_invites(from_id, status);
 
--- 是否为树仁书院学生（本人填写，发奖前由管理员按学号核对）。不公开，也不参与匹配
+-- 旧版：本人填写的是否为树仁书院学生。现在书院身份只按学号号段判断（shared/activity.ts），这张表不再读写，只在注销时清理
 CREATE TABLE IF NOT EXISTS activity_members (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   shuren TEXT NOT NULL CHECK(shuren IN ('yes', 'no')),
@@ -139,7 +139,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_date ON checkins(local_date)');
 // 同一台设备同一天只能给一个账号打卡：按设备和日期查找
 db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_device_day ON checkins(device_hash, local_date)');
 
-// 树仁书院学生名单（学号）：管理员从书院拿到名单后导入。导入后按登录邮箱里的学号判断书院身份，不再由本人填写
+// 旧版：管理员导入的树仁书院学号名单。现在书院身份只按学号号段判断（shared/activity.ts），这张表不再读写，保留是为了不动已有数据
 db.exec(`
 CREATE TABLE IF NOT EXISTS college_roster (
   student_id TEXT PRIMARY KEY,

@@ -7,7 +7,7 @@ import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import { activityConfig, seasonInfo } from '../activityConfig.ts';
 import { createAppeal } from '../audits.ts';
 import { accept, cancelInvite, decline, invite, unbind } from '../buddies.ts';
-import { activePairOf, partnerOf, rosterLoaded, setShuren, shurenOf, shurenSource } from '../buddyState.ts';
+import { activePairOf, partnerOf, shurenOf } from '../buddyState.ts';
 import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
 import { activeMatchBetween } from '../matches.ts';
@@ -51,7 +51,7 @@ function statusOf(uid: number): BuddyStatus {
     const outgoing = row.from_id === uid;
     return { id: row.id, direction: outgoing ? 'outgoing' as const : 'incoming' as const, other: buddyPartner(outgoing ? row.to_id : row.from_id, uid), createdAt: iso(row.created_at)! };
   });
-  const base = { invites, shurenMember: shurenOf(uid), shurenSource: shurenSource(uid), season: seasonInfo() };
+  const base = { invites, shurenMember: shurenOf(uid), season: seasonInfo() };
   if (!pair) return { ...base, pair: null, week: null, score: null, rank: null, today: null };
 
   const partnerId = partnerOf(pair, uid);
@@ -105,24 +105,16 @@ activityRouter.get('/me', (req, res) => {
   res.json(statusOf(req.user!.id));
 });
 
-activityRouter.put('/college', (req, res) => {
-  const value = req.body?.shurenMember;
-  if (rosterLoaded()) throw new HttpError(409, '书院身份已经按学号核对，不需要自己填写');
-  if (value !== 'yes' && value !== 'no') throw new HttpError(400, '请选择是否为树仁书院学生');
-  setShuren(req.user!.id, value);
-  res.json(statusOf(req.user!.id));
-});
-
 activityRouter.post('/invites', (req, res) => {
   const uid = req.user!.id;
   rateLimit(`buddy-invite:${uid}`, 10, 24 * 3600_000);
-  invite(uid, idOf(req.body?.userId), req.body?.shurenMember);
+  invite(uid, idOf(req.body?.userId));
   res.json(statusOf(uid));
 });
 
 activityRouter.post('/invites/:id/accept', (req, res) => {
   const uid = req.user!.id;
-  const { matchId } = accept(idOf(req.params.id), uid, req.body?.shurenMember);
+  const { matchId } = accept(idOf(req.params.id), uid);
   res.json({ ...statusOf(uid), matchId });
 });
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import {
-  BONUS_REJECT_REASONS, SENSITIVE_CATEGORIES, SENSITIVE_LABELS, BLOCKED_CATEGORIES, shortDate, validateActivityConfig,
+  BONUS_REJECT_REASONS, SENSITIVE_CATEGORIES, SENSITIVE_LABELS, BLOCKED_CATEGORIES, SHUREN_ID_RANGES_TEXT, shortDate, validateActivityConfig,
   type ActivityConfig, type SensitiveCategory,
 } from '../../shared/activity';
 import { ROLE_LABELS } from '../../shared/roles';
@@ -297,7 +297,7 @@ export function BoardTab({ isAdmin }: { isAdmin: boolean }) {
                       <div key={m.id} className="whitespace-nowrap">
                         <Link to={`/u/${m.id}`} className="text-ink hover:underline">{m.nickname}</Link>
                         {isAdmin && <span className="ml-1.5 text-ink-3">{m.realName || '—'} {m.studentId}</span>}
-                        <span className={cx('ml-1.5', m.shuren === 'yes' ? 'text-brand-text' : 'text-ink-4')}>{m.shuren === 'yes' ? '树仁' : m.shuren === 'no' ? '非树仁' : '未填'}</span>
+                        <span className={cx('ml-1.5', m.shuren === 'yes' ? 'text-brand-text' : 'text-ink-4')}>{m.shuren === 'yes' ? '树仁' : '非树仁'}</span>
                       </div>
                     ))}
                     <details className="mt-1 text-[12px] text-ink-3">
@@ -461,44 +461,13 @@ export function ActivitySettingsTab() {
       </div>
       {'error' in checked && <p className="text-[13.5px] text-danger" role="alert">{checked.error}</p>}
       <div className="flex justify-end"><Button variant="primary" loading={busy} disabled={'error' in checked} onClick={() => void save()}>保存设置</Button></div>
-      <CollegeRoster />
+      <section className="space-y-2 border-t border-line pt-6" aria-labelledby="college-title">
+        <h3 id="college-title" className="text-[16px] font-semibold text-ink">树仁书院身份</h3>
+        <p className="text-[13.5px] leading-relaxed text-ink-3">
+          按登录邮箱里的学号自动判断：学号前六位在 {SHUREN_ID_RANGES_TEXT} 之间的是树仁书院学生，其他学号暂时都算非树仁学生。组合里至少一人是树仁学生才能参与排名。这条规则写在代码里，不能在后台修改。
+        </p>
+      </section>
     </div>
-  );
-}
-
-/** 树仁书院名单：粘贴学号（每行一个或任意分隔），导入后按学号自动判断书院身份，不再由本人填写 */
-function CollegeRoster() {
-  const toast = useToast();
-  const [info, setInfo] = useState<{ count: number; updatedAt: string | null } | null>(null);
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { api.admin.collegeRoster().then(setInfo).catch(() => {}); }, []);
-  const found = new Set(text.match(/(?<!\d)\d{8}(?!\d)/g) ?? []).size;
-  const save = async (value: string) => {
-    setBusy(true);
-    try {
-      const next = await api.admin.saveCollegeRoster(value);
-      setInfo(next);
-      setText('');
-      toast.success(next.count ? `名单已更新：${next.count} 个学号` : '名单已清空', next.count ? '书院身份按学号自动判断' : '恢复为本人绑定时填写');
-    } catch (e) { toast.error('保存失败', errorText(e)); } finally { setBusy(false); }
-  };
-  return (
-    <section className="space-y-3 border-t border-line pt-6" aria-labelledby="roster-title">
-      <h3 id="roster-title" className="text-[16px] font-semibold text-ink">树仁书院名单</h3>
-      <p className="text-[13.5px] leading-relaxed text-ink-3">
-        {info?.count
-          ? `现有 ${info.count} 个学号。同学的书院身份按登录邮箱里的学号自动判断，不在名单里的算非树仁学生；本人不再需要填写。`
-          : '还没有导入名单：现在由同学在绑定搭子时自己填写是否为树仁学生。导入名单后改为按学号自动判断，并在「我的」页显示「树仁书院」。'}
-        组合里至少一人是树仁学生才能参与排名。名单只有管理员能看到和修改。
-      </p>
-      <Textarea aria-label="树仁书院学号名单" value={text} onChange={(e) => setText(e.target.value)} placeholder="粘贴学号，每行一个，或从表格里整列复制（8 位数字以外的内容会被忽略）" className="min-h-28 font-mono" />
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <span className="mr-auto text-[13px] text-ink-3">{text ? `识别到 ${found} 个学号` : ''}</span>
-        {!!info?.count && <Button disabled={busy} onClick={() => void save('')}>清空名单</Button>}
-        <Button variant="primary" loading={busy} disabled={!found} onClick={() => void save(text)}>用这份名单替换</Button>
-      </div>
-    </section>
   );
 }
 

@@ -136,6 +136,24 @@ export function validateActivityConfig(input: unknown): { config: ActivityConfig
 /** 说明的有效字数（不含空白） */
 export const captionLength = (caption: string) => Array.from(caption.replace(/\s+/gu, '')).length;
 
+// ---------- 树仁书院身份 ----------
+
+/**
+ * 树仁书院的学号号段：8 位学号的前六位落在某一段内（含两端）就是树仁书院学生，其他学号暂时都算非树仁学生。
+ * 以后要增加号段，在这里加一行；服务端的判定、规则页和后台的说明都读这一份。
+ */
+export const SHUREN_ID_RANGES: readonly (readonly [number, number])[] = [[125126, 125130]];
+
+/** 按学号判断是否为树仁书院学生 */
+export function isShurenStudentId(studentId: string): boolean {
+  if (!/^\d{8}$/.test(studentId)) return false;
+  const prefix = Number(studentId.slice(0, 6));
+  return SHUREN_ID_RANGES.some(([from, to]) => prefix >= from && prefix <= to);
+}
+
+/** 号段的写法，例如「125126–125130」 */
+export const SHUREN_ID_RANGES_TEXT = SHUREN_ID_RANGES.map(([from, to]) => (from === to ? String(from) : `${from}–${to}`)).join('、');
+
 // ---------- 打卡照片要求 ----------
 
 export const PHOTO_MUST = [

@@ -8,7 +8,7 @@ import {
   FLAG_LABELS, type AuditFlag, decideAppeal, disqualifyPair, enqueuePrizeReview, ensureWeeklySamples, invalidateCheckin, passAudit, requalifyPair,
 } from '../audits.ts';
 import { decideClaim } from '../bonus.ts';
-import { type PairRow, replaceRoster, rosterInfo, shurenOf } from '../buddyState.ts';
+import { type PairRow, shurenOf } from '../buddyState.ts';
 import { checkMessage, saveWordLists, wordLists } from '../chatSafety.ts';
 import { iso, q } from '../db.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
@@ -161,7 +161,7 @@ adminActivityRouter.post('/bonus/:id', (req, res) => {
 
 // ---------- 搭子榜（含分数与核对信息） ----------
 
-/** 姓名与学号只给管理员看（发奖前按学号核对书院名单）；审核员只看到昵称 */
+/** 姓名与学号只给管理员看（发奖前核对用）；审核员只看到昵称。书院身份按学号号段判断 */
 function memberInfo(uid: number, full: boolean) {
   const row = getProfileRow(uid);
   const d = row && full ? parseData(row) : null;
@@ -240,25 +240,6 @@ adminActivityRouter.put('/activity-config', requireAdmin, (req, res) => {
 });
 
 // ---------- 审核小组（仅管理员） ----------
-
-// ---------- 树仁书院名单（只有管理员能看和改，名单里是学号） ----------
-
-adminActivityRouter.get('/college-roster', requireAdmin, (_req, res) => {
-  res.json(rosterInfo());
-});
-
-/** 用新名单替换旧名单：粘贴学号即可，其他文字会被忽略。清空名单后恢复为本人填写 */
-adminActivityRouter.put('/college-roster', requireAdmin, (req, res) => {
-  const text = typeof req.body?.text === 'string' ? req.body.text : '';
-  if (text.length > 2_000_000) throw new HttpError(400, '名单太长了');
-  const count = replaceRoster(text);
-  touchScores();
-  q.run(
-    "INSERT INTO moderation_logs (admin_id, action, target_type, target_id, target_label, reason) VALUES (?, 'college_roster', 'settings', 0, '树仁书院名单', ?)",
-    req.user!.id, `${count} 个学号`,
-  );
-  res.json(rosterInfo());
-});
 
 adminActivityRouter.get('/staff', requireAdmin, (_req, res) => {
   const rows = q.all<{ id: number; email: string; role: string; last_login_at: string | null }>(

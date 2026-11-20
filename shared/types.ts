@@ -614,9 +614,8 @@ export interface BuddyStatus {
     /** 今天两人问卷里都有空的时段（PERIODS 下标） */
     free: number[];
   } | null;
-  shurenMember: ShurenMember | null;
-  /** roster：按书院名单（学号）判断；self：本人填写；null：还不知道 */
-  shurenSource: 'roster' | 'self' | null;
+  /** 是否为树仁书院学生：服务端按学号号段判断 */
+  shurenMember: ShurenMember;
   season: SeasonInfo;
 }
 

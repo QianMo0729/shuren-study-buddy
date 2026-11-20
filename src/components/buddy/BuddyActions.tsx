@@ -1,54 +1,25 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Handshake, UsersRound } from 'lucide-react';
-import type { BuddyRelation, BuddyStatus, ShurenMember } from '../../../shared/types';
+import type { BuddyRelation, BuddyStatus } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
 import { useToast } from '../../lib/toast';
 import { useActivityConfig } from '../../lib/activity';
-import { Button, Modal, Segmented, Tag } from '../ui';
-
-const SHUREN_OPTIONS = [
-  { value: 'yes', label: '是树仁书院学生' },
-  { value: 'no', label: '不是' },
-];
-
-/** 是否为树仁书院学生：决定能否参与排名，不公开 */
-export function ShurenChoice({ value, onChange }: { value: ShurenMember | null; onChange: (v: ShurenMember) => void }) {
-  return (
-    <div>
-      <p className="text-[14px] font-semibold text-ink">你是树仁书院的学生吗？</p>
-      <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink-3">至少一方是树仁学生，组合才能参与排名和评奖。只有管理员能看到，发奖前会按学号核对。</p>
-      <Segmented className="mt-2" options={SHUREN_OPTIONS} value={value ?? ''} onChange={(v) => onChange(v as ShurenMember)} />
-    </div>
-  );
-}
+import { Button, Modal, Tag } from '../ui';
 
 type Pending = { mode: 'invite'; userId: number; nickname: string } | { mode: 'accept'; inviteId: number; nickname: string };
 
 /**
- * 邀请 / 接受搭子的确认弹窗：说明计分规则，还没回答是否为树仁学生时一起回答。
+ * 邀请 / 接受搭子的确认弹窗：说明计分规则。
  * onDone 拿到最新的搭子状态；接受后还有私聊的 matchId。
  */
 export function useBuddyActions(onDone?: (status: BuddyStatus & { matchId?: number }) => void) {
   const toast = useToast();
   const { config } = useActivityConfig();
   const [pending, setPending] = useState<Pending | null>(null);
-  const [shuren, setShuren] = useState<ShurenMember | null>(null);
-  const [known, setKnown] = useState<ShurenMember | null>(null);
   const [busy, setBusy] = useState(false);
   const done = useRef(onDone);
   done.current = onDone;
-
-  useEffect(() => {
-    if (!pending) return;
-    let alive = true;
-    api.activity.me().then((s) => {
-      if (!alive) return;
-      setKnown(s.shurenMember);
-      setShuren(s.shurenMember);
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [pending]);
 
   const run = async (fn: () => Promise<BuddyStatus & { matchId?: number }>, success: string) => {
     setBusy(true);
@@ -66,10 +37,10 @@ export function useBuddyActions(onDone?: (status: BuddyStatus & { matchId?: numb
   };
 
   const confirm = async () => {
-    if (!pending || !shuren) return;
+    if (!pending) return;
     const ok = pending.mode === 'invite'
-      ? await run(() => api.activity.invite(pending.userId, shuren), '邀请已发出，等对方接受')
-      : await run(() => api.activity.accept(pending.inviteId, shuren), '已绑定为学习搭子');
+      ? await run(() => api.activity.invite(pending.userId), '邀请已发出，等对方接受')
+      : await run(() => api.activity.accept(pending.inviteId), '已绑定为学习搭子');
     if (ok) setPending(null);
   };
 
@@ -87,21 +58,14 @@ export function useBuddyActions(onDone?: (status: BuddyStatus & { matchId?: numb
             <li>每人同时只能有一个搭子，从下一个周一开始计分。</li>
             <li>同一天两人在 {config.windowMinutes} 分钟内各自拍照打卡，算一次相同事件打卡，每周最多计 {config.weeklyCap} 次。</li>
             <li>任何一方都可以随时解绑，解绑后两人的搭子积分都清零。</li>
+            <li>组合里至少一人是树仁书院学生才参与排名和评奖，书院身份按学号判断。</li>
           </ul>
-          {known ? (
-            <p className="text-[13px] text-ink-3">
-              你已登记为{known === 'yes' ? '树仁书院学生' : '非树仁书院学生'}。
-              <button type="button" className="ml-1 text-brand-text underline" onClick={() => setKnown(null)}>修改</button>
-            </p>
-          ) : (
-            <ShurenChoice value={shuren} onChange={setShuren} />
-          )}
           <p className="text-[12.5px] text-ink-3">
             详细规则见 <Link to="/rules" className="text-brand-text underline" onClick={() => setPending(null)}>活动规则</Link>。
           </p>
           <div className="flex justify-end gap-2 pt-1">
             <Button disabled={busy} onClick={() => setPending(null)}>取消</Button>
-            <Button variant="primary" loading={busy} disabled={!shuren} onClick={() => void confirm()}>
+            <Button variant="primary" loading={busy} onClick={() => void confirm()}>
               {pending.mode === 'accept' ? '接受并绑定' : '发出邀请'}
             </Button>
           </div>

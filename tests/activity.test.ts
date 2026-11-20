@@ -9,7 +9,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import bcrypt from 'bcryptjs';
-import { DEFAULT_ACTIVITY_CONFIG, addDays, beijingDay, mondayOf, validateActivityConfig, weekdayLabel } from '../shared/activity.ts';
+import { DEFAULT_ACTIVITY_CONFIG, addDays, beijingDay, isShurenStudentId, mondayOf, validateActivityConfig, weekdayLabel } from '../shared/activity.ts';
 import { emptyProfile } from '../shared/profileRules.ts';
 import type { BuddyStatus, LeaderboardResponse, ProfileInput } from '../shared/types.ts';
 
@@ -66,11 +66,13 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
   const app = await startServer();
   const { api, db } = app;
   t.after(async () => { db.close(); await app.stop(); });
-  let studentNumber = 12620000;
+  // 默认的学号落在树仁书院的号段内（前六位 125126–125130）；shuren = false 时用号段以外的学号
+  let studentNumber = 12512600;
+  let outsideNumber = 12620000;
   const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-  function createUser(patch: Partial<ProfileInput> = {}, role = 'user') {
-    const studentId = String(++studentNumber);
+  function createUser(patch: Partial<ProfileInput> = {}, role = 'user', shuren = true) {
+    const studentId = String(shuren ? ++studentNumber : ++outsideNumber);
     const email = `${studentId}@mail.sustech.edu.cn`;
     const id = Number(db.prepare('INSERT INTO users (email, activated, password_hash, role) VALUES (?, 1, ?, ?)').run(email, 'fixture-hash', role).lastInsertRowid);
     const data: ProfileInput = {
@@ -95,10 +97,10 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
 
   /** 直接建立绑定：从 startsOn 起计分 */
   async function bind(a: Member, b: Member) {
-    const invited = await api('/activity/invites', a.cookie, 'POST', { userId: b.id, shurenMember: 'yes' });
+    const invited = await api('/activity/invites', a.cookie, 'POST', { userId: b.id });
     assert.equal(invited.status, 200, invited.text);
     const inviteId = (await status(b)).invites.find((i) => i.direction === 'incoming')!.id;
-    const accepted = await api(`/activity/invites/${inviteId}/accept`, b.cookie, 'POST', { shurenMember: 'no' });
+    const accepted = await api(`/activity/invites/${inviteId}/accept`, b.cookie, 'POST', {});
     assert.equal(accepted.status, 200, accepted.text);
     return accepted.body as BuddyStatus & { matchId: number };
   }
@@ -152,17 +154,14 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.deepEqual(saved.ladder, [0, 1, 3, 4, 6, 7, 8, 10]);
   });
 
-  await t.test('binding needs both sides, the Shuren answer, and is strictly one-to-one', async () => {
+  await t.test('binding needs both sides and is strictly one-to-one', async () => {
     const a = createUser();
     const b = createUser();
     const c = createUser();
-    const noAnswer = await api('/activity/invites', a.cookie, 'POST', { userId: b.id });
-    assert.equal(noAnswer.status, 400);
-    assert.equal(noAnswer.body.needShuren, true);
-    assert.equal((await api('/activity/invites', a.cookie, 'POST', { userId: a.id, shurenMember: 'yes' })).status, 400);
-    assert.equal((await api('/activity/invites', a.cookie, 'POST', { userId: b.id, shurenMember: 'yes' })).status, 200);
-    assert.equal((await api('/activity/invites', a.cookie, 'POST', { userId: c.id })).status, 200, 'the answer is remembered');
-    const reverse = await api('/activity/invites', b.cookie, 'POST', { userId: a.id, shurenMember: 'no' });
+    assert.equal((await api('/activity/invites', a.cookie, 'POST', { userId: a.id })).status, 400);
+    assert.equal((await api('/activity/invites', a.cookie, 'POST', { userId: b.id })).status, 200, 'nobody is asked about their college any more');
+    assert.equal((await api('/activity/invites', a.cookie, 'POST', { userId: c.id })).status, 200);
+    const reverse = await api('/activity/invites', b.cookie, 'POST', { userId: a.id });
     assert.equal(reverse.status, 409, 'an invite already waits the other way');
     assert.ok(reverse.body.incomingInviteId);
     const bView = await api(`/profiles/${a.id}`, b.cookie);
@@ -172,13 +171,13 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     const mine: BuddyStatus = accepted.body;
     assert.equal(mine.pair?.partner.id, a.id);
     assert.equal(mine.pair?.startsOn, addDays(thisMonday, 7), 'scoring starts on the next full week');
-    assert.equal(mine.shurenMember, 'no');
+    assert.equal(mine.shurenMember, 'yes');
     // 接受后：私聊打开，系统消息写明开始计分的日期，双方其他待处理邀请作废
     const matchId = accepted.body.matchId;
     const messages = db.prepare("SELECT body FROM messages WHERE match_id = ? AND kind = 'system'").all(matchId) as { body: string }[];
     assert.ok(messages.some((m) => m.body.includes('已绑定为学习搭子')));
     assert.equal((db.prepare('SELECT status FROM buddy_invites WHERE from_id = ? AND to_id = ?').get(a.id, c.id) as { status: string }).status, 'cancelled');
-    assert.equal((await api('/activity/invites', c.cookie, 'POST', { userId: a.id, shurenMember: 'yes' })).status, 409, 'cannot invite someone who is bound');
+    assert.equal((await api('/activity/invites', c.cookie, 'POST', { userId: a.id })).status, 409, 'cannot invite someone who is bound');
     assert.equal((await api(`/profiles/${a.id}`, c.cookie)).body.profile.buddy.otherHasBuddy, true);
     const card = (await api(`/profiles/lookup?id=${a.code}`, c.cookie)).body.items[0];
     assert.equal(card.hasBuddy, true);
@@ -519,25 +518,32 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.ok(staff.some((s: any) => s.id === moderator.id && s.actions7d > 0), 'recent work is counted per reviewer');
   });
 
-  await t.test('an imported college roster decides who is a Shuren student; only admins manage it', async () => {
-    const inRoster = createUser();
-    const outside = createUser();
+  await t.test('the student number decides who is a Shuren student: only 125126xx–125130xx count', async () => {
+    for (const id of ['12512600', '12512699', '12512801', '12513000', '12513099']) assert.equal(isShurenStudentId(id), true, id);
+    for (const id of ['12512599', '12513100', '12412601', '12612601', '1251260', '125126001', '', 'admin']) assert.equal(isShurenStudentId(id), false, id);
+
+    const inside = createUser();
+    const outside = createUser({}, 'user', false);
+    const outside2 = createUser({}, 'user', false);
+    const outside3 = createUser({}, 'user', false);
+    // 旧版里本人填写的答案和导入的名单都不再起作用
     db.prepare("INSERT OR REPLACE INTO activity_members (user_id, shuren) VALUES (?, 'yes')").run(outside.id);
-    assert.equal((await api('/admin/college-roster', moderator.cookie)).status, 403);
-    assert.equal((await api('/admin/college-roster', moderator.cookie, 'PUT', { text: '12345678' })).status, 403);
-    const id = inRoster.email.split('@')[0];
-    const saved = await api('/admin/college-roster', admin.cookie, 'PUT', { text: `学号\n${id}\n${id}\n1234567\n123456789\n12345678` });
-    assert.equal(saved.status, 200, saved.text);
-    assert.equal(saved.body.count, 2, 'only distinct 8-digit numbers are kept');
-    const mine = await status(inRoster);
-    assert.equal(mine.shurenMember, 'yes');
-    assert.equal(mine.shurenSource, 'roster');
-    assert.equal((await status(outside)).shurenMember, 'no', 'the roster overrides what people said themselves');
-    assert.equal((await api('/activity/college', outside.cookie, 'PUT', { shurenMember: 'yes' })).status, 409);
-    const invited = await api('/activity/invites', outside.cookie, 'POST', { userId: inRoster.id });
-    assert.equal(invited.status, 200, 'no need to answer once the roster is loaded');
-    assert.equal((await api('/admin/college-roster', admin.cookie, 'PUT', { text: '' })).body.count, 0);
-    assert.equal((await status(outside)).shurenSource, 'self', 'clearing the roster goes back to self-reported answers');
+    db.prepare('INSERT OR REPLACE INTO college_roster (student_id) VALUES (?)').run(outside.email.split('@')[0]);
+    db.prepare("INSERT OR REPLACE INTO activity_members (user_id, shuren) VALUES (?, 'no')").run(inside.id);
+    assert.equal((await status(inside)).shurenMember, 'yes');
+    assert.equal((await status(outside)).shurenMember, 'no');
+    assert.equal((await api('/activity/college', outside.cookie, 'PUT', { shurenMember: 'yes' })).status, 404, 'the answer can no longer be set by hand');
+    assert.equal((await api('/admin/college-roster', admin.cookie)).status, 404, 'the roster import is gone');
+
+    // 两人都在号段以外：照常绑定，但不参与排名
+    await bind(outside2, outside3);
+    assert.match((await status(outside2)).pair!.ineligible!, /至少一方是树仁书院学生/);
+    assert.equal((await board(outside2)).mine, null);
+    // 一方在号段内就可以参与排名
+    await bind(outside, inside);
+    assert.equal((await status(outside)).pair!.ineligible, null);
+    const members = (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.members.some((m: any) => m.id === inside.id)).members;
+    assert.deepEqual(members.map((m: any) => m.shuren).sort(), ['no', 'yes']);
   });
 
   await t.test('logins record only a hash of the browser device id, so two accounts on one device can be flagged', async () => {

@@ -12,7 +12,7 @@ import { MeAvatar, NavBar } from '../components/Shell';
 import { splitNickname } from '../components/ProfileCard';
 import { Button, ConfirmDialog, GroupList, Skeleton, Toggle } from '../components/ui';
 import { Chevron } from '../components/icons';
-import { ShurenChoice, useBuddyActions } from '../components/buddy/BuddyActions';
+import { useBuddyActions } from '../components/buddy/BuddyActions';
 
 const DAY = 86_400_000;
 const bjDate = (t: number) => new Date(t + 8 * 3_600_000).toISOString().slice(0, 10);
@@ -61,11 +61,7 @@ export function Buddy() {
 
       {status && (
         <div className="mt-6 px-4 pb-4 text-[13px] text-ink-3">
-          {status.shurenMember ? (
-            <>{status.shurenSource === 'roster' ? '按学号核对：' : '已登记为'}{status.shurenMember === 'yes' ? '树仁书院学生' : '非树仁书院学生'}{status.shurenMember === 'no' ? '（组合里至少一人是树仁学生才能参与排名）' : ''}</>
-          ) : (
-            <ShurenChoice value={null} onChange={(v) => void api.activity.setCollege(v).then(setStatus).catch((e) => toast.error('保存失败', errorText(e)))} />
-          )}
+          按学号判断：{status.shurenMember === 'yes' ? '树仁书院学生' : '非树仁书院学生（组合里至少一人是树仁学生才能参与排名）'}
         </div>
       )}
 
