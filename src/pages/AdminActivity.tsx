@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import {
-  BONUS_REJECT_REASONS, SENSITIVE_CATEGORIES, SENSITIVE_LABELS, BLOCKED_CATEGORIES, SHUREN_ID_RANGES_TEXT, shortDate, validateActivityConfig,
+  BONUS_REJECT_REASONS, SENSITIVE_CATEGORIES, SENSITIVE_LABELS, BLOCKED_CATEGORIES, SHUREN_ID_RULE_TEXT, shortDate, validateActivityConfig,
   type ActivityConfig, type SensitiveCategory,
 } from '../../shared/activity';
 import { ROLE_LABELS } from '../../shared/roles';
@@ -464,7 +464,7 @@ export function ActivitySettingsTab() {
       <section className="space-y-2 border-t border-line pt-6" aria-labelledby="college-title">
         <h3 id="college-title" className="text-[16px] font-semibold text-ink">树仁书院身份</h3>
         <p className="text-[13.5px] leading-relaxed text-ink-3">
-          按登录邮箱里的学号自动判断：学号前六位在 {SHUREN_ID_RANGES_TEXT} 之间的是树仁书院学生，其他学号暂时都算非树仁学生。组合里至少一人是树仁学生才能参与排名。这条规则写在代码里，不能在后台修改。
+          按登录邮箱里的学号自动判断：学号前六位是 {SHUREN_ID_RULE_TEXT}的是树仁书院学生，其他学号暂时都算非树仁学生。组合里至少一人是树仁学生才能参与排名。这条规则写在代码里，不能在后台修改。
         </p>
       </section>
     </div>

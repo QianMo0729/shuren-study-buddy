@@ -95,7 +95,7 @@ export function publicBuddyOf(uid: number, viewerId: number): { id: number; nick
 export const studentIdOf = (uid: number) => q.get<{ email: string }>('SELECT email FROM users WHERE id = ?', uid)?.email.split('@')[0] ?? '';
 
 /**
- * 是否为树仁书院学生：只按登录邮箱里的学号号段判断（shared/activity.ts 的 SHUREN_ID_RANGES），号段以外的都是「否」。
+ * 是否为树仁书院学生：只按登录邮箱里的学号号段判断（shared/activity.ts 的 SHUREN_CLASS_RANGE：前六位 1xx126–1xx130），号段以外的都是「否」。
  * 本人填写的答案和导入的书院名单都不再参与判断。
  */
 export const shurenOf = (uid: number): ShurenMember => (isShurenStudentId(studentIdOf(uid)) ? 'yes' : 'no');

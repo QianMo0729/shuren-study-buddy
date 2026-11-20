@@ -66,7 +66,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
   const app = await startServer();
   const { api, db } = app;
   t.after(async () => { db.close(); await app.stop(); });
-  // 默认的学号落在树仁书院的号段内（前六位 125126–125130）；shuren = false 时用号段以外的学号
+  // 默认的学号落在树仁书院的号段内（前六位 1xx126–1xx130）；shuren = false 时用号段以外的学号
   let studentNumber = 12512600;
   let outsideNumber = 12620000;
   const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -518,9 +518,9 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.ok(staff.some((s: any) => s.id === moderator.id && s.actions7d > 0), 'recent work is counted per reviewer');
   });
 
-  await t.test('the student number decides who is a Shuren student: only 125126xx–125130xx count', async () => {
-    for (const id of ['12512600', '12512699', '12512801', '12513000', '12513099']) assert.equal(isShurenStudentId(id), true, id);
-    for (const id of ['12512599', '12513100', '12412601', '12612601', '1251260', '125126001', '', 'admin']) assert.equal(isShurenStudentId(id), false, id);
+  await t.test('the student number decides who is a Shuren student: only 1xx126nn–1xx130nn count, whatever the year', async () => {
+    for (const id of ['12512600', '12512699', '12512801', '12513000', '12513099', '12612601', '12613099', '12412745', '12312901', '13012600']) assert.equal(isShurenStudentId(id), true, id);
+    for (const id of ['12512599', '12513100', '12612599', '12613100', '12620001', '12522601', '12532801', '22512601', '02512601', '1251260', '125126001', '', 'admin']) assert.equal(isShurenStudentId(id), false, id);
 
     const inside = createUser();
     const outside = createUser({}, 'user', false);

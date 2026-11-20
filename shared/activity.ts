@@ -139,20 +139,21 @@ export const captionLength = (caption: string) => Array.from(caption.replace(/\s
 // ---------- 树仁书院身份 ----------
 
 /**
- * 树仁书院的学号号段：8 位学号的前六位落在某一段内（含两端）就是树仁书院学生，其他学号暂时都算非树仁学生。
- * 以后要增加号段，在这里加一行；服务端的判定、规则页和后台的说明都读这一份。
+ * 树仁书院的学号号段：8 位学号的前六位是 1xx126–1xx130 的就是树仁书院学生，xx 是任意两位数字，
+ * 所以 125126–125130、126126–126130 等每一届的这一段都算；其他学号暂时都算非树仁学生。
+ * 这里写的是第 4–6 位的范围（含两端）。服务端的判定、规则页和后台的说明都读这一份。
  */
-export const SHUREN_ID_RANGES: readonly (readonly [number, number])[] = [[125126, 125130]];
+export const SHUREN_CLASS_RANGE: readonly [number, number] = [126, 130];
 
 /** 按学号判断是否为树仁书院学生 */
 export function isShurenStudentId(studentId: string): boolean {
-  if (!/^\d{8}$/.test(studentId)) return false;
-  const prefix = Number(studentId.slice(0, 6));
-  return SHUREN_ID_RANGES.some(([from, to]) => prefix >= from && prefix <= to);
+  if (!/^1\d{7}$/.test(studentId)) return false;
+  const group = Number(studentId.slice(3, 6));
+  return group >= SHUREN_CLASS_RANGE[0] && group <= SHUREN_CLASS_RANGE[1];
 }
 
-/** 号段的写法，例如「125126–125130」 */
-export const SHUREN_ID_RANGES_TEXT = SHUREN_ID_RANGES.map(([from, to]) => (from === to ? String(from) : `${from}–${to}`)).join('、');
+/** 号段的写法，用在规则页和后台：「1xx126–1xx130（xx 是任意两位数字，例如 …）」 */
+export const SHUREN_ID_RULE_TEXT = `1xx${SHUREN_CLASS_RANGE[0]}–1xx${SHUREN_CLASS_RANGE[1]}（xx 是任意两位数字，例如 125${SHUREN_CLASS_RANGE[0]}–125${SHUREN_CLASS_RANGE[1]}、126${SHUREN_CLASS_RANGE[0]}–126${SHUREN_CLASS_RANGE[1]}）`;
 
 // ---------- 打卡照片要求 ----------
 
