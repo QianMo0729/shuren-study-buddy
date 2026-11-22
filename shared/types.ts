@@ -484,6 +484,10 @@ export interface Post extends ContentReviewState {
   interestedUsers?: { id: number; nickname: string; cover: string | null }[];
 }
 
+export interface NotificationPreferences {
+  emailEnabled: boolean;
+}
+
 export interface NotificationItem {
   id: number;
   title: string;

@@ -3,6 +3,7 @@ import type { ModerationTargetType } from '../shared/types.ts';
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { config } from './config.ts';
+import { q } from './db.ts';
 
 const transporter = config.smtp.configured
   ? nodemailer.createTransport({
@@ -107,30 +108,38 @@ export function sendAccountNoticeMail(to: string, purpose: string) {
   return sendMail(to, `【${BRAND}】${title}`, html, `${text}这封邮件里没有验证码。如非本人操作，请忽略此邮件。`);
 }
 
-export function sendContactRequestMail(to: string, nickname: string, matchId: number) {
-  const link = `${config.appUrl}/messages/${matchId}`;
-  return sendMail(
-    to,
-    `【${BRAND}】你收到一条交换联系方式的申请`,
-    layout('你收到一条交换联系方式的申请',
-      `<p style="line-height:1.8">${escapeHtml(nickname)} 在私聊中申请与你交换联系方式。请登录网站查看，并选择同意或拒绝。</p>
-       <p style="line-height:1.8">只有双方确认后，系统才会互相展示联系方式。</p>
-       <a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 22px;background:#005C65;color:#fff;text-decoration:none;border-radius:12px">去私聊查看</a>`),
-    `${nickname} 在私聊中申请与你交换联系方式。请登录 ${link} 查看并选择同意或拒绝。只有双方确认后才会互相展示联系方式。`,
-  );
+/** 仅搭子互动邮件受本人的消息提醒设置控制。 */
+async function sendMessageReminder(userId: number, title: string, paragraphs: string[], path: string, action: string) {
+  const recipient = q.get<{ email: string }>('SELECT email FROM users WHERE id = ? AND activated = 1 AND message_email_enabled = 1', userId);
+  if (!recipient) return 'not_sent' as const;
+  const url = `${config.appUrl}${path}`;
+  const settings = `${config.appUrl}/me/reminders`;
+  const html = layout(title,
+    `${paragraphs.map((p) => `<p style="line-height:1.8">${escapeHtml(p)}</p>`).join('')}
+     <a href="${escapeHtml(url)}" style="display:inline-block;padding:12px 22px;background:#005C65;color:#fff;text-decoration:none;border-radius:12px">${action}</a>
+     <p style="margin:24px 0 0;font-size:14px"><a href="${escapeHtml(settings)}" style="color:#005C65">管理邮件提醒</a></p>`);
+  return sendMail(recipient.email, `【${BRAND}】${title}`, html,
+    [...paragraphs, `${action}：${url}`, `管理邮件提醒：${settings}`].join('\n\n'));
 }
 
-export function sendMatchMail(to: string, nickname: string, matchId: number) {
-  const link = `${config.appUrl}/messages/${matchId}`;
-  return sendMail(
-    to,
-    `【${BRAND}】你们互相感兴趣了`,
-    layout('你们互相感兴趣了',
-      `<p style="line-height:1.8">你和 ${escapeHtml(nickname)} 都对彼此感兴趣，现在可以在站内私聊了。</p>
-       <p style="line-height:1.8">先聊聊学习目标和时间安排，确认合适后再决定是否交换联系方式。</p>
-       <a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 22px;background:#005C65;color:#fff;text-decoration:none;border-radius:12px">去私聊</a>`),
-    `你和 ${nickname} 互相感兴趣，现在可以在站内私聊了：${link}`,
-  );
+export function sendIncomingInterestMail(userId: number, nickname: string, path: string) {
+  return sendMessageReminder(userId, '有同学对你感兴趣', [
+    `${nickname} 对你感兴趣。你可以在联系请求里查看这位同学的主页，决定是否回应。`,
+  ], path, '查看联系请求');
+}
+
+export function sendContactRequestMail(userId: number, nickname: string, matchId: number) {
+  return sendMessageReminder(userId, '你收到一条交换联系方式的申请', [
+    `${nickname} 在私聊中申请与你交换联系方式。请登录网站查看，并选择同意或拒绝。`,
+    '只有双方确认后，系统才会互相展示联系方式。',
+  ], `/messages/${matchId}`, '去私聊查看');
+}
+
+export function sendMatchMail(userId: number, nickname: string, matchId: number) {
+  return sendMessageReminder(userId, '你们互相感兴趣了', [
+    `你和 ${nickname} 都对彼此感兴趣，现在可以在站内私聊了。`,
+    '先聊聊学习目标和时间安排，确认合适后再决定是否交换联系方式。',
+  ], `/messages/${matchId}`, '去私聊');
 }
 
 const TAKEDOWN_KIND_TEXT: Record<ModerationTargetType, string> = {

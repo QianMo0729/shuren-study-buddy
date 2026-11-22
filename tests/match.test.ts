@@ -21,11 +21,13 @@ async function startServer() {
   const port = (listener.address() as net.AddressInfo).port;
   await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
   const url = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+  const mailFile = path.join(dir, 'mail.jsonl');
+  await fs.writeFile(mailFile, '');
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', './tests/fixtures/capture-mail.mjs', 'server/index.ts'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: String(port), DATA_DIR: dir,
-      APP_URL: url, ADMIN_EMAILS: '', DEV_SHOW_CODES: 'false', RESEND_API_KEY: '',
-      SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', MAIL_FROM: '' },
+      APP_URL: url, ADMIN_EMAILS: '', DEV_SHOW_CODES: 'false', RESEND_API_KEY: 'test-only',
+      SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', MAIL_FROM: 'test@example.invalid' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -57,7 +59,9 @@ async function startServer() {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert.ok(ready, `API did not start: ${output}`);
-    return { api, db: new DatabaseSync(path.join(dir, 'app.db')), stop };
+    const mails = async () => (await fs.readFile(mailFile, 'utf8')).trim().split('\n').filter(Boolean)
+      .map((line) => JSON.parse(line) as { to: string[]; subject: string; text: string; html: string });
+    return { api, db: new DatabaseSync(path.join(dir, 'app.db')), mails, stop };
   } catch (error) { await stop(); throw error; }
 }
 
@@ -129,7 +133,8 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
   await t.test('every endpoint requires a session', async () => {
     reset();
     for (const [endpoint, method, body] of [['/match/deck', 'GET'], ['/match/ranked', 'GET'], ['/match/feedback?action=like', 'GET'], ['/match/incoming', 'GET'],
-      ['/match/feedback', 'POST', { targetId: 1, action: 'like' }], ['/match/feedback/1', 'DELETE']] as const) {
+      ['/match/feedback', 'POST', { targetId: 1, action: 'like' }], ['/match/feedback/1', 'DELETE'],
+      ['/notifications/preferences', 'GET'], ['/notifications/preferences', 'PUT', { emailEnabled: false }]] as const) {
       assert.equal((await api(endpoint, '', method, body)).status, 401, endpoint);
     }
   });
@@ -251,6 +256,56 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     // Undoing a like keeps the existing match.
     assert.equal((await api(`/match/feedback/${b.id}`, a.cookie, 'DELETE')).status, 200);
     assert.equal(db.prepare("SELECT status FROM matches WHERE id = ?").get(matchId)!.status, 'active');
+  });
+
+  await t.test('only new interactions email the recipient, using their saved preference', async () => {
+    reset();
+    const recipient = createUser();
+    const oldLiker = createUser();
+    const newLiker = createUser();
+    const first = (await app.mails()).length;
+    const path = '/notifications/preferences';
+    assert.deepEqual((await api(path, recipient.cookie)).body, { emailEnabled: true });
+    assert.equal((await api(path, recipient.cookie, 'PUT', { emailEnabled: 'false' })).status, 400);
+    assert.deepEqual((await api(path, recipient.cookie, 'PUT', { emailEnabled: false, userId: newLiker.id })).body, { emailEnabled: false });
+    assert.deepEqual((await api(path, recipient.cookie)).body, { emailEnabled: false });
+    assert.deepEqual((await api(path, newLiker.cookie)).body, { emailEnabled: true });
+
+    // A pending like from before deployment, and a new like received while opted out.
+    db.prepare("INSERT INTO match_feedback (user_id, target_id, action) VALUES (?, ?, 'like')").run(oldLiker.id, recipient.id);
+    const mutedLiker = createUser();
+    assert.equal((await feedback(mutedLiker, recipient, 'like')).status, 200);
+    assert.ok((await incoming(recipient)).includes(mutedLiker.id));
+    assert.equal(notifications(recipient).length, 1);
+    assert.deepEqual((await api(path, recipient.cookie, 'PUT', { emailEnabled: true })).body, { emailEnabled: true });
+    assert.equal((await feedback(oldLiker, recipient, 'like')).status, 200);
+    await api(`/match/feedback/${recipient.id}`, mutedLiker.cookie, 'DELETE');
+    await feedback(mutedLiker, recipient, 'like');
+    assert.equal((await app.mails()).length, first, 'enabling and replaying existing likes do not backfill');
+
+    // The sender's settings do not mute the recipient. Concurrent retries produce one email.
+    await api(path, newLiker.cookie, 'PUT', { emailEnabled: false });
+    const likes = await Promise.all([feedback(newLiker, recipient, 'like'), feedback(newLiker, recipient, 'like')]);
+    assert.ok(likes.every((r) => r.status === 200 && !r.body.matched));
+    const sent = (await app.mails()).slice(first);
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].to, [recipient.email]);
+    assert.match(sent[0].subject, /有同学对你感兴趣/);
+    for (const body of [sent[0].html, sent[0].text]) {
+      assert.ok(body.includes(newLiker.nickname) && body.includes('/messages/requests') && body.includes('/me/reminders'));
+      assert.ok(!body.includes(newLiker.email) && !body.includes(newLiker.data.realName));
+    }
+
+    assert.ok((await feedback(recipient, newLiker, 'like')).body.matched);
+    assert.equal((await api(`/connections/${newLiker.id}`, recipient.cookie, 'POST', {})).body.request.status, 'pending');
+    assert.equal((await app.mails()).length, first + 1, 'both mutual-like and contact emails respect the recipient opt-out');
+    assert.ok(notifications(newLiker).some((n) => n.title === '收到交换联系方式的申请'));
+
+    assert.ok((await feedback(recipient, oldLiker, 'like')).body.matched);
+    const matchMails = (await app.mails()).slice(first + 1);
+    assert.equal(matchMails.length, 1, 'matching emits only the mutual-like email');
+    assert.deepEqual(matchMails[0].to, [oldLiker.email]);
+    assert.match(matchMails[0].subject, /你们互相感兴趣了/);
   });
 
   await t.test('contact requests list only likes still waiting for my answer, and never announce the same like twice', async () => {

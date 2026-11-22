@@ -157,8 +157,9 @@ test('review regressions', { timeout: 180_000 }, async (t) => {
   });
 
   await t.test('an in-chat rejection does not hide the pair from recommendations forever', async () => {
-    const a = createUser();
-    const b = createUser();
+    // Give this pair a common time that earlier fixtures do not share, so the five daily slots cannot crowd them out.
+    const a = createUser({ schedule: [9, 10, 11, 12] });
+    const b = createUser({ schedule: [9, 10, 11, 12] });
     await like(a, b);
     const matchId = (await like(b, a)).body.matchId;
     await app.api(`/connections/${b.id}`, a.cookie, 'POST', { message: '' });
@@ -236,5 +237,33 @@ test('review regressions', { timeout: 180_000 }, async (t) => {
     const me = (await app.api('/profiles/me', a.cookie)).body.profile;
     const saved = await app.api('/profiles/me', a.cookie, 'PUT', { profile: { ...me, photos: [forum.body.name] } });
     assert.equal(saved.status, 400);
+  });
+
+  await t.test('upgrading and restarting never dispatch reminders for historical interests', async () => {
+    const recipient = createUser();
+    const pending = createUser();
+    const withdrawn = createUser();
+    await app.stop();
+    // Reconstruct the previous schema in this suite's temporary database.
+    db.exec('DROP TABLE interest_reminders; ALTER TABLE users DROP COLUMN message_email_enabled');
+    db.prepare("INSERT INTO match_feedback (user_id, target_id, action) VALUES (?, ?, 'like')").run(pending.id, recipient.id);
+    db.prepare("INSERT INTO notifications (user_id, title, body, link) VALUES (?, '有同学对你感兴趣', ?, '/messages/requests')")
+      .run(recipient.id, `回归${withdrawn.id} 对你感兴趣。可以在「消息 → 联系请求」里查看 TA 的主页并回应。`);
+    const notices = () => db.prepare('SELECT COUNT(*) n FROM notifications WHERE user_id = ?').get(recipient.id)!.n;
+    for (let start = 0; start < 2; start++) {
+      app = await startServer(dir);
+      assert.deepEqual((await app.api('/notifications/preferences', recipient.cookie)).body, { emailEnabled: start === 0 });
+      assert.doesNotMatch(app.output(), /收件人：/);
+      if (start === 0) {
+        await app.api('/notifications/preferences', recipient.cookie, 'PUT', { emailEnabled: false });
+        await app.stop();
+      }
+    }
+    await app.api('/notifications/preferences', recipient.cookie, 'PUT', { emailEnabled: true });
+    await app.api(`/match/feedback/${recipient.id}`, pending.cookie, 'DELETE');
+    assert.equal((await like(pending, recipient)).status, 200);
+    assert.equal((await like(withdrawn, recipient)).status, 200);
+    assert.equal(notices(), 1);
+    assert.doesNotMatch(app.output(), /收件人：/);
   });
 });

@@ -235,6 +235,7 @@ export function unreadMessageCount(userId: number): number {
 
 registerAccountCleanup((uid) => {
   q.run('DELETE FROM match_feedback WHERE user_id = ? OR target_id = ?', uid, uid);
+  q.run('DELETE FROM interest_reminders WHERE sender_id = ? OR recipient_id = ?', uid, uid);
   q.run('DELETE FROM matches WHERE user_a = ? OR user_b = ?', uid, uid);
   q.run('DELETE FROM message_reads WHERE user_id = ?', uid);
   q.run('DELETE FROM preference_models WHERE user_id = ?', uid);
@@ -257,5 +258,25 @@ if (!getSetting(MIGRATION_KEY, '')) {
       }
     }
     setSetting(MIGRATION_KEY, new Date().toISOString());
+  });
+}
+
+// 每对账号、每个方向只提醒一次。旧版有过按收件人汇总的通知，不能仅凭通知正文判断是否提醒过。
+// 首次建表只登记已有选择与旧站内通知，不生成通知，也不调用邮件服务。
+if (!q.get("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'interest_reminders'")) {
+  tx(() => {
+    db.exec(`
+      CREATE TABLE interest_reminders (
+        sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (sender_id, recipient_id)
+      ) WITHOUT ROWID;
+      INSERT INTO interest_reminders (sender_id, recipient_id)
+        SELECT user_id, target_id FROM match_feedback WHERE action = 'like'
+        UNION
+        SELECT p.user_id, n.user_id FROM notifications n JOIN profiles p
+          ON p.nickname = substr(n.body, 1, instr(n.body, ' 对你感兴趣。') - 1)
+        WHERE n.title = '有同学对你感兴趣' AND n.link = '/messages/requests';
+    `);
   });
 }

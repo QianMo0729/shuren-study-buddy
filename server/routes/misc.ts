@@ -69,6 +69,18 @@ miscRouter.get('/files/:name', requireUser, (req, res) => {
 
 // ---------- 通知 ----------
 
+miscRouter.get('/notifications/preferences', requireUser, (req, res) => {
+  const row = q.get<{ message_email_enabled: number }>('SELECT message_email_enabled FROM users WHERE id = ?', req.user!.id)!;
+  res.json({ emailEnabled: !!row.message_email_enabled });
+});
+
+miscRouter.put('/notifications/preferences', requireUser, (req, res) => {
+  const emailEnabled = req.body?.emailEnabled;
+  if (typeof emailEnabled !== 'boolean') throw new HttpError(400, '请选择是否开启邮件提醒');
+  q.run('UPDATE users SET message_email_enabled = ? WHERE id = ?', Number(emailEnabled), req.user!.id);
+  res.json({ emailEnabled });
+});
+
 miscRouter.get('/notifications', requireUser, (req, res) => {
   const rows = q.all<any>('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 60', req.user!.id);
   res.json({

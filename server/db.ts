@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
   activated INTEGER NOT NULL DEFAULT 0,
   role TEXT NOT NULL DEFAULT 'user',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  last_login_at TEXT
+  last_login_at TEXT,
+  message_email_enabled INTEGER NOT NULL DEFAULT 1 CHECK (message_email_enabled IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -149,6 +150,10 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 `);
+
+if (!(db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).some((c) => c.name === 'message_email_enabled')) {
+  db.exec('ALTER TABLE users ADD COLUMN message_email_enabled INTEGER NOT NULL DEFAULT 1 CHECK (message_email_enabled IN (0, 1))');
+}
 
 // 旧库的 uploads 表没有 bytes 列；已有文件的大小由 server/uploads.ts 在启动时补记
 if (!(db.prepare('PRAGMA table_info(uploads)').all() as { name: string }[]).some((c) => c.name === 'bytes')) {

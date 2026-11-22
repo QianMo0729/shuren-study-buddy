@@ -118,7 +118,6 @@ connectionsRouter.post('/:userId', async (req, res) => {
     }
   }
   const requester = getProfileRow(uid)!;
-  const recipient = getProfileRow(other)!;
   const row = tx(() => {
     let id: number;
     if (existing) {
@@ -133,7 +132,7 @@ connectionsRouter.post('/:userId', async (req, res) => {
     notify(other, '收到交换联系方式的申请', `${requester.nickname} 希望与你交换联系方式，可以在私聊中同意或拒绝。`, `/messages/${match.id}`);
     return q.get<RequestRow>('SELECT * FROM contact_requests WHERE id = ?', id)!;
   });
-  const emailStatus = await sendContactRequestMail(recipient.email!, requester.nickname, match.id);
+  const emailStatus = await sendContactRequestMail(other, requester.nickname, match.id);
   // Persist the inbox request even if the notification provider is unavailable.
   res.json({ request: serialize(row, uid), emailStatus });
 });

@@ -5,7 +5,7 @@ import { HttpError, rateLimit, requireUser } from '../auth.ts';
 import { otherOfSummary } from '../chat.ts';
 import { isExcluded } from '../connections.ts';
 import { iso, q, tx } from '../db.ts';
-import { sendMatchMail } from '../mail.ts';
+import { sendIncomingInterestMail, sendMatchMail } from '../mail.ts';
 import { feedbackOf, matchBetween, recordFeedback, removeFeedback } from '../matches.ts';
 import {
   buildDeck, buildRanked, featuresBetween, feedbackTarget, learnFromFeedback, unlearnFeedback, viewerContext,
@@ -70,31 +70,32 @@ matchRouter.post('/feedback', (req, res) => {
   }
 
   const features = action === 'skip' ? null : featuresBetween(viewer.data, target.data);
-  // 记录反馈与更新个人偏好模型在同一个事务里提交：一次滑卡只落一次盘
-  const result = tx(() => {
+  // 一次提交反馈、学习结果与站内通知。邮件只在产生新通知的事务成功后发送。
+  const { matched, matchId, sendEmail } = tx(() => {
     const before = feedbackOf(uid, targetId);
     const previous = before ? { features: parseFeatures(before.features), action: before.action } : undefined;
-    const recorded = recordFeedback(uid, targetId, action, features ?? {});
+    const { matched, matchId, newlyMatched } = recordFeedback(uid, targetId, action, features ?? {});
     learnFromFeedback(uid, features, action, previous);
-    return { ...recorded, firstLike: action === 'like' && before?.action !== 'like' };
-  });
 
-  if (result.newlyMatched && result.matchId) {
-    const me = ensureProfile(uid).nickname;
-    const link = `/messages/${result.matchId}`;
-    notify(uid, '你们互相感兴趣了', `你和 ${target.nickname} 互相感兴趣，现在可以私聊了。`, link);
-    notify(targetId, '你们互相感兴趣了', `你和 ${me} 互相感兴趣，现在可以私聊了。`, link);
-    // 先表示感兴趣的一方此刻可能不在线，额外发一封邮件；失败不影响本次操作
-    void sendMatchMail(target.email, me, result.matchId).catch(() => undefined);
-  } else if (result.firstLike && !result.matched && feedbackOf(targetId, uid)?.action !== 'dislike' && !matchBetween(uid, targetId)) {
-    // 对方会在「消息 → 联系请求」里看到我，发一条站内通知（不发邮件）。对方已经选了不感兴趣、或配对解除过的，不出现在那里，也不提醒。
-    // 撤回后再点一次不重复提醒
-    const body = `${ensureProfile(uid).nickname} 对你感兴趣。可以在「消息 → 联系请求」里查看 TA 的主页并回应。`;
-    if (!q.get('SELECT 1 FROM notifications WHERE user_id = ? AND link = ? AND body = ?', targetId, INCOMING_LINK, body)) {
-      notify(targetId, '有同学对你感兴趣', body, INCOMING_LINK);
+    let sendEmail: (() => Promise<unknown>) | undefined;
+    if (newlyMatched && matchId) {
+      const me = ensureProfile(uid).nickname;
+      const link = `/messages/${matchId}`;
+      notify(uid, '你们互相感兴趣了', `你和 ${target.nickname} 互相感兴趣，现在可以私聊了。`, link);
+      notify(targetId, '你们互相感兴趣了', `你和 ${me} 互相感兴趣，现在可以私聊了。`, link);
+      sendEmail = () => sendMatchMail(targetId, me, matchId);
+    } else if (action === 'like' && before?.action !== 'like' && !matched && feedbackOf(targetId, uid)?.action !== 'dislike' && !matchBetween(uid, targetId)) {
+      const first = q.run('INSERT INTO interest_reminders (sender_id, recipient_id) VALUES (?, ?) ON CONFLICT DO NOTHING', uid, targetId);
+      if (first.changes) {
+        const me = ensureProfile(uid).nickname;
+        notify(targetId, '有同学对你感兴趣', `${me} 对你感兴趣。可以在「消息 → 联系请求」里查看 TA 的主页并回应。`, INCOMING_LINK);
+        sendEmail = () => sendIncomingInterestMail(targetId, me, INCOMING_LINK);
+      }
     }
-  }
-  res.json({ action, matched: result.matched, matchId: result.matchId } satisfies FeedbackResult);
+    return { matched, matchId, sendEmail };
+  });
+  void sendEmail?.().catch(() => console.error('[mail] 匹配提醒发送失败'));
+  res.json({ action, matched, matchId } satisfies FeedbackResult);
 });
 
 /**

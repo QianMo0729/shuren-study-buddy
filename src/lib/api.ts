@@ -2,7 +2,7 @@ import type { ActivityConfig, SensitiveCategory } from '../../shared/activity';
 import type {
   AdvancedQuery, BuddyStatus, LeaderboardResponse, Role, SeasonInfo, ShurenMember, ChatMessage, ChatSummary, Checkin, CheckinSession, CheckinStats, CheckinVisibility, ContactRequest, ContactReveal, ContentReviewState,
   DeckCard, DeckResponse, FeedbackAction, FeedbackItem, FeedbackResult, ForumComment, IncomingInterest, ForumPost, ForumTargetType, ModerationTargetType,
-  MyProfile, NotificationItem, Post, PostSearchQuery, ProfileCard, ProfileDraft, ProfileInput, PublicProfile, QuestionnaireSection, RecommendationResponse, ReportTargetType, SessionUser,
+  MyProfile, NotificationItem, NotificationPreferences, Post, PostSearchQuery, ProfileCard, ProfileDraft, ProfileInput, PublicProfile, QuestionnaireSection, RecommendationResponse, ReportTargetType, SessionUser,
 } from '../../shared/types';
 
 export class ApiError extends Error {
@@ -204,6 +204,8 @@ export const api = {
   },
 
   notifications: () => get<{ items: NotificationItem[] }>('/notifications'),
+  notificationPreferences: () => get<NotificationPreferences>('/notifications/preferences'),
+  setNotificationPreferences: (emailEnabled: boolean) => put<NotificationPreferences>('/notifications/preferences', { emailEnabled }),
   readAll: () => post<{ ok: true }>('/notifications/read-all'),
   report: (b: { targetType: ReportTargetType; targetId: number; reason: string; detail?: string }) => post<{ ok: true }>('/reports', b),
 

@@ -352,14 +352,13 @@ if (!getSetting('pref_skip_neutral_v1', '')) {
 export interface FeedbackTarget {
   id: number;
   nickname: string;
-  email: string;
   data: ProfileInput;
 }
 
 /** 可被反馈的对象：主页已发布、未撤下、问卷完整且同意隐私条款的已激活账号 */
 export function feedbackTarget(targetId: number): FeedbackTarget | null {
-  const row = q.get<ProfileRowLike & { email: string }>(
-    `SELECT p.*, u.email FROM profiles p JOIN users u ON u.id = p.user_id
+  const row = q.get<ProfileRowLike>(
+    `SELECT p.* FROM profiles p JOIN users u ON u.id = p.user_id
      WHERE p.user_id = ? AND p.published = 1 AND p.taken_down = 0 AND p.saved_at IS NOT NULL AND p.saved_at <> ''
        AND u.activated = 1 AND u.password_hash IS NOT NULL AND u.password_hash <> ''`,
     targetId,
@@ -367,7 +366,7 @@ export function feedbackTarget(targetId: number): FeedbackTarget | null {
   if (!row) return null;
   const data = parseData(row);
   if (missingFields(data).length || !hasPrivacyConsent(data)) return null;
-  return { id: row.user_id, nickname: row.nickname, email: row.email, data };
+  return { id: row.user_id, nickname: row.nickname, data };
 }
 
 /** 反馈当时的特征快照；没有共同时间等硬条件不满足时返回 null（不参与学习） */

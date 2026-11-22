@@ -1,7 +1,7 @@
 import { PendingReviewBadge } from '../components/ReviewStatus';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
-import { Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert } from 'lucide-react';
+import { Bell, Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert } from 'lucide-react';
 import { GRADES } from '../../shared/options';
 import { speciesOfNickname } from '../../shared/species';
 import type { BuddyStatus, Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
@@ -9,7 +9,7 @@ import { api, ApiError, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { cx, timeAgo } from '../lib/format';
 import { useToast } from '../lib/toast';
-import { Button, ConfirmDialog, Empty, Field, GroupList, Input, Modal, PageHeader, Segmented, Skeleton, Tag } from '../components/ui';
+import { Button, ConfirmDialog, Empty, Field, GroupList, Input, Modal, PageHeader, Segmented, Skeleton, Tag, Toggle } from '../components/ui';
 import { Plate, IcpNotice } from '../components/brand';
 import { useBack } from '../components/Shell';
 import { AlertIcon, BookIcon, Chevron, GridIcon, PeopleIcon, ShieldIcon, SlidersIcon } from '../components/icons';
@@ -145,6 +145,7 @@ function MeHome() {
 
         <GroupList>
           <MeRow to="/me/preferences" icon={<SlidersIcon size={20} width={2} />}>推荐偏好</MeRow>
+          <MeRow to="/me/reminders" icon={<Bell size={20} />}>消息提醒</MeRow>
           <MeRow to="/me/edit" icon={<GridIcon size={20} width={2} />} value={profile ? `${profile.schedule.length} 个空闲时段` : undefined}>我的空闲时间</MeRow>
           <MeRow to="/me/settings" icon={<ShieldIcon size={20} width={2} />}>账号与隐私</MeRow>
         </GroupList>
@@ -212,11 +213,11 @@ function MeRow({ to, icon, value, children }: { to: string; icon: ReactNode; val
   );
 }
 
-const SECTION_TITLES: Record<string, string> = { notifications: '通知', preferences: '推荐偏好', content: '我的内容', settings: '账号与隐私' };
+const SECTION_TITLES: Record<string, string> = { notifications: '通知', reminders: '消息提醒', preferences: '推荐偏好', content: '我的内容', settings: '账号与隐私' };
 
 /** 「我的」里点进去的分页：通知、推荐偏好、我的内容、账号与隐私 */
 export function MeSection() {
-  const { refresh } = useAuth();
+  const { user, refresh } = useAuth();
   const { pathname } = useLocation();
   const [params, setParams] = useSearchParams();
   const section = pathname.split('/')[2] ?? '';
@@ -228,6 +229,7 @@ export function MeSection() {
     <div className="mx-auto max-w-[640px]">
       <PageHeader title={SECTION_TITLES[section]} />
       {section === 'notifications' && <Notifications onRead={refresh} />}
+      {section === 'reminders' && <ReminderSettings key={user?.id} />}
       {section === 'preferences' && <Preferences />}
       {section === 'content' && (
         <div>
@@ -248,6 +250,58 @@ export function MeSection() {
         </div>
       )}
     </div>
+  );
+}
+
+function ReminderSettings() {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api.notificationPreferences().then(
+      (prefs) => { if (active) setEnabled(prefs.emailEnabled); },
+      (e) => { if (active) setError(errorText(e)); },
+    );
+    return () => { active = false; };
+  }, [attempt]);
+
+  function reload() {
+    setEnabled(null);
+    setError(null);
+    setAttempt((n) => n + 1);
+  }
+
+  async function save(next: boolean) {
+    setSaving(true);
+    try {
+      const prefs = await api.setNotificationPreferences(next);
+      setEnabled(prefs.emailEnabled);
+      toast.success(prefs.emailEnabled ? '已开启邮件提醒' : '已关闭邮件提醒');
+    } catch (e) {
+      toast.error('暂时无法确认邮件提醒设置', errorText(e));
+      reload();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (error) return <LoadError message={error} onRetry={reload} />;
+  if (enabled === null) return <Skeleton className="h-24 rounded-xl" />;
+  return (
+    <GroupList>
+      <div className="flex items-center justify-between gap-4 px-4 py-3.5">
+        <div>
+          <p className="text-[17px] font-semibold text-ink">邮件提醒</p>
+          <p className="mt-1 text-[14px] leading-relaxed text-ink-2">有同学对你感兴趣、与你互相感兴趣或申请交换联系方式时，发邮件到你的校园邮箱。</p>
+          <p className="mt-1 text-[13px] text-ink-3">关闭后仍可在站内查看这些消息。</p>
+        </div>
+        <Toggle checked={enabled} disabled={saving} onChange={save} label={<span className="sr-only">邮件提醒</span>} />
+      </div>
+    </GroupList>
   );
 }
 
