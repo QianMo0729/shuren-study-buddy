@@ -1,9 +1,9 @@
 import nodemailer from 'nodemailer';
-import type { ModerationTargetType } from '../shared/types.ts';
+import type { EmailReminderKind, ModerationTargetType } from '../shared/types.ts';
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { config } from './config.ts';
-import { q } from './db.ts';
+import { emailReminderRecipient } from './notify.ts';
 
 const transporter = config.smtp.configured
   ? nodemailer.createTransport({
@@ -109,9 +109,9 @@ export function sendAccountNoticeMail(to: string, purpose: string) {
 }
 
 /** 仅搭子互动邮件受本人的消息提醒设置控制。 */
-async function sendMessageReminder(userId: number, title: string, paragraphs: string[], path: string, action: string) {
-  const recipient = q.get<{ email: string }>('SELECT email FROM users WHERE id = ? AND activated = 1 AND message_email_enabled = 1', userId);
-  if (!recipient) return 'not_sent' as const;
+async function sendMessageReminder(kind: EmailReminderKind, userId: number, title: string, paragraphs: string[], path: string, action: string) {
+  const recipient = emailReminderRecipient(userId);
+  if (!recipient?.preferences[kind]) return 'not_sent' as const;
   const url = `${config.appUrl}${path}`;
   const settings = `${config.appUrl}/me/reminders`;
   const html = layout(title,
@@ -123,20 +123,20 @@ async function sendMessageReminder(userId: number, title: string, paragraphs: st
 }
 
 export function sendIncomingInterestMail(userId: number, nickname: string, path: string) {
-  return sendMessageReminder(userId, '有同学对你感兴趣', [
+  return sendMessageReminder('incomingInterest', userId, '有同学对你感兴趣', [
     `${nickname} 对你感兴趣。你可以在联系请求里查看这位同学的主页，决定是否回应。`,
   ], path, '查看联系请求');
 }
 
 export function sendContactRequestMail(userId: number, nickname: string, matchId: number) {
-  return sendMessageReminder(userId, '你收到一条交换联系方式的申请', [
+  return sendMessageReminder('contactRequest', userId, '你收到一条交换联系方式的申请', [
     `${nickname} 在私聊中申请与你交换联系方式。请登录网站查看，并选择同意或拒绝。`,
     '只有双方确认后，系统才会互相展示联系方式。',
   ], `/messages/${matchId}`, '去私聊查看');
 }
 
 export function sendMatchMail(userId: number, nickname: string, matchId: number) {
-  return sendMessageReminder(userId, '你们互相感兴趣了', [
+  return sendMessageReminder('mutualMatch', userId, '你们互相感兴趣了', [
     `你和 ${nickname} 都对彼此感兴趣，现在可以在站内私聊了。`,
     '先聊聊学习目标和时间安排，确认合适后再决定是否交换联系方式。',
   ], `/messages/${matchId}`, '去私聊');

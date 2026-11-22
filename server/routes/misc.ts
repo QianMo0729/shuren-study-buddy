@@ -10,9 +10,10 @@ import { getProfileRow, parseData } from '../profiles.ts';
 import { hasPrivacyConsent } from '../../shared/profileRules.ts';
 import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
+import { emailReminderRecipient, updateEmailPreferences } from '../notify.ts';
 import { boundSnapshot, fileAccessFor, reportTargetFor } from '../social.ts';
 import { UPLOAD_DIR, UPLOAD_NAME, assertStorageAvailable, assertUploadQuota, storeUpload } from '../uploads.ts';
-import type { ReportTargetType } from '../../shared/types.ts';
+import { EMAIL_REMINDER_KINDS, type ReportTargetType } from '../../shared/types.ts';
 
 export const miscRouter = Router();
 
@@ -69,16 +70,30 @@ miscRouter.get('/files/:name', requireUser, (req, res) => {
 
 // ---------- 通知 ----------
 
+// 已打开的旧页面仍可用总开关，一次设置全部三项。
 miscRouter.get('/notifications/preferences', requireUser, (req, res) => {
-  const row = q.get<{ message_email_enabled: number }>('SELECT message_email_enabled FROM users WHERE id = ?', req.user!.id)!;
-  res.json({ emailEnabled: !!row.message_email_enabled });
+  const { preferences } = emailReminderRecipient(req.user!.id)!;
+  res.json({ emailEnabled: Object.values(preferences).some(Boolean) });
 });
 
 miscRouter.put('/notifications/preferences', requireUser, (req, res) => {
   const emailEnabled = req.body?.emailEnabled;
   if (typeof emailEnabled !== 'boolean') throw new HttpError(400, '请选择是否开启邮件提醒');
-  q.run('UPDATE users SET message_email_enabled = ? WHERE id = ?', Number(emailEnabled), req.user!.id);
+  updateEmailPreferences(req.user!.id, { incomingInterest: emailEnabled, mutualMatch: emailEnabled, contactRequest: emailEnabled });
   res.json({ emailEnabled });
+});
+
+miscRouter.get('/notifications/preferences/email', requireUser, (req, res) => {
+  res.json(emailReminderRecipient(req.user!.id)!.preferences);
+});
+
+miscRouter.put('/notifications/preferences/email/:kind', requireUser, (req, res) => {
+  const kind = EMAIL_REMINDER_KINDS.find((k) => k === req.params.kind);
+  if (!kind) throw new HttpError(400, '没有这项邮件提醒');
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== 'boolean') throw new HttpError(400, '请选择是否开启这项邮件提醒');
+  const prefs = updateEmailPreferences(req.user!.id, { [kind]: enabled });
+  res.json({ enabled: prefs[kind] });
 });
 
 miscRouter.get('/notifications', requireUser, (req, res) => {

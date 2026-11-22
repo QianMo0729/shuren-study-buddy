@@ -136,6 +136,13 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS message_email_preferences (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  incoming_interest INTEGER NOT NULL CHECK (incoming_interest IN (0, 1)),
+  mutual_match INTEGER NOT NULL CHECK (mutual_match IN (0, 1)),
+  contact_request INTEGER NOT NULL CHECK (contact_request IN (0, 1))
+);
+
 CREATE TABLE IF NOT EXISTS uploads (
   name TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

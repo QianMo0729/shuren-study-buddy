@@ -232,6 +232,7 @@ authRouter.delete('/account', requireUser, async (req, res) => {
     q.run('DELETE FROM contact_views WHERE viewer_id = ? OR target_id = ?', uid, uid);
     q.run('DELETE FROM post_interests WHERE user_id = ? OR post_id IN (SELECT id FROM posts WHERE user_id = ?)', uid, uid);
     q.run('DELETE FROM notifications WHERE user_id = ?', uid);
+    q.run('DELETE FROM message_email_preferences WHERE user_id = ?', uid);
     q.run('DELETE FROM reports WHERE reporter_id = ?', uid);
     runAccountCleanup(uid);
     q.run('DELETE FROM uploads WHERE user_id = ?', uid);

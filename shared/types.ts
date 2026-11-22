@@ -484,9 +484,9 @@ export interface Post extends ContentReviewState {
   interestedUsers?: { id: number; nickname: string; cover: string | null }[];
 }
 
-export interface NotificationPreferences {
-  emailEnabled: boolean;
-}
+export const EMAIL_REMINDER_KINDS = ['incomingInterest', 'mutualMatch', 'contactRequest'] as const;
+export type EmailReminderKind = typeof EMAIL_REMINDER_KINDS[number];
+export type NotificationPreferences = Record<EmailReminderKind, boolean>;
 
 export interface NotificationItem {
   id: number;

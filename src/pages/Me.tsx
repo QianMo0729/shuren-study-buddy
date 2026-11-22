@@ -4,7 +4,7 @@ import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react
 import { Bell, Camera, Heart, ImageIcon, LogOut, MapPin, MessageCircle, ShieldAlert } from 'lucide-react';
 import { GRADES } from '../../shared/options';
 import { speciesOfNickname } from '../../shared/species';
-import type { BuddyStatus, Checkin, CheckinStats, FeedbackItem, ForumPost, MyProfile, NotificationItem, Post, ProfileCard as Card } from '../../shared/types';
+import type { BuddyStatus, Checkin, CheckinStats, EmailReminderKind, FeedbackItem, ForumPost, MyProfile, NotificationItem, NotificationPreferences, Post, ProfileCard as Card } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { cx, timeAgo } from '../lib/format';
@@ -253,55 +253,76 @@ export function MeSection() {
   );
 }
 
+const REMINDER_OPTIONS: { kind: EmailReminderKind; label: string }[] = [
+  { kind: 'incomingInterest', label: '有人对我感兴趣' },
+  { kind: 'mutualMatch', label: '互相感兴趣' },
+  { kind: 'contactRequest', label: '申请交换联系方式' },
+];
+
 function ReminderSettings() {
-  const toast = useToast();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [saving, setSaving] = useState(false);
-
   useEffect(() => {
     let active = true;
     api.notificationPreferences().then(
-      (prefs) => { if (active) setEnabled(prefs.emailEnabled); },
+      (values) => { if (active) setPrefs(values); },
       (e) => { if (active) setError(errorText(e)); },
     );
     return () => { active = false; };
   }, [attempt]);
 
-  function reload() {
-    setEnabled(null);
-    setError(null);
-    setAttempt((n) => n + 1);
-  }
+  if (error) return <LoadError message={error} onRetry={() => { setError(null); setAttempt((n) => n + 1); }} />;
+  if (!prefs) return <Skeleton className="h-40 rounded-xl" />;
+  return (
+    <section aria-label="邮件提醒">
+      <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">邮件提醒</h2>
+      <GroupList>
+        {REMINDER_OPTIONS.map(({ kind, label }) => (
+          <ReminderRow key={kind} kind={kind} label={label} initial={prefs[kind]} />
+        ))}
+      </GroupList>
+      <p className="mt-2 px-1 text-[13px] leading-relaxed text-ink-3">开启的提醒会发到你的校园邮箱。所有联系请求和配对都可以在站内查看。</p>
+    </section>
+  );
+}
 
-  async function save(next: boolean) {
-    setSaving(true);
+function ReminderRow({ kind, label, initial }: { kind: EmailReminderKind; label: string; initial: boolean }) {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState<boolean | null>(initial);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setBusy(true);
     try {
-      const prefs = await api.setNotificationPreferences(next);
-      setEnabled(prefs.emailEnabled);
-      toast.success(prefs.emailEnabled ? '已开启邮件提醒' : '已关闭邮件提醒');
-    } catch (e) {
-      toast.error('暂时无法确认邮件提醒设置', errorText(e));
-      reload();
+      setEnabled((await api.notificationPreferences())[kind]);
+    } catch {
+      setEnabled(null);
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
-  if (error) return <LoadError message={error} onRetry={reload} />;
-  if (enabled === null) return <Skeleton className="h-24 rounded-xl" />;
+  async function save(next: boolean) {
+    setBusy(true);
+    try {
+      const saved = await api.setEmailReminder(kind, next);
+      setEnabled(saved.enabled);
+    } catch (e) {
+      toast.error('暂时无法确认这项邮件提醒设置', errorText(e));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <GroupList>
-      <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-        <div>
-          <p className="text-[17px] font-semibold text-ink">邮件提醒</p>
-          <p className="mt-1 text-[14px] leading-relaxed text-ink-2">有同学对你感兴趣、与你互相感兴趣或申请交换联系方式时，发邮件到你的校园邮箱。</p>
-          <p className="mt-1 text-[13px] text-ink-3">关闭后仍可在站内查看这些消息。</p>
-        </div>
-        <Toggle checked={enabled} disabled={saving} onChange={save} label={<span className="sr-only">邮件提醒</span>} />
-      </div>
-    </GroupList>
+    <div className="flex min-h-[50px] items-center justify-between gap-4 px-4 py-2">
+      <span className="text-[16px] text-ink">{label}</span>
+      {enabled === null
+        ? <Button size="sm" loading={busy} onClick={load}>重新读取</Button>
+        : <Toggle checked={enabled} disabled={busy} onChange={save} label={<span className="sr-only">{label}</span>} />}
+    </div>
   );
 }
 

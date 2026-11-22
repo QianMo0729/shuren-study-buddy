@@ -134,7 +134,8 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     reset();
     for (const [endpoint, method, body] of [['/match/deck', 'GET'], ['/match/ranked', 'GET'], ['/match/feedback?action=like', 'GET'], ['/match/incoming', 'GET'],
       ['/match/feedback', 'POST', { targetId: 1, action: 'like' }], ['/match/feedback/1', 'DELETE'],
-      ['/notifications/preferences', 'GET'], ['/notifications/preferences', 'PUT', { emailEnabled: false }]] as const) {
+      ['/notifications/preferences', 'GET'], ['/notifications/preferences', 'PUT', { emailEnabled: false }],
+      ['/notifications/preferences/email', 'GET'], ['/notifications/preferences/email/mutualMatch', 'PUT', { enabled: false }]] as const) {
       assert.equal((await api(endpoint, '', method, body)).status, 401, endpoint);
     }
   });
@@ -306,6 +307,50 @@ test('match deck, feedback, learning and exploration', { timeout: 180_000 }, asy
     assert.equal(matchMails.length, 1, 'matching emits only the mutual-like email');
     assert.deepEqual(matchMails[0].to, [oldLiker.email]);
     assert.match(matchMails[0].subject, /你们互相感兴趣了/);
+  });
+
+  await t.test('each email switch controls only its own kind of interaction', async () => {
+    reset();
+    const settings = '/notifications/preferences/email';
+    const subjects = {
+      incomingInterest: '有同学对你感兴趣', mutualMatch: '你们互相感兴趣了', contactRequest: '你收到一条交换联系方式的申请',
+    };
+    for (const [kind, subject] of Object.entries(subjects)) {
+      const recipient = createUser();
+      const liker = createUser();
+      const partner = createUser();
+      // A user who disabled the single switch before this feature has no per-kind row.
+      db.prepare('UPDATE users SET message_email_enabled = 0 WHERE id = ?').run(recipient.id);
+      assert.deepEqual((await api(settings, recipient.cookie)).body, { incomingInterest: false, mutualMatch: false, contactRequest: false });
+      assert.deepEqual((await api(settings, liker.cookie)).body, { incomingInterest: true, mutualMatch: true, contactRequest: true });
+      assert.equal((await api(`${settings}/typo`, recipient.cookie, 'PUT', { enabled: true })).status, 400);
+      assert.equal((await api(`${settings}/${kind}`, recipient.cookie, 'PUT', { enabled: 'true' })).status, 400);
+      assert.deepEqual((await api(`${settings}/${kind}`, recipient.cookie, 'PUT', { enabled: true, userId: liker.id })).body, { enabled: true });
+
+      assert.equal((await feedback(liker, recipient, 'like')).status, 200);
+      await feedback(recipient, partner, 'like');
+      assert.ok((await feedback(partner, recipient, 'like')).body.matched);
+      assert.equal((await api(`/connections/${recipient.id}`, partner.cookie, 'POST', {})).body.request.status, 'pending');
+      const sent = (await app.mails()).filter((m) => m.to.includes(recipient.email));
+      assert.deepEqual(sent.map((m) => m.subject), [`【树仁学发 · 学习搭子】${subject}`]);
+      assert.equal(notifications(recipient).length, 3, 'all three in-app notifications are still created');
+      assert.deepEqual((await api(settings, liker.cookie)).body, { incomingInterest: true, mutualMatch: true, contactRequest: true });
+    }
+  });
+
+  await t.test('independent writes do not overwrite other switches and old clients can still update all three', async () => {
+    reset();
+    const me = createUser();
+    const settings = '/notifications/preferences/email';
+    const results = await Promise.all(['incomingInterest', 'contactRequest'].map((kind) =>
+      api(`${settings}/${kind}`, me.cookie, 'PUT', { enabled: false })));
+    assert.ok(results.every((r) => r.status === 200));
+    assert.deepEqual((await api(settings, me.cookie)).body, { incomingInterest: false, mutualMatch: true, contactRequest: false });
+    assert.deepEqual((await api('/notifications/preferences', me.cookie)).body, { emailEnabled: true });
+    for (const enabled of [false, true]) {
+      await api('/notifications/preferences', me.cookie, 'PUT', { emailEnabled: enabled });
+      assert.deepEqual((await api(settings, me.cookie)).body, { incomingInterest: enabled, mutualMatch: enabled, contactRequest: enabled });
+    }
   });
 
   await t.test('contact requests list only likes still waiting for my answer, and never announce the same like twice', async () => {
