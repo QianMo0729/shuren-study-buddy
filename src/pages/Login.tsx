@@ -63,7 +63,11 @@ export function Login() {
   const titles = { login: '欢迎回到树仁搭子', activate: step === 'password' ? '设置你的登录密码' : '激活你的搭子账号', reset: '重新设置登录密码' };
 
   useEffect(() => {
-    if (!loading && user && mode !== 'reset') nav(mode === 'activate' || !user.questionnaireComplete ? '/me/edit?onboarding=1' : next || '/today', { replace: true });
+    if (loading || !user || mode === 'reset') return;
+    const needsQuestionnaire = mode === 'activate' || !user.questionnaireComplete;
+    // 邮件里的设置入口对所有已登录账号开放，包括后来撤回问卷的同学。
+    const destination = needsQuestionnaire && next !== '/me/reminders' ? '/me/edit?onboarding=1' : next || '/today';
+    nav(destination, { replace: true });
   }, [user, loading, mode, nav, next]);
 
   useEffect(() => {
