@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Handshake, UsersRound } from 'lucide-react';
+import { beijingDay, shortDate, weekdayLabel } from '../../../shared/activity';
 import type { BuddyRelation, BuddyStatus } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
 import { useToast } from '../../lib/toast';
@@ -55,7 +56,13 @@ export function useBuddyActions(onDone?: (status: BuddyStatus & { matchId?: numb
             {pending.mode === 'accept' ? `接受后，你和 ${pending.nickname} 会绑定为学习搭子。` : `对方接受后，你和 ${pending.nickname} 会绑定为学习搭子。`}
           </p>
           <ul className="list-disc space-y-1 pl-5 text-[13.5px] leading-relaxed text-ink-2 marker:text-ink-4">
-            <li>每人同时只能有一个搭子，从下一个周一开始计分。</li>
+            <li>
+              {beijingDay() >= config.seasonStart
+                ? '每人同时只能有一个搭子，从下一个周一开始计分。'
+                : pending.mode === 'accept'
+                  ? `每人同时只能有一个搭子。现在接受，从赛季第一天 ${shortDate(config.seasonStart)}（${weekdayLabel(config.seasonStart)}）开始计分。`
+                  : `每人同时只能有一个搭子。对方在赛季开始前接受的，从赛季第一天 ${shortDate(config.seasonStart)}（${weekdayLabel(config.seasonStart)}）开始计分；之后才接受的，从下一个周一开始。`}
+            </li>
             <li>同一天两人在 {config.windowMinutes} 分钟内各自拍照打卡，算一次相同事件打卡，每周最多计 {config.weeklyCap} 次。</li>
             <li>任何一方都可以随时解绑，解绑后两人的搭子积分都清零。</li>
             <li>组合里至少一人是树仁书院学生才参与排名和评奖，书院身份按学号判断。</li>

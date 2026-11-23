@@ -69,6 +69,14 @@ export function mondayOf(date: string): string {
   return addDays(date, -((weekdayOf(date) + 6) % 7));
 }
 
+/**
+ * 在 bindDay 这天绑定，从哪天开始计分：赛季开始前绑定的，从赛季第一天开始；赛季开始后（含第一天）绑定的，从下一个周一开始。
+ * 赛季可以从周中开始，所以不能只比较「下一个周一」和赛季第一天：周四开赛时，那一周周一到周三绑定的也从周四算。
+ */
+export function bindingStartsOn(bindDay: string, seasonStart: string): string {
+  return bindDay < seasonStart ? seasonStart : addDays(mondayOf(bindDay), 7);
+}
+
 /** 北京时间日期（中国不实行夏令时，固定 UTC+8） */
 export function beijingDay(d = new Date()): string {
   return new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 10);

@@ -172,8 +172,16 @@ export function scoredThrough(now = new Date(), config = activityConfig()): stri
   return through < config.seasonStart ? null : through;
 }
 
-/** 这个组合实际开始计分的日期：绑定时定下的开始日与赛季第一天中较晚的一个（赛季推迟后，早先绑定的组合跟着推迟） */
-export function scoringStart(pair: Pick<PairRow, 'starts_on'>, config = activityConfig()): string {
+/**
+ * 这个组合实际开始计分的日期。比现在设置的赛季第一天更早绑定的，从赛季第一天开始：赛季改期后跟着改，
+ * 也纠正赛季改到周四后、旧代码在那一周周一到周三绑定时存成下一个周一的记录。赛季开始后绑定的，
+ * 按绑定时定下的日期（下一个周一），但不早于赛季第一天；赛季第一天往前改时，已经定下的日期不再往后推。
+ * 积分、本周进度、Bonus 和抽检都只认这个日期，不要直接用 starts_on。
+ */
+export function scoringStart(pair: Pick<PairRow, 'starts_on' | 'created_at'>, config = activityConfig()): string {
+  // created_at 是 SQLite 的 UTC 时间，换成北京时间的绑定日期
+  const boundAt = toMs(pair.created_at);
+  if (!Number.isNaN(boundAt) && beijingDay(new Date(boundAt)) < config.seasonStart) return config.seasonStart;
   return pair.starts_on > config.seasonStart ? pair.starts_on : config.seasonStart;
 }
 
@@ -220,10 +228,11 @@ export function pairScore(pair: PairRow, through: string | null, config = activi
 /** 本周进度：次数、按阶梯换算的预计得分（周一结算后计入总分）与本周已通过的 Bonus。只给本组合看 */
 export function currentWeek(pair: PairRow, now = new Date(), config = activityConfig()) {
   const today = beijingDay(now);
-  if (today < config.seasonStart || today > config.seasonEnd || today < pair.starts_on) return null;
+  const pairStart = scoringStart(pair, config);
+  if (today < config.seasonStart || today > config.seasonEnd || today < pairStart) return null;
   const start = mondayOf(today);
   // 赛季（或这个组合）在周中开始计分时，这一周只算开始计分之后的打卡
-  const from = [start, scoringStart(pair, config)].sort().at(-1)!;
+  const from = [start, pairStart].sort().at(-1)!;
   const events = sameEvents(pair, from, today, config);
   const count = events.length;
   let used = 0;
@@ -311,10 +320,12 @@ export function leaderboard(now = new Date()): { through: string | null; items: 
 /** 一周内所有在绑组合的相同事件（抽检与获奖复核用） */
 export function weekEvents(week: string, config = activityConfig()): { pair: PairRow; event: SameEvent }[] {
   const end = addDays(week, 6);
+  const to = end < config.seasonEnd ? end : config.seasonEnd;
   const out: { pair: PairRow; event: SameEvent }[] = [];
-  for (const pair of q.all<PairRow>("SELECT * FROM buddy_pairs WHERE status = 'active' AND starts_on <= ?", end)) {
-    const from = [week, pair.starts_on, config.seasonStart].sort().at(-1)!;
-    const to = end < config.seasonEnd ? end : config.seasonEnd;
+  // 不能用 starts_on 在 SQL 里先筛：赛季开始前绑定的组合，存下的 starts_on 可能晚于实际开始计分日
+  for (const pair of q.all<PairRow>("SELECT * FROM buddy_pairs WHERE status = 'active'")) {
+    const from = [week, scoringStart(pair, config)].sort().at(-1)!;
+    if (from > to) continue;
     for (const event of sameEvents(pair, from, to, config)) out.push({ pair, event });
   }
   return out;

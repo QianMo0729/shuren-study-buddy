@@ -7,7 +7,7 @@ import { activityConfig } from './activityConfig.ts';
 import { activePairOf, pairById, partnerOf } from './buddyState.ts';
 import { q, tx } from './db.ts';
 import { notify } from './notify.ts';
-import { touchScores } from './scoring.ts';
+import { scoringStart, touchScores } from './scoring.ts';
 
 export interface ClaimRow {
   id: number;
@@ -40,7 +40,8 @@ export function createClaim(uid: number, postId: number, body: string, images: s
   if (!pair) throw new HttpError(400, '绑定搭子之后才能申请 Bonus');
   const today = beijingDay(now);
   if (today < config.seasonStart || today > config.seasonEnd) throw new HttpError(400, '现在不在活动赛季内，暂时不能申请 Bonus');
-  if (today < pair.starts_on) throw new HttpError(400, `你们从 ${shortDate(pair.starts_on)} 开始计分，那之后再申请 Bonus`);
+  const start = scoringStart(pair, config);
+  if (today < start) throw new HttpError(400, `你们从 ${shortDate(start)} 开始计分，那之后再申请 Bonus`);
   const contentError = bonusContentError(body, images);
   if (contentError) throw new HttpError(400, contentError);
   const week = mondayOf(today);

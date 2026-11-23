@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { DAYS } from '../../shared/options';
-import { mondayOf, shortDate, weekdayLabel } from '../../shared/activity';
+import { beijingDay, mondayOf, shortDate, weekdayLabel } from '../../shared/activity';
 import type { BuddyStatus } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { useToast } from '../lib/toast';
@@ -69,7 +69,9 @@ export function Buddy() {
       <ConfirmDialog
         open={unbinding}
         title="解除搭子绑定？"
-        desc="解除后立即生效，你们两人的搭子积分都会清零，组合退出排名，对方会收到通知。私聊不受影响。之后和任何人重新绑定，都从下一个周一开始重新计分。"
+        desc={`解除后立即生效，你们两人的搭子积分都会清零，组合退出排名，对方会收到通知。私聊不受影响。${status && beijingDay() < status.season.start
+          ? `之后和任何人重新绑定，都从 0 分算起：赛季开始前绑定的从 ${shortDate(status.season.start)}（${weekdayLabel(status.season.start)}）开始计分，之后绑定的从下一个周一开始。`
+          : '之后和任何人重新绑定，都从下一个周一开始重新计分。'}`}
         confirmText="解除绑定"
         tone="danger"
         loading={busy}

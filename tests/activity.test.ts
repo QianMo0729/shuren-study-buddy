@@ -9,7 +9,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import bcrypt from 'bcryptjs';
-import { DEFAULT_ACTIVITY_CONFIG, addDays, beijingDay, isShurenStudentId, mondayOf, validateActivityConfig, weekdayLabel } from '../shared/activity.ts';
+import { DEFAULT_ACTIVITY_CONFIG, addDays, beijingDay, bindingStartsOn, isShurenStudentId, mondayOf, shortDate, validateActivityConfig, weekdayLabel } from '../shared/activity.ts';
 import { emptyProfile } from '../shared/profileRules.ts';
 import type { BuddyStatus, LeaderboardResponse, ProfileInput } from '../shared/types.ts';
 
@@ -611,6 +611,75 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     const sampled = (db.prepare("SELECT key FROM settings WHERE key LIKE 'audit_sample_%' ORDER BY key").all() as { key: string }[]).map((row) => row.key.slice('audit_sample_'.length));
     assert.ok(sampled.length > 0 && sampled.every((key) => mondayOf(key) === key), `audit weeks are Mondays: ${sampled.join(',')}`);
     assert.equal(sampled[0], week(0));
+    await saveConfig();
+  });
+
+  // 也会改赛季设置，放在最后
+  await t.test('a pair bound in the days before a mid-week season start scores from its first day, not from the next Monday', async () => {
+    // 规则的日期换算：赛季从周四 11 月 26 日开始
+    const rule = (bound: string) => bindingStartsOn(bound, '2026-11-26');
+    assert.equal(rule('2026-11-19'), '2026-11-26');
+    assert.equal(rule('2026-11-22'), '2026-11-26');
+    assert.equal(rule('2026-11-23'), '2026-11-26', 'bound on the Monday of the opening week: the 26th, not the 30th');
+    assert.equal(rule('2026-11-25'), '2026-11-26');
+    assert.equal(rule('2026-11-26'), '2026-11-30', 'bound on the first day of the season: the next Monday');
+    assert.equal(rule('2026-11-29'), '2026-11-30');
+    assert.equal(rule('2026-11-30'), '2026-12-07');
+    // 赛季从周一开始时和以前一样
+    assert.equal(bindingStartsOn('2026-11-22', '2026-11-23'), '2026-11-23');
+    assert.equal(bindingStartsOn('2026-11-23', '2026-11-23'), '2026-11-30');
+
+    // 赛季明天开始：今天绑定的从明天起计分，私聊里的系统消息和通知也写明天
+    const tomorrow = addDays(today, 1);
+    await saveConfig({ seasonStart: tomorrow });
+    const [a, b] = [createUser(), createUser()];
+    const bound = await bind(a, b);
+    assert.equal(bound.pair?.startsOn, tomorrow);
+    assert.equal(bound.pair?.started, false);
+    assert.equal((db.prepare('SELECT starts_on FROM buddy_pairs WHERE id = ?').get(pairIdOf(a)) as { starts_on: string }).starts_on, tomorrow);
+    const said = `${shortDate(tomorrow)}（${weekdayLabel(tomorrow)}）起计分`;
+    const system = db.prepare("SELECT body FROM messages WHERE match_id = ? AND kind = 'system' AND body LIKE '%已绑定为学习搭子%'").get(bound.matchId) as { body: string };
+    assert.ok(system.body.includes(said), system.body);
+    const note = db.prepare("SELECT body FROM notifications WHERE user_id = ? AND title = '搭子邀请已接受'").get(a.id) as { body: string };
+    assert.ok(note.body.includes(`${shortDate(tomorrow)} 起开始计分`), note.body);
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+    const unbound = db.prepare("SELECT body FROM notifications WHERE user_id = ? AND title = '搭子绑定已解除'").get(b.id) as { body: string };
+    assert.ok(unbound.body.includes(`赛季开始前绑定的从 ${shortDate(tomorrow)}（${weekdayLabel(tomorrow)}）开始计分，之后绑定的从下一个周一开始`), unbound.body);
+
+    // 旧代码在开赛那一周的周一到周三绑定时，记录里存的是下一个周一。这样的组合不用改数据，按绑定日期就按规则算：
+    // 上周四开赛、上周二绑定、记录里写着本周一 —— 上周四到周日的打卡都计分，抽检也看得到它们
+    const lastThursday = addDays(thisMonday, -4);
+    const [c, d] = [createUser(), createUser()];
+    await bind(c, d);
+    db.prepare('UPDATE buddy_pairs SET starts_on = ?, created_at = ? WHERE id = ?').run(thisMonday, `${addDays(thisMonday, -6)} 04:00:00`, pairIdOf(c));
+    const ids: number[] = [];
+    // 两人几乎同时拍：每次都会被标记为可疑，全部进入抽检名单，不靠随机
+    for (let day = lastThursday; day < thisMonday; day = addDays(day, 1)) ids.push(checkin(c, day, '20:00:00'), checkin(d, day, '20:00:01'));
+    await saveConfig({ seasonStart: lastThursday });
+    let st = await status(c);
+    assert.equal(st.pair?.startsOn, lastThursday, 'bound before the season: scoring starts on its first day whatever the stored record says');
+    assert.equal(st.pair?.started, true);
+    assert.equal(st.score?.total, 6, 'Thursday to Sunday: four same-event check-ins, 6 points');
+    const row = (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(c));
+    assert.equal(row.startsOn, lastThursday);
+    assert.deepEqual(row.weeks[0], { week: addDays(thisMonday, -7), count: 4, counted: 4, points: 6 });
+    db.exec("DELETE FROM settings WHERE key LIKE 'audit_sample_%'");
+    assert.equal((await api('/admin/audits', moderator.cookie)).status, 200);
+    const audited = db.prepare(`SELECT checkin_id FROM checkin_audits WHERE checkin_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+    assert.equal(audited.length, ids.length, 'the weekly audit sees their scoring check-ins');
+
+    // 本周进度和 Bonus 也按实际开始计分日：赛季今天开始、昨天绑定、记录里写着下周一
+    db.prepare('UPDATE buddy_pairs SET starts_on = ?, created_at = ? WHERE id = ?').run(addDays(thisMonday, 7), `${addDays(today, -1)} 04:00:00`, pairIdOf(c));
+    db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(c.id, d.id);
+    checkin(c, today, '00:00:01');
+    checkin(d, today, '00:10:00');
+    await saveConfig({ seasonStart: today });
+    st = await status(c);
+    assert.equal(st.pair?.startsOn, today);
+    assert.equal(st.week?.count, 1, 'this week\'s progress counts from the first day of the season');
+    const share = await api('/forum/posts', c.cookie, 'POST', { title: '线代错题总结', body: '我们两人一起整理了线性代数第三章的错题。'.repeat(20), images: [], bonus: true });
+    assert.equal(share.status, 200, share.text);
+    assert.equal((await api('/activity/unbind', c.cookie, 'POST', {})).status, 200);
     await saveConfig();
   });
 });

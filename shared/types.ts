@@ -592,7 +592,7 @@ export interface BuddyStatus {
     id: number;
     partner: BuddyPartner;
     createdAt: string;
-    /** 从这一天（周一）开始计分 */
+    /** 从这一天开始计分（北京时间）：赛季开始前绑定的为赛季第一天（不一定是周一），之后绑定的为下一个周一 */
     startsOn: string;
     started: boolean;
     matchId: number | null;

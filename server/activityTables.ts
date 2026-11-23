@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS buddy_pairs (
   user_a INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   user_b INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'ended')),
-  -- 从这一天（周一，北京时间）开始计分
+  -- 绑定时按当时的设置算出的开始计分日（北京时间）；实际从哪天计分以 server/scoring.ts 的 scoringStart() 为准，不要直接读这一列
   starts_on TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   ended_at TEXT,

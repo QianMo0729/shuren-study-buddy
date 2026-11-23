@@ -1,6 +1,7 @@
 // 搭子绑定：邀请、接受、拒绝、撤回、解绑，以及配对关闭、注销时自动解绑。
-// 规则：一对一；双方确认才生效；从下一个完整自然周（周一）开始计分；任一方可随时解绑，解绑后组合积分清零。
-import { addDays, beijingDay, mondayOf, shortDate, weekdayLabel } from '../shared/activity.ts';
+// 规则：一对一；双方确认才生效；赛季开始前绑定的从赛季第一天开始计分，之后绑定的从下一个完整自然周（周一）开始计分；
+// 任一方可随时解绑，解绑后组合积分清零。
+import { beijingDay, bindingStartsOn, shortDate, weekdayLabel } from '../shared/activity.ts';
 import { HttpError } from './auth.ts';
 import { activityConfig } from './activityConfig.ts';
 import {
@@ -21,11 +22,9 @@ const REINVITE_HOURS = 24;
 
 const nicknameOf = (uid: number) => getProfileRow(uid)?.nickname ?? '同学';
 
-/** 绑定后第一个计分日：下一个周一；赛季还没开始时为赛季第一天 */
+/** 现在绑定的话，第一个计分日：赛季开始前为赛季第一天，之后为下一个周一 */
 export function startsOnFor(now = new Date()): string {
-  const next = addDays(mondayOf(beijingDay(now)), 7);
-  const { seasonStart } = activityConfig();
-  return next < seasonStart ? seasonStart : next;
+  return bindingStartsOn(beijingDay(now), activityConfig().seasonStart);
 }
 
 export function inviteById(id: number): InviteRow | undefined {
@@ -113,7 +112,11 @@ function endPair(pair: PairRow, by: number | null, reason: 'unbind' | 'match_clo
   const match = activeMatchBetween(pair.user_a, pair.user_b);
   if (match && message) addSystemMessage(match.id, message);
   if (notifyOther !== null) {
-    notify(notifyOther, '搭子绑定已解除', '你们的搭子积分已清零。可以在「我的」里邀请新的搭子，新的绑定从下一个周一开始计分。', '/me');
+    const { seasonStart } = activityConfig();
+    const body = beijingDay() < seasonStart
+      ? `你们的搭子积分已清零。可以在「我的」里邀请新的搭子。赛季开始前绑定的从 ${shortDate(seasonStart)}（${weekdayLabel(seasonStart)}）开始计分，之后绑定的从下一个周一开始。`
+      : '你们的搭子积分已清零。可以在「我的」里邀请新的搭子，新的绑定从下一个周一开始计分。';
+    notify(notifyOther, '搭子绑定已解除', body, '/me');
   }
 }
 
