@@ -29,13 +29,54 @@ test('a qualifying individual check-in waits through the inclusive time limit, a
 });
 
 test('the camera and first receipt explain pair rejection even when both first check-ins qualify', () => {
-  for (const receipt of [undefined, at]) {
-    const far = buddyCheckinHint(status({ mine, partner, pairOutcome: 'too_far' }), rules, now, receipt)!;
-    assert.equal(far.tone, 'warn');
-    assert.match(far.text, /相距超过 300 米，今天未计入同时打卡/);
-    const late = buddyCheckinHint(status({ mine, partner, pairOutcome: 'too_late' }), rules, now, receipt)!;
-    assert.match(late.text, /相差超过 30 分钟，今天未计入同时打卡/);
+  const far = status({ mine, partner, pairOutcome: 'too_far' });
+  const late = status({ mine, partner, pairOutcome: 'too_late' });
+  const camera = buddyCheckinHint(far, rules, now)!;
+  assert.equal(camera.tone, 'warn');
+  assert.equal(camera.text, '相距超过 300 米，未计分 · 本次仅社区打卡');
+  assert.match(buddyCheckinHint(late, rules, now)!.text, /相差超过 30 分钟，未计分/);
+  assert.match(buddyCheckinHint(far, rules, now, at)!.text, /相距超过 300 米，今天未计入同时打卡/);
+  assert.match(buddyCheckinHint(late, rules, now, at)!.text, /相差超过 30 分钟，今天未计入同时打卡/);
+});
+
+test('the live camera shows a short waiting status while the day view keeps the place and rules', () => {
+  const waiting = status({ checkinPolicy: 'first_eligible', partner: { ...partner, place: '南方科技大学' } });
+  const camera = buddyCheckinHint(waiting, rules, now)!;
+  assert.equal(camera.text, '搭子 10:00 已打卡');
+  assert.match(camera.details!, /南方科技大学.*最早保留的合格打卡.*30 分钟.*300 米/);
+  assert.equal(camera.details!.match(/300 米/g)?.length, 1);
+  assert.match(buddyDayStatus(waiting, rules, now)!.text, /南方科技大学.*30 分钟.*300 米/);
+  assert.equal(buddyCheckinHint(status({}), rules, now)!.text, '两人今天均未打卡');
+});
+
+test('camera caption guidance follows scoring opportunities even when the partner must retake', () => {
+  const badPartner = { ...partner, counts: false };
+  const badMine = { ...mine, counts: false, issue: 'caption' as const };
+  const day = status({ checkinPolicy: 'first_eligible', partner: badPartner });
+  const firstShot = buddyCheckinHint(day, rules, now)!;
+  assert.equal(firstShot.tone, 'warn');
+  assert.equal(firstShot.canRetake, false);
+  assert.equal(firstShot.canAddScoringCaption, true);
+
+  const cutoff = now + rules.windowMinutes * 60_000;
+  day.today!.mine = badMine;
+  day.today!.partner = partner;
+  assert.equal(buddyCheckinHint(day, rules, cutoff)!.canAddScoringCaption, true);
+  assert.ok(!buddyCheckinHint(day, rules, cutoff + 1)!.canAddScoringCaption);
+  assert.equal(canTakeScoringCheckin(day), true);
+  assert.ok(!buddyCheckinHint(status({ partner: badPartner }), rules, now)!.canAddScoringCaption);
+});
+
+test('the camera omits caption guidance for community-only shots', () => {
+  const noPair = { ...status({}), pair: null, today: null };
+  const waiting = status({});
+  waiting.pair!.started = false;
+  const ended = status({});
+  ended.season.status = 'ended';
+  for (const day of [noPair, waiting, ended, status({ mine }), status({ mine, partner, pairOutcome: 'matched' })]) {
+    assert.ok(!buddyCheckinHint(day, rules, now)?.canAddScoringCaption);
   }
+  assert.equal(buddyCheckinHint(status({}), rules, now)!.canAddScoringCaption, true);
 });
 
 test('both sides of a nonqualifying first check-in remain distinguishable', () => {
@@ -50,15 +91,14 @@ test('an accepted pair event is shown on the first receipt and repeats are commu
   const first = buddyCheckinHint(matched, rules, now, at)!;
   assert.equal(first.text, '你们今天已完成 1 次同时打卡。');
   const later = new Date(now + 60_000).toISOString();
-  for (const receipt of [undefined, later]) {
-    assert.match(buddyCheckinHint(matched, rules, now + 60_000, receipt)!.text, /已完成 1 次同时打卡。本次只记录社区打卡/);
-  }
+  assert.equal(buddyCheckinHint(matched, rules, now + 60_000)!.text, '今日同时打卡已完成 · 本次仅社区打卡');
+  assert.match(buddyCheckinHint(matched, rules, now + 60_000, later)!.text, /已完成 1 次同时打卡。本次只记录社区打卡/);
 });
 
 test('older responses can confirm a match only from the dated weekly event', () => {
   const old = status({ mine, partner });
   const event = { date, mine: '10:00', theirs: '10:00', place: '图书馆', distance: 50 };
-  assert.match(buddyCheckinHint(old, rules, now)!.text, /未列入本周同时打卡记录/);
+  assert.match(buddyCheckinHint(old, rules, now)!.text, /今日暂无同时打卡记录/);
   old.week = { ...week, events: [{ ...event, date: '2026-11-25' }] };
   assert.notEqual(buddyCheckinHint(old, rules, now)!.tone, 'good');
   old.week.events.push(event);

@@ -224,6 +224,24 @@
 @utility safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+/* 手机横屏时，取景框和快门各占一侧，给画面留出高度。 */
+@media (orientation: landscape) and (min-width: 480px) and (max-height: 500px) {
+  .checkin-camera {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 40%);
+    grid-template-rows: auto 1fr;
+    align-items: center;
+  }
+  .checkin-camera-header {
+    grid-column: 1 / -1;
+  }
+  .checkin-camera-preview {
+    align-self: stretch;
+    margin-bottom: 0.5rem;
+  }
+}
+
 @utility glass {
   background: color-mix(in oklab, var(--paper) 90%, transparent);
   backdrop-filter: saturate(1.6) blur(18px);

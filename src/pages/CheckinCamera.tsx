@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Camera, CameraOff, MapPin, ShieldCheck } from 'lucide-react';
+import { Camera, CameraOff, MapPin } from 'lucide-react';
 import { FlipIcon, PencilIcon, XIcon } from '../components/icons';
 import type { BuddyStatus, Checkin, CheckinStats, CheckinVisibility } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
@@ -96,7 +96,10 @@ export function CheckinCamera() {
   }, [camera.state]);
 
   const scoringShot = canTakeScoringCheckin(buddy);
-  const captionShort = captionLength(caption) < activity.config.captionMin;
+  const hint = buddy && snapshot ? buddyCheckinHint(buddy, activity.config, snapshot.readAt + session.offset, done?.checkin.stampedAt, done?.checkin.id) : null;
+  const showCaptionRequirement = hint?.canAddScoringCaption && activity.config.captionMin > 0;
+  const captionRemaining = activity.config.captionMin - captionLength(caption);
+  const captionShort = captionRemaining > 0;
   const [captionWarned, setCaptionWarned] = useState(false);
   const [locationWarned, setLocationWarned] = useState(false);
 
@@ -111,13 +114,14 @@ export function CheckinCamera() {
     if (scoringShot && captionShort && !captionWarned) {
       setCaptionWarned(true);
       setNoteOpen(true);
-      toast.info('先写一句学了什么', `说明至少 ${activity.config.captionMin} 个字，这张照片才能参与搭子计分。`);
+      if (showCaptionRequirement) toast.info('写一句学了什么', `搭子计分需至少 ${activity.config.captionMin} 个字。`);
+      else toast.info('说明可留空', '点「完成」后再按快门即可打卡。');
       return;
     }
     // 定位误差太大就没法核对两人是否在同一处，这次打卡不计分：先提醒一次
     if (scoringShot && distanceOn && !geo.precise && !locationWarned) {
       setLocationWarned(true);
-      toast.info('定位还不够准', `现在误差约 ±${Math.ceil(location.accuracy)} 米，超过 ${activity.config.accuracyMeters} 米这次不计分。到窗边等几秒会更准；仍要拍就再按一次快门。`);
+      toast.info(`定位误差约 ${Math.ceil(location.accuracy)} 米`, `计分要求 ${activity.config.accuracyMeters} 米以内。可等定位改善，或再按快门直接提交。`);
       return;
     }
     // 按下快门的这一刻取帧（裁剪放大时只取画面中间，与取景框一致）
@@ -159,8 +163,6 @@ export function CheckinCamera() {
     return () => { alive = false; };
   }, []);
 
-  const hint = buddy && snapshot ? buddyCheckinHint(buddy, activity.config, snapshot.readAt + session.offset, done?.checkin.stampedAt, done?.checkin.id) : null;
-
   if (done) {
     const resultHint = hint?.text ?? (buddy === null ? '暂时无法读取搭子打卡结果，请稍后在「我的搭子」查看。' : '正在核对搭子打卡结果…');
     const retake = () => {
@@ -180,13 +182,14 @@ export function CheckinCamera() {
     );
   }
 
+  const captionHint = captionShort ? `搭子计分还需 ${captionRemaining} 个字。` : '已满足搭子计分字数。';
   return (
     // 全屏黑底相机：顶部关闭与楼栋，中间取景（右下角实时水印），底部快门
-    <div className="fixed inset-0 z-[60] flex flex-col bg-[#0B0D0C] text-white">
+    <div className="checkin-camera fixed inset-0 z-[60] flex flex-col overflow-y-auto bg-[#0B0D0C] pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] text-white">
       <p className="sr-only" role="status" aria-live="polite">{status}</p>
 
-      <div className="flex h-11 shrink-0 items-center justify-between gap-3 px-4 mt-[calc(env(safe-area-inset-top)+10px)]">
-        <button type="button" onClick={back} aria-label="关闭" className="grid size-9 place-items-center rounded-full bg-white/14">
+      <div className="checkin-camera-header mt-2 flex h-11 shrink-0 items-center justify-between gap-3 px-4">
+        <button type="button" onClick={back} aria-label="关闭" className="grid size-11 shrink-0 place-items-center rounded-full bg-white/14">
           <XIcon size={16} width={2.4} />
         </button>
         {/* 地点由定位自动识别，不能手选 */}
@@ -195,106 +198,108 @@ export function CheckinCamera() {
           <span className="sr-only">水印上的地点：</span>
           <span className="truncate">{geo.location ? watermarkPlace : geo.state.status === 'error' ? '无法定位' : '正在定位…'}</span>
         </p>
-        <button type="button" onClick={() => setNoteOpen(true)} aria-label="说明与可见范围" className="grid size-9 place-items-center rounded-full bg-white/14">
+        <button type="button" onClick={() => setNoteOpen(true)} aria-label="说明与可见范围" className="grid size-11 shrink-0 place-items-center rounded-full bg-white/14">
           <PencilIcon size={17} width={2} />
         </button>
       </div>
 
-      <div className="mt-2.5 flex min-h-0 flex-1 items-center justify-center">
-        <div className="w-full">
-          {/* 保持视频挂载并参与布局；iPhone 恢复播放时不能从 display:none 状态启动。 */}
-          <Viewfinder
-            videoRef={camera.videoRef}
-            width={camera.state.status === 'live' ? camera.state.width : 0}
-            height={camera.state.status === 'live' ? camera.state.height : 0}
-            live={live}
-            placeLabel={watermarkPlace}
-            clockOffset={session.offset}
-            zoom={camera.zoom}
-            digitalZoom={camera.digitalZoom}
-            zoomRange={camera.zoomRange}
-            onZoom={camera.setZoom}
-          >
-            {camera.state.status === 'error' ? (
-              <div className="absolute inset-0 overflow-y-auto">
-                <CameraError title={camera.state.problem.title} desc={camera.state.problem.desc} onRetry={camera.state.problem.retry ? camera.retry : undefined} />
-              </div>
-            ) : camera.state.status === 'blocked' ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center">
-                <Camera size={28} aria-hidden />
-                <p className="text-[15px]">点击后开启相机画面</p>
-                <Button type="button" onClick={camera.resumePreview} variant="primary">开启相机预览</Button>
-              </div>
-            ) : !live && (
-              <div className="absolute inset-0 grid place-items-center text-[14px] text-white/80">
-                <span className="inline-flex items-center gap-2">
-                  <Spinner className="text-white/80" />
-                  {camera.state.status === 'paused' ? '页面在后台，相机已暂停' : '正在打开摄像头…'}
-                </span>
-              </div>
+      <div className="checkin-camera-preview mt-2 flex min-h-24 flex-1 items-center justify-center [container-type:size]">
+        {/* 保持视频挂载并参与布局；iPhone 恢复播放时不能从 display:none 状态启动。 */}
+        <Viewfinder
+          videoRef={camera.videoRef}
+          width={camera.state.status === 'live' ? camera.state.width : 0}
+          height={camera.state.status === 'live' ? camera.state.height : 0}
+          live={live}
+          placeLabel={watermarkPlace}
+          clockOffset={session.offset}
+          zoom={camera.zoom}
+          digitalZoom={camera.digitalZoom}
+          zoomRange={camera.zoomRange}
+          onZoom={camera.setZoom}
+        >
+          {camera.state.status === 'error' ? (
+            <div className="absolute inset-0 overflow-y-auto">
+              <CameraError title={camera.state.problem.title} desc={camera.state.problem.desc} onRetry={camera.state.problem.retry ? camera.retry : undefined} />
+            </div>
+          ) : camera.state.status === 'blocked' ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center">
+              <Camera size={28} aria-hidden />
+              <p className="text-[15px]">点击后开启相机画面</p>
+              <Button type="button" onClick={camera.resumePreview} variant="primary">开启相机预览</Button>
+            </div>
+          ) : !live && (
+            <div className="absolute inset-0 grid place-items-center text-[14px] text-white/80">
+              <span className="inline-flex items-center gap-2">
+                <Spinner className="text-white/80" />
+                {camera.state.status === 'paused' ? '页面在后台，相机已暂停' : '正在打开摄像头…'}
+              </span>
+            </div>
+          )}
+          <AnimatePresence>
+            {flash > 0 && (
+              <motion.div key={flash} className="pointer-events-none absolute inset-0 bg-white" initial={{ opacity: 0.85 }} animate={{ opacity: 0 }} transition={{ duration: 0.35, ease }} />
             )}
-            <AnimatePresence>
-              {flash > 0 && (
-                <motion.div key={flash} className="pointer-events-none absolute inset-0 bg-white" initial={{ opacity: 0.85 }} animate={{ opacity: 0 }} transition={{ duration: 0.35, ease }} />
-              )}
-            </AnimatePresence>
-            {busy && (
-              <div className="absolute inset-0 grid place-items-center bg-black/45 text-[14px]">
-                <span className="inline-flex items-center gap-2"><Spinner className="text-white" />服务器盖章中…</span>
-              </div>
-            )}
-          </Viewfinder>
-        </div>
+          </AnimatePresence>
+          {busy && (
+            <div className="absolute inset-0 grid place-items-center bg-black/45 text-[14px]">
+              <span className="inline-flex items-center gap-2"><Spinner className="text-white" />服务器盖章中…</span>
+            </div>
+          )}
+        </Viewfinder>
       </div>
 
-      <p className="mt-3 shrink-0 px-6 text-center text-[13px] leading-5 text-white/72">
-        {live && !session.ready && !busy && session.error
-          ? <span className="text-[#ff8a7a]" role="alert">{session.error}</span>
-          : live ? <LocationLine geo={geo} limit={activity.config.accuracyMeters} scoring={scoringShot && distanceOn} />
-          : <>拍下正在学习的自己和学习内容 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>}
-      </p>
-      {hint && (
-        <p className={`mx-4 mt-2 max-w-[30em] shrink-0 self-center rounded-2xl px-3.5 py-1.5 text-center text-[13px] leading-5 ${hint.tone === 'good' ? 'bg-[#2f8f6b]/85 text-white' : hint.tone === 'warn' ? 'bg-white/14 text-[#ffcf8a]' : 'bg-white/14 text-white/85'}`}>
-          {hint.text}
-          {scoringShot && captionShort && hint.tone !== 'warn' && `先点右上角写一句学了什么（至少 ${activity.config.captionMin} 个字）。`}
+      <div className="flex shrink-0 flex-col">
+        <p className="mt-2 shrink-0 px-4 text-center text-[13px] leading-5 text-white/72">
+          {live && !session.ready && !busy && session.error
+            ? <span className="text-[#ff8a7a]" role="alert">{session.error}</span>
+            : live ? <LocationLine geo={geo} limit={activity.config.accuracyMeters} scoring={scoringShot && distanceOn} />
+            : photoGuide}
         </p>
-      )}
+        {hint && (
+          <p className={`mx-4 mt-2 max-w-[30em] shrink-0 self-center rounded-2xl px-3.5 py-1.5 text-center text-[13px] leading-5 ${hint.tone === 'good' ? 'bg-[#2f8f6b]/85 text-white' : hint.tone === 'warn' ? 'bg-white/14 text-[#ffcf8a]' : 'bg-white/14 text-white/85'}`}>
+            {hint.text}
+            {showCaptionRequirement && captionShort && (
+              <> · <button type="button" className="text-white underline underline-offset-2" onClick={() => setNoteOpen(true)}>写说明（至少 {activity.config.captionMin} 字）</button></>
+            )}
+          </p>
+        )}
 
-      <div className="mt-5 mb-[calc(env(safe-area-inset-bottom)+28px)] grid shrink-0 grid-cols-3 items-center">
-        <div className="flex justify-center">
-          {lastPhoto ? (
-            <Link to="/me/content?view=checkins" aria-label="我的打卡" className="size-11 overflow-hidden rounded-[10px] border-[1.5px] border-white/80">
-              <img src={fileUrl(lastPhoto)} alt="" className="h-full w-full object-cover" />
-            </Link>
-          ) : <span className="size-11" aria-hidden />}
-        </div>
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => void shoot()}
-            disabled={!live || busy || !geo.location}
-            aria-label={geo.location ? '拍照并提交打卡' : '正在定位，定位成功后才能拍照'}
-            className="size-[78px] rounded-full border-4 border-white p-1 transition-transform active:scale-95 disabled:opacity-40"
-          >
-            <span className="block h-full w-full rounded-full bg-white" />
-          </button>
-        </div>
-        <div className="flex justify-center">
-          {camera.canSwitch ? (
+        <div className="my-[clamp(8px,2dvh,20px)] grid shrink-0 grid-cols-3 items-center">
+          <div className="flex justify-center">
+            {lastPhoto ? (
+              <Link to="/me/content?view=checkins" aria-label="我的打卡" className="size-11 overflow-hidden rounded-[10px] border-[1.5px] border-white/80">
+                <img src={fileUrl(lastPhoto)} alt="" className="h-full w-full object-cover" />
+              </Link>
+            ) : <span className="size-11" aria-hidden />}
+          </div>
+          <div className="flex justify-center">
             <button
               type="button"
-              onClick={camera.switchCamera}
-              disabled={busy}
-              aria-label={camera.facing === 'environment' ? '切换到前置摄像头' : '切换到后置摄像头'}
-              className="grid size-11 place-items-center rounded-full bg-white/14 disabled:opacity-40"
+              onClick={() => void shoot()}
+              disabled={!live || busy || !geo.location}
+              aria-label={geo.location ? '拍照并提交打卡' : '正在定位，定位成功后才能拍照'}
+              className="size-[78px] shrink-0 rounded-full border-4 border-white p-1 transition-transform active:scale-95 disabled:opacity-40"
             >
-              <FlipIcon size={22} width={2} />
+              <span className="block h-full w-full rounded-full bg-white" />
             </button>
-          ) : (
-            <button type="button" onClick={camera.retry} disabled={busy} aria-label="重新开启相机" className="grid size-11 place-items-center rounded-full bg-white/14 disabled:opacity-40">
-              <FlipIcon size={22} width={2} />
-            </button>
-          )}
+          </div>
+          <div className="flex justify-center">
+            {camera.canSwitch ? (
+              <button
+                type="button"
+                onClick={camera.switchCamera}
+                disabled={busy}
+                aria-label={camera.facing === 'environment' ? '切换到前置摄像头' : '切换到后置摄像头'}
+                className="grid size-11 place-items-center rounded-full bg-white/14 disabled:opacity-40"
+              >
+                <FlipIcon size={22} width={2} />
+              </button>
+            ) : (
+              <button type="button" onClick={camera.retry} disabled={busy} aria-label="重新开启相机" className="grid size-11 place-items-center rounded-full bg-white/14 disabled:opacity-40">
+                <FlipIcon size={22} width={2} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -303,9 +308,7 @@ export function CheckinCamera() {
           <Field
             label="说明"
             optional
-            hint={captionLength(caption) >= activity.config.captionMin
-              ? '参加搭子打卡的话，这次打卡的说明已经够计分了。'
-              : `参加搭子打卡的话，写一句学了什么（至少 ${activity.config.captionMin} 个字）才计分${caption.trim() ? `，还差 ${activity.config.captionMin - captionLength(caption)} 个字` : ''}。`}
+            hint={showCaptionRequirement && captionHint}
           >
             <Textarea
               id={captionId}
@@ -320,13 +323,17 @@ export function CheckinCamera() {
           <Field label="谁可以看到" hint={visibility === 'all' ? '登录的同学都能看到（与你互相排除的人除外）。' : '只有和你互相感兴趣、正在私聊的同学能看到（绑定的搭子也在其中）。'}>
             <Segmented options={VISIBILITY_OPTIONS} value={visibility} onChange={(v) => setVisibility(v as CheckinVisibility)} />
           </Field>
+          {hint?.details && (
+            <details className="text-[13px] leading-relaxed text-ink-2">
+              <summary className="cursor-pointer font-semibold">搭子打卡详情</summary>
+              <p className="mt-1">{hint.details}</p>
+            </details>
+          )}
           <p className="text-[13px] leading-relaxed text-ink-3">
             {placeHint(geo)}地点由定位自动识别，不能手选。
-            {distanceOn && `参加搭子打卡的话，两人相距 ${activity.config.distanceMeters} 米以内拍才算一次。`}
             经纬度只用来核对距离，不给任何同学看。
           </p>
           <PhotoRules />
-          <WhyLive />
           <Button variant="primary" size="lg" className="w-full" onClick={() => setNoteOpen(false)}>完成</Button>
         </div>
       </Modal>
@@ -363,62 +370,57 @@ function placeHint(geo: ReturnType<typeof useGeoLabel>) {
   return '正在定位。';
 }
 
+const photoGuide = <>手或手臂和学习内容同框 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>;
+
 /**
  * 取景框下方的一行：定位状态优先（没定位不能拍），定位正常时显示拍摄要求。
  * 定位误差太大时，计分打卡会提醒这次可能不计分。
  */
 function LocationLine({ geo, limit, scoring }: { geo: ReturnType<typeof useGeoLabel>; limit: number; scoring: boolean }) {
-  const rules = <>拍下正在学习的自己和学习内容 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>;
+  const [helpOpen, setHelpOpen] = useState(false);
   if (geo.state.status === 'error' && !geo.location) {
     return (
-      <span className="text-[#ffcf8a]" role="alert">
-        {geo.state.denied
-          ? '打卡需要定位。iPhone：设置 → 隐私与安全性 → 定位服务 → Safari 网站，选「使用 App 期间」并打开「精确位置」；安卓：在浏览器的网站设置里允许位置信息。'
-          : geo.state.message}
-        {' '}
-        <button type="button" onClick={geo.retry} className="text-white underline underline-offset-2">重新定位</button>
-      </span>
+      <>
+        <span role="alert" className="text-[#ffcf8a]">{geo.state.denied ? '请允许定位' : geo.state.message}</span>
+        {geo.state.denied && (
+          <>
+            {' · '}<button type="button" onClick={() => setHelpOpen(true)} className="text-white underline underline-offset-2">开启方法</button>
+            <Modal open={helpOpen} onClose={() => setHelpOpen(false)} title="如何允许定位" size="sm">
+              <div className="space-y-2 px-5 pt-2 pb-5 text-[14px] leading-relaxed text-ink">
+                <p>iPhone 在「设置 → 隐私与安全性 → 定位服务」中选择当前浏览器，允许使用期间定位，并打开「精确位置」。使用 Safari 时选择「Safari 网站」。</p>
+                <p>安卓在浏览器的网站设置中允许本站访问位置信息，并确认系统已给浏览器定位权限。</p>
+              </div>
+            </Modal>
+          </>
+        )}
+        {' · '}<button type="button" onClick={geo.retry} className="text-white underline underline-offset-2">重新定位</button>
+      </>
     );
   }
-  if (!geo.location) return <span className="inline-flex items-center gap-1.5"><Spinner className="text-white/72" />正在定位，定位成功后才能拍照</span>;
+  if (!geo.location) return <span className="inline-flex items-center gap-1.5"><Spinner className="text-white/72" />定位后即可拍照</span>;
   if (!geo.precise) {
     const accuracy = Math.ceil(geo.location.accuracy);
-    // 误差上千米通常是关掉了「精确位置」
-    const tip = accuracy > 1000 ? '可能关掉了「精确位置」，请在系统的定位设置里打开' : '到窗边等几秒会更准';
-    return <span className="text-[#ffcf8a]">定位误差约 ±{accuracy} 米{scoring ? `，超过 ${limit} 米不计分` : ''}。{tip}。</span>;
+    const tip = accuracy > 1000 ? '请开启精确位置' : '靠窗定位更准';
+    return <span className="text-[#ffcf8a]">误差约 {accuracy} 米 · {scoring ? `超过 ${limit} 米不计分` : tip}</span>;
   }
-  return rules;
+  return photoGuide;
 }
 
 /** 计分打卡的照片要求（与规则页同一份文字） */
 function PhotoRules() {
   return (
-    <section aria-labelledby="photo-rules" className="rounded-md border border-line bg-surface p-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 id="photo-rules" className="text-[14px] font-semibold text-ink">计分打卡的照片要求</h2>
-        <Link to="/rules#photo" className="text-[12.5px] text-ink-3 underline-offset-2 hover:text-ink hover:underline">完整规则</Link>
-      </div>
+    <details className="text-[14px] text-ink">
+      <summary className="cursor-pointer font-semibold">拍摄要求</summary>
       <ol className="mt-2 space-y-1 text-[13.5px] leading-relaxed text-ink-2">
         {PHOTO_MUST.map((rule, index) => (
           <li key={rule.title} className="flex gap-2"><span className="tabular text-ink-4">{index + 1}</span><span><b className="font-semibold text-ink">{rule.title}</b>：{rule.desc}</span></li>
         ))}
       </ol>
-      <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">只拍桌面或风景、翻拍旧图、屏幕上是游戏视频、一个人替两人拍，都会被判为无效。</p>
-    </section>
-  );
-}
-
-/** 为什么只能现场拍摄 */
-function WhyLive() {
-  return (
-    <div className="rounded-md bg-paper-2 px-4 py-3 text-[13px] leading-relaxed text-ink-2">
-      <p className="flex items-center gap-1.5 font-semibold text-ink">
-        <ShieldCheck size={15} aria-hidden /> 为什么不能从相册上传？
+      <p className="mt-2 text-[13px] leading-relaxed text-ink-3">
+        请用相机现场拍摄。提交后，照片会盖上拍摄地点和北京时间。{' '}
+        <Link to="/rules#photo" className="underline underline-offset-2">完整规则</Link>
       </p>
-      <p className="mt-1">
-        打卡记录的是「此时此地正在学习」。照片只能用网页相机现场拍摄，拍摄时间（北京时间）和地点由服务器盖章在照片右下角；相册里的旧照片无法证明这一点，所以不支持上传图片。
-      </p>
-    </div>
+    </details>
   );
 }
 

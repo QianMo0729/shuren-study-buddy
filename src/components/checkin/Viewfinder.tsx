@@ -4,7 +4,7 @@ import { isCameraPreviewReady } from './cameraPreview';
 import { beijingStamp, paintPreview, previewLayout } from './watermarkPreview';
 
 /**
- * 全宽取景框：视频按原始比例完整显示（所见即所拍），右下角实时预览水印。
+ * 取景框按剩余宽高等比显示完整画面，右下角实时预览水印。
  * 水印预览按与服务器相同的规则排版，并按画面亮度逐点取黑/白；时间用服务器时间校准。
  * 双指在取景框里缩放 = 相机变焦（页面本身不缩放）。
  */
@@ -70,13 +70,12 @@ export function Viewfinder({ videoRef, width, height, live, placeLabel, clockOff
     return () => cancelAnimationFrame(raf);
   }, [live, layout, cap.width, cap.height, placeLabel, videoRef, digitalZoom]);
 
-  const ratio = cap.width / cap.height;
   const pct = (v: number, of: number) => `${(v / of) * 100}%`;
 
   return (
     <div
-      className="relative mx-auto w-full touch-none overflow-hidden bg-[#0c1415] select-none sm:rounded-md"
-      style={{ aspectRatio: `${cap.width} / ${cap.height}`, maxWidth: `calc(68dvh * ${ratio.toFixed(4)})` }}
+      className={`relative w-full overflow-hidden bg-[#0c1415] select-none sm:rounded-md ${live ? 'touch-none' : 'touch-pan-y'}`}
+      style={{ aspectRatio: `${cap.width} / ${cap.height}`, maxWidth: `calc(100cqh * ${cap.width / cap.height})` }}
       {...pinch.handlers}
     >
       <video
