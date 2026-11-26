@@ -1,0 +1,9 @@
+{
+  "name": "shuren-dazi-promo",
+  "private": true,
+  "type": "module",
+  "description": "树仁搭子宣传片：film.html 逐帧渲染成视频",
+  "dependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

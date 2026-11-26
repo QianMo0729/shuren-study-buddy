@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>打卡照片场景（渲染成 JPEG 后由 stamp.ts 盖水印）</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:960px;height:1280px;overflow:hidden;background:#000}
+.scene{position:absolute;inset:0;overflow:hidden;display:none}
+.on{display:block}
+/* 图书馆的浅色木桌 */
+.desk{position:absolute;inset:-40px;
+  background:
+    repeating-linear-gradient(87deg, rgba(120,80,40,.0) 0 22px, rgba(120,80,40,.07) 22px 24px, rgba(120,80,40,0) 24px 61px, rgba(255,240,210,.06) 61px 63px),
+    repeating-linear-gradient(91deg, rgba(90,60,30,.05) 0 3px, transparent 3px 9px),
+    linear-gradient(100deg,#D5B489,#C9A678 45%,#C29E6F)}
+.light{position:absolute;inset:0;background:radial-gradient(900px 760px at 28% 18%, rgba(255,246,226,.55), rgba(255,246,226,0) 70%)}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse 80% 75% at 50% 46%, transparent 55%, rgba(40,24,10,.42) 100%)}
+.shadow{box-shadow:0 30px 50px -18px rgba(60,35,10,.55),0 6px 14px -4px rgba(60,35,10,.35)}
+/* 笔记本 */
+.nb{position:absolute;width:820px;height:600px;border-radius:10px;background:#F7F2E6}
+.nb .pg{position:absolute;top:0;bottom:0;width:50%;
+  background:repeating-linear-gradient(180deg, transparent 0 41px, rgba(70,110,170,.22) 41px 43px);background-position:0 60px}
+.nb .pg.l{left:0;border-radius:10px 0 0 10px}
+.nb .pg.r{right:0;border-radius:0 10px 10px 0}
+.nb .gut{position:absolute;left:50%;top:0;bottom:0;width:60px;margin-left:-30px;background:linear-gradient(90deg,transparent,rgba(80,60,30,.16) 45%,rgba(80,60,30,.22) 50%,rgba(80,60,30,.16) 55%,transparent)}
+.hand{font-family:"Hannotate SC","HanziPen SC",sans-serif;color:#22345A;position:absolute;white-space:nowrap}
+/* 教材 */
+.book{position:absolute;width:780px;height:560px;border-radius:6px;background:#FBFAF6}
+.book .pg{position:absolute;top:0;bottom:0;width:50%;padding:46px 44px}
+.book .pg.r{left:50%}
+.book .gut{position:absolute;left:50%;top:0;bottom:0;width:70px;margin-left:-35px;background:linear-gradient(90deg,transparent,rgba(60,50,40,.18) 48%,rgba(60,50,40,.24) 50%,rgba(60,50,40,.18) 52%,transparent)}
+.print{font-family:"PingFang SC",sans-serif;color:#2B2A27}
+.ln{height:9px;border-radius:2px;background:#C9C6BE;margin-top:15px}
+.hl{background:rgba(255,226,60,.6)}
+.pen{position:absolute;height:22px;border-radius:11px;background:linear-gradient(180deg,#3B3E46,#1E2026 60%,#2D3038)}
+.pen:after{content:"";position:absolute;right:-26px;top:5px;border-left:28px solid #B9BCC2;border-top:6px solid transparent;border-bottom:6px solid transparent}
+.marker{position:absolute;height:34px;border-radius:9px;background:linear-gradient(180deg,#FFE45C,#F2C820)}
+.cup{position:absolute;width:190px;height:190px;border-radius:50%;background:radial-gradient(circle at 50% 50%, #5A3A22 0 58%, #F2EEE8 59% 70%, #E2DDD5 71%)}
+.laptop{position:absolute;border-radius:14px;background:linear-gradient(180deg,#9A9DA3,#7E8187)}
+.screen{position:absolute;border-radius:8px;background:#1D2128;overflow:hidden;padding:22px 26px;font:500 17px/1.7 Menlo,monospace;color:#9AA3B2;white-space:pre}
+.screen b{color:#7FC3A8;font-weight:500}.screen i{color:#E2B26A;font-style:normal}.screen em{color:#C595E0;font-style:normal}
+.sticky{position:absolute;width:190px;height:190px;background:#FBE68A;box-shadow:0 14px 22px -10px rgba(60,40,10,.45)}
+.sleeve{position:absolute;border-radius:60px}
+</style>
+</head>
+<body>
+
+<!-- A：白鹭的照片，18:04 在琳恩图书馆。笔记本上的二叉树遍历 -->
+<div class="scene" id="a">
+  <div class="desk"></div>
+  <div class="laptop shadow" style="left:430px;top:-260px;width:640px;height:420px;transform:rotate(7deg)">
+    <div class="screen" style="left:24px;right:24px;top:20px;bottom:36px"><em>void</em> <b>inorder</b>(Node *t) {
+  <em>if</em> (!t) <em>return</em>;
+  <b>inorder</b>(t-&gt;left);
+  <i>visit</i>(t);
+  <b>inorder</b>(t-&gt;right);
+}</div>
+  </div>
+  <div class="nb shadow" style="left:70px;top:330px;transform:rotate(-5deg)">
+    <div class="pg l"></div><div class="pg r"></div><div class="gut"></div>
+    <div class="hand" style="left:44px;top:34px;font-size:40px;font-weight:700">二叉树的遍历</div>
+    <svg style="position:absolute;left:30px;top:130px" width="380" height="330" viewBox="0 0 380 330" fill="none" stroke="#22345A" stroke-width="3.2" stroke-linecap="round">
+      <path d="M190 52 L104 132 M192 54 L282 130 M100 170 L58 246 M108 170 L150 246 M284 168 L320 246"/>
+      <g font-family="Hannotate SC" font-size="34" fill="#22345A" stroke="none" text-anchor="middle">
+        <circle cx="190" cy="34" r="28" fill="#F7F2E6" stroke="#22345A"/><text x="190" y="46">A</text>
+        <circle cx="104" cy="150" r="28" fill="#F7F2E6" stroke="#22345A"/><text x="104" y="162">B</text>
+        <circle cx="282" cy="148" r="28" fill="#F7F2E6" stroke="#22345A"/><text x="282" y="160">C</text>
+        <circle cx="54" cy="266" r="28" fill="#F7F2E6" stroke="#22345A"/><text x="54" y="278">D</text>
+        <circle cx="156" cy="266" r="28" fill="#F7F2E6" stroke="#22345A"/><text x="156" y="278">E</text>
+        <circle cx="324" cy="266" r="28" fill="#F7F2E6" stroke="#22345A"/><text x="324" y="278">F</text>
+      </g>
+    </svg>
+    <div class="hand" style="left:452px;top:96px;font-size:31px;line-height:84px">前序：A B D E C F<br>中序：D B E A C F<br>后序：D E B F C A<br><span style="color:#B8392A">递归 → 用栈改写？</span></div>
+  </div>
+  <div class="pen shadow" style="left:500px;top:900px;width:330px;transform:rotate(-32deg)"></div>
+  <div class="cup shadow" style="left:-50px;top:1010px"></div>
+  <div class="sleeve" style="left:640px;top:1120px;width:420px;height:240px;background:linear-gradient(160deg,#2F4A57,#22343D);transform:rotate(-18deg);box-shadow:0 -10px 40px rgba(0,0,0,.25)"></div>
+  <div class="light"></div><div class="vig"></div>
+</div>
+
+<!-- B：木棉的照片，18:21 在琳恩图书馆。教材、荧光笔、便利贴 -->
+<div class="scene" id="b">
+  <div class="desk" style="filter:hue-rotate(-4deg) brightness(.97)"></div>
+  <div class="book shadow" style="left:96px;top:250px;transform:rotate(4deg)">
+    <div class="pg l print">
+      <div style="font:600 30px/1.2 'PingFang SC';white-space:nowrap">第 6 章　树和二叉树</div>
+      <div style="font:500 22px/1 'PingFang SC';color:#6B6A66;margin-top:18px">6.3　遍历二叉树</div>
+      <div class="ln" style="width:96%;margin-top:30px"></div><div class="ln hl" style="width:88%"></div><div class="ln hl" style="width:70%"></div><div class="ln" style="width:92%"></div><div class="ln" style="width:84%"></div><div class="ln" style="width:95%"></div><div class="ln" style="width:60%"></div>
+      <div class="ln" style="width:90%;margin-top:30px"></div><div class="ln" style="width:94%"></div><div class="ln" style="width:76%"></div>
+    </div>
+    <div class="pg r print">
+      <svg width="300" height="190" viewBox="0 0 300 190" fill="none" stroke="#2B2A27" stroke-width="2.2">
+        <path d="M150 30 L80 92 M150 30 L222 92 M80 92 L44 156 M80 92 L118 156 M222 92 L258 156"/>
+        <g fill="#FBFAF6"><circle cx="150" cy="26" r="18"/><circle cx="80" cy="96" r="18"/><circle cx="222" cy="96" r="18"/><circle cx="44" cy="160" r="16"/><circle cx="118" cy="160" r="16"/><circle cx="258" cy="160" r="16"/></g>
+      </svg>
+      <div style="font:400 17px/1 'PingFang SC';color:#6B6A66;margin-top:8px;text-align:center;width:300px">图 6.9　二叉树示例</div>
+      <div class="ln" style="width:94%;margin-top:30px"></div><div class="ln" style="width:86%"></div><div class="ln" style="width:92%"></div><div class="ln" style="width:58%"></div>
+    </div>
+    <div class="gut"></div>
+  </div>
+  <div class="sticky" style="left:690px;top:120px;transform:rotate(8deg)"><div class="hand" style="left:22px;top:30px;font-size:30px;line-height:52px;color:#2B2A27">周三 18:00<br>图书馆<br>和白鹭 ✓</div></div>
+  <div class="marker shadow" style="left:150px;top:900px;width:300px;transform:rotate(24deg)"></div>
+  <div class="laptop shadow" style="left:-300px;top:930px;width:620px;height:420px;transform:rotate(-12deg)">
+    <div class="screen" style="left:24px;right:24px;top:20px;bottom:36px;font-size:16px">        <em>while</em> (t || !s.<b>empty</b>()) {
+            <em>while</em> (t) { s.<b>push</b>(t); t = t-&gt;left; }
+            t = s.<b>top</b>(); s.<b>pop</b>();
+            <i>visit</i>(t);</div>
+  </div>
+  <div class="sleeve" style="left:600px;top:1080px;width:460px;height:260px;background:linear-gradient(200deg,#C9C2B4,#ABA392);transform:rotate(22deg);box-shadow:0 -10px 40px rgba(0,0,0,.2)"></div>
+  <div class="light" style="background:radial-gradient(900px 760px at 70% 22%, rgba(255,246,226,.5), rgba(255,246,226,0) 70%)"></div><div class="vig"></div>
+</div>
+
+<script>
+const id=new URLSearchParams(location.search).get('scene')||'a';
+document.getElementById(id).classList.add('on');
+window.READY=document.fonts.ready.then(()=>true);
+</script>
+</body>
+</html>
