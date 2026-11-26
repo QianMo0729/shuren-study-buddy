@@ -586,6 +586,7 @@ export interface BuddyWeekEvent {
 
 /** 当天第一次打卡不能计分的原因 */
 export type DayCheckinIssue = 'deleted' | 'taken_down' | 'invalid' | 'caption' | 'location';
+export type PairCheckinOutcome = 'matched' | 'too_late' | 'too_far';
 
 export interface BuddyStatus {
   pair: {
@@ -615,6 +616,8 @@ export interface BuddyStatus {
     mine: { at: string; counts: boolean; issue: DayCheckinIssue | null } | null;
     /** place：搭子打卡照片上的地点 */
     partner: { at: string; counts: boolean; place: string } | null;
+    /** 计分期内双方首卡都合格时，返回当天组合是否同时打卡成功。 */
+    pairOutcome?: PairCheckinOutcome | null;
     /** 今天两人问卷里都有空的时段（PERIODS 下标） */
     free: number[];
   } | null;

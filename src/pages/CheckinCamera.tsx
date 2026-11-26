@@ -3,19 +3,19 @@ import { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Camera, CameraOff, MapPin, ShieldCheck } from 'lucide-react';
 import { FlipIcon, PencilIcon, XIcon } from '../components/icons';
-import type { BuddyStatus, Checkin, CheckinStats, CheckinVisibility, DayCheckinIssue } from '../../shared/types';
+import type { BuddyStatus, Checkin, CheckinStats, CheckinVisibility } from '../../shared/types';
 import { api, ApiError, fileUrl } from '../lib/api';
 import { ease } from '../lib/motion';
 import { useToast } from '../lib/toast';
 import { Button, Field, Modal, Segmented, Spinner, Textarea } from '../components/ui';
 import { Stamp } from '../components/brand';
 import { checkinAlt } from '../components/checkin/CheckinCard';
+import { buddyCheckinHint } from '../components/checkin/buddyCheckinHint';
 import { useCheckinSession } from '../components/checkin/useCheckinSession';
 import { useGeoLabel } from '../components/checkin/useGeoLabel';
 import { captureFrame, useLiveCamera } from '../components/checkin/useLiveCamera';
 import { Viewfinder } from '../components/checkin/Viewfinder';
-import { PHOTO_MUST, captionLength, shortDate, weekdayLabel } from '../../shared/activity';
-import { splitNickname } from '../components/ProfileCard';
+import { PHOTO_MUST, captionLength } from '../../shared/activity';
 import { useActivityConfig } from '../lib/activity';
 
 const CAPTION_MAX = 200;
@@ -56,13 +56,36 @@ export function CheckinCamera() {
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(0);
   const [status, setStatus] = useState('');
-  const [buddy, setBuddy] = useState<BuddyStatus | null>(null);
+  const receiptId = done?.checkin.id ?? null;
+  // 回执只用提交成功后取得的状态，避免把快门前的数据当成本次结果。
+  const [snapshot, setSnapshot] = useState<{ receiptId: number | null; status: BuddyStatus | null; readAt: number } | null>(null);
+  const buddy = snapshot?.receiptId === receiptId ? snapshot.status : undefined;
 
   useEffect(() => {
     let alive = true;
-    api.activity.me().then((s) => { if (alive) setBuddy(s); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+    let pending = false;
+    const refresh = async () => {
+      if (document.hidden || pending) return;
+      pending = true;
+      const readAt = Date.now();
+      try {
+        const status = await api.activity.me();
+        if (alive) setSnapshot({ receiptId, status, readAt });
+      } catch {
+        if (alive) setSnapshot({ receiptId, status: null, readAt });
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [receiptId]);
   usePageZoomLock();
 
   useEffect(() => writePref(VIS_KEY, visibility), [visibility]);
@@ -115,8 +138,8 @@ export function CheckinCamera() {
         setStatus('已提交，等待审核，暂未公开');
         toast.info('已提交，等待审核', '内容触发极高风险筛查，审核通过后公开。');
       } else {
-        setStatus('打卡成功，服务器已盖章');
-        toast.success('打卡成功', r.stats.streak > 1 ? `已连续打卡 ${r.stats.streak} 天` : '服务器已盖上时间和地点');
+        setStatus('打卡照片已提交，服务器已盖章');
+        toast.success('打卡照片已提交', r.stats.streak > 1 ? `已连续打卡 ${r.stats.streak} 天` : '服务器已盖上时间和地点');
       }
     } catch (e) {
       session.renew();
@@ -137,11 +160,14 @@ export function CheckinCamera() {
     return () => { alive = false; };
   }, []);
 
+  const hint = buddy && snapshot ? buddyCheckinHint(buddy, activity.config, snapshot.readAt + session.offset, done?.checkin.stampedAt) : null;
+
   if (done) {
+    const resultHint = hint?.text ?? (buddy === null ? '暂时无法读取搭子打卡结果，请稍后在「我的搭子」查看。' : '正在核对搭子打卡结果…');
     return (
       <div className="fixed inset-0 z-[60] overflow-y-auto bg-paper px-4 pt-[calc(env(safe-area-inset-top)+16px)] pb-[calc(env(safe-area-inset-bottom)+24px)]">
         <p className="sr-only" role="status" aria-live="polite">{status}</p>
-        <Result result={done} onDone={back} onOpen={() => nav(`/community/checkins/${done.checkin.id}`, { replace: true })} />
+        <Result result={done} activityHint={resultHint} onDone={back} onOpen={() => nav(`/community/checkins/${done.checkin.id}`, { replace: true })} />
       </div>
     );
   }
@@ -219,7 +245,12 @@ export function CheckinCamera() {
           : live ? <LocationLine geo={geo} limit={activity.config.accuracyMeters} scoring={scoringShot && distanceOn} />
           : <>拍下正在学习的自己和学习内容 · <Link to="/rules#photo" className="text-white underline underline-offset-2">照片要求</Link></>}
       </p>
-      <BuddyHint status={buddy} windowMinutes={activity.config.windowMinutes} distanceMeters={activity.config.distanceMeters} captionMissing={captionShort ? activity.config.captionMin : 0} />
+      {hint && (
+        <p className={`mx-4 mt-2 max-w-[30em] shrink-0 self-center rounded-2xl px-3.5 py-1.5 text-center text-[13px] leading-5 ${hint.tone === 'good' ? 'bg-[#2f8f6b]/85 text-white' : hint.tone === 'warn' ? 'bg-white/14 text-[#ffcf8a]' : 'bg-white/14 text-white/85'}`}>
+          {hint.text}
+          {scoringShot && captionShort && hint.tone !== 'warn' && `先点右上角写一句学了什么（至少 ${activity.config.captionMin} 个字）。`}
+        </p>
+      )}
 
       <div className="mt-5 mb-[calc(env(safe-area-inset-bottom)+28px)] grid shrink-0 grid-cols-3 items-center">
         <div className="flex justify-center">
@@ -314,69 +345,6 @@ function usePageZoomLock() {
   }, []);
 }
 
-/** 当天第一次打卡不能计分的原因 */
-const ISSUE_TEXT: Record<DayCheckinIssue, string> = {
-  deleted: '已经删除',
-  taken_down: '被管理员撤下',
-  invalid: '被判无效',
-  caption: '说明字数不够',
-  location: '定位误差太大',
-};
-
-/**
- * 拍照前提示今天这次打卡能不能计分：每人每天只有第一次打卡计分，
- * 两人相差不超过时间窗、相距不超过规定距离才算一次。没有搭子、还没开始计分或赛季外不显示。
- */
-function BuddyHint({ status, windowMinutes, distanceMeters, captionMissing }: {
-  status: BuddyStatus | null; windowMinutes: number; distanceMeters: number; captionMissing: number;
-}) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const pair = status?.pair;
-  const today = status?.today;
-  if (!pair || !today || status.season.status !== 'running') return null;
-  const name = splitNickname(pair.partner.nickname).word;
-  const hm = (iso: string) => new Date(Date.parse(iso) + 8 * 3_600_000).toISOString().slice(11, 16);
-  const near = distanceMeters > 0 ? `、相距 ${distanceMeters} 米以内` : '';
-  let text: string;
-  let tone: 'good' | 'plain' | 'warn' = 'plain';
-  if (!pair.started) {
-    text = `你们从 ${shortDate(pair.startsOn)}（${weekdayLabel(pair.startsOn)}）开始计分。`;
-  } else if (today.mine) {
-    text = today.mine.counts
-      ? `今天的计分打卡已经在 ${hm(today.mine.at)} 完成了，这次只发到社区，不再计分。`
-      : `今天第一次打卡（${hm(today.mine.at)}）${today.mine.issue ? ISSUE_TEXT[today.mine.issue] : '不符合计分条件'}，今天不能再计分了，这次只发到社区。`;
-  } else if (today.partner && !today.partner.counts) {
-    text = `${name} 今天第一次打卡不符合计分条件，今天不能计分了。`;
-    tone = 'warn';
-  } else if (today.partner) {
-    const minutes = Math.floor((now - Date.parse(today.partner.at)) / 60_000);
-    if (minutes <= windowMinutes) {
-      const where = distanceMeters > 0 ? `在${today.partner.place}` : '';
-      text = `${name} ${minutes < 1 ? '刚刚' : `${minutes} 分钟前`}${where}打卡了，${distanceMeters > 0 ? `在 ${distanceMeters} 米以内` : '现在'}拍就能算一次。`;
-      tone = 'good';
-    } else {
-      text = `${name} 今天 ${hm(today.partner.at)} 打过卡，已经超过 ${windowMinutes} 分钟，今天不能计分了。`;
-      tone = 'warn';
-    }
-  } else {
-    text = `这是你今天的计分打卡。${name} 还没打卡，${windowMinutes} 分钟内${near}两人都拍才算一次。`;
-  }
-  // 今天的第一次打卡还没拍、说明又不够字数：提醒先写说明，否则这次不计分
-  if (captionMissing && pair.started && !today.mine && tone !== 'warn') {
-    text += `先点右上角写一句学了什么（至少 ${captionMissing} 个字）。`;
-    if (tone === 'plain') tone = 'warn';
-  }
-  return (
-    <p className={`mx-4 mt-2 max-w-[30em] shrink-0 self-center rounded-2xl px-3.5 py-1.5 text-center text-[13px] leading-5 ${tone === 'good' ? 'bg-[#2f8f6b]/85 text-white' : tone === 'warn' ? 'bg-white/14 text-[#ffcf8a]' : 'bg-white/14 text-white/85'}`}>
-      {text}
-    </p>
-  );
-}
-
 /** 地点说明：定位中、定位结果或失败 */
 function placeHint(geo: ReturnType<typeof useGeoLabel>) {
   if (geo.location) {
@@ -461,10 +429,15 @@ function CameraError({ title, desc, onRetry }: { title: string; desc: string; on
   );
 }
 
-function Result({ result, onDone, onOpen }: { result: { checkin: Checkin; stats: CheckinStats }; onDone: () => void; onOpen: () => void }) {
+function Result({ result, activityHint, onDone, onOpen }: { result: { checkin: Checkin; stats: CheckinStats }; activityHint: string; onDone: () => void; onOpen: () => void }) {
   const { checkin, stats } = result;
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease }} className="mx-auto max-w-[720px]">
+      <div className="mb-3 rounded-md border border-line bg-surface p-4 sm:p-5">
+        <h1 className="font-display text-[22px] text-ink">{checkin.reviewPending ? '已提交，等待审核' : '打卡照片已提交'}</h1>
+        <p className="mt-1 text-[14px] leading-relaxed text-ink-2" role="status">{activityHint}</p>
+        {checkin.reviewPending && <p className="mt-2 text-[14px] text-ink-2">暂未公开：{checkin.reviewReasons.join('；')}。审核通过后显示。</p>}
+      </div>
       <div className="relative">
         <img src={fileUrl(checkin.image)} alt={checkinAlt(checkin)} className="block h-auto w-full rounded-md bg-mat" />
         {/* 服务器盖章成功：落一枚朱砂章 */}
@@ -478,9 +451,7 @@ function Result({ result, onDone, onOpen }: { result: { checkin: Checkin; stats:
         </motion.span>
       </div>
       <div className="mt-4 rounded-md border border-line bg-surface p-4 sm:p-5">
-        <p className="font-display text-[22px] text-ink">{checkin.reviewPending ? '已提交，等待审核' : '打卡成功'}</p>
-        {checkin.reviewPending && <p className="mt-2 text-[14px] text-ink-2">暂未公开：{checkin.reviewReasons.join('；')}。审核通过后显示。</p>}
-        <dl className="mt-3 grid gap-x-6 gap-y-2 text-[14px] sm:grid-cols-2">
+        <dl className="grid gap-x-6 gap-y-2 text-[14px] sm:grid-cols-2">
           <div>
             <dt className="text-[12.5px] text-ink-3">地点</dt>
             <dd className="text-ink">{checkin.placeLabel}</dd>

@@ -12,7 +12,7 @@ import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
 import { activeMatchBetween } from '../matches.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
-import { currentWeek, dayCheckin, ineligibleReason, leaderboard, pairScore, scoringStart, type DayCheckin } from '../scoring.ts';
+import { compareCheckins, currentWeek, dayCheckin, ineligibleReason, leaderboard, pairScore, scoringStart, type DayCheckin } from '../scoring.ts';
 
 // 搭子打卡活动：规则参数（公开）、我的搭子、邀请与解绑、搭子榜、打卡申诉
 export const activityRouter = Router();
@@ -44,6 +44,8 @@ activityRouter.use(requireUser);
 const hm = (ms: number) => new Date(ms + 8 * 3_600_000).toISOString().slice(11, 16);
 
 function statusOf(uid: number): BuddyStatus {
+  const now = new Date();
+  const config = activityConfig();
   const pair = activePairOf(uid);
   const invites = q.all<{ id: number; from_id: number; to_id: number; created_at: string }>(
     "SELECT id, from_id, to_id, created_at FROM buddy_invites WHERE status = 'pending' AND (from_id = ? OR to_id = ?) ORDER BY id DESC", uid, uid,
@@ -51,15 +53,17 @@ function statusOf(uid: number): BuddyStatus {
     const outgoing = row.from_id === uid;
     return { id: row.id, direction: outgoing ? 'outgoing' as const : 'incoming' as const, other: buddyPartner(outgoing ? row.to_id : row.from_id, uid), createdAt: iso(row.created_at)! };
   });
-  const base = { invites, shurenMember: shurenOf(uid), season: seasonInfo() };
+  const base = { invites, shurenMember: shurenOf(uid), season: seasonInfo(now, config) };
   if (!pair) return { ...base, pair: null, week: null, score: null, rank: null, today: null };
 
   const partnerId = partnerOf(pair, uid);
-  const board = leaderboard();
+  const board = leaderboard(now);
   const mine = board.items.find((item) => item.pair.id === pair.id);
   const ineligible = ineligibleReason(pair);
-  const week = currentWeek(pair);
-  const date = beijingDay();
+  const week = currentWeek(pair, now, config);
+  const date = beijingDay(now);
+  const myCheckin = dayCheckin(uid, date, config);
+  const partnerCheckin = dayCheckin(partnerId, date, config);
   const schedule = (id: number) => {
     const row = getProfileRow(id);
     return row ? parseData(row).schedule : [];
@@ -90,16 +94,17 @@ function statusOf(uid: number): BuddyStatus {
     rank: mine ? { rank: mine.rank, tied: mine.tied, total: board.items.length } : null,
     today: {
       date,
-      mine: mineToday(dayCheckin(uid, date)),
-      partner: partnerToday(dayCheckin(partnerId, date)),
+      mine: mineToday(myCheckin),
+      partner: partnerToday(partnerCheckin),
+      pairOutcome: week && myCheckin?.counts && partnerCheckin?.counts ? compareCheckins(myCheckin, partnerCheckin, config).outcome : null,
       free: overlapSlots(schedule(uid), schedule(partnerId)).filter((slot) => slotDay(slot) === todayIndex).map(slotPeriod),
     },
   };
 }
 
 // 只挑出页面要用的字段：不带打卡编号、经纬度
-const mineToday = (c: DayCheckin | null) => (c ? { at: c.at, counts: c.counts, issue: c.issue } : null);
-const partnerToday = (c: DayCheckin | null) => (c ? { at: c.at, counts: c.counts, place: c.place } : null);
+const mineToday = (c: DayCheckin | null) => (c ? { at: new Date(c.at).toISOString(), counts: c.counts, issue: c.issue } : null);
+const partnerToday = (c: DayCheckin | null) => (c ? { at: new Date(c.at).toISOString(), counts: c.counts, place: c.place } : null);
 
 activityRouter.get('/me', (req, res) => {
   res.json(statusOf(req.user!.id));

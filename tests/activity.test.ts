@@ -267,8 +267,10 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal(st.today?.date, today);
     assert.equal(st.today?.mine, null);
     assert.equal(st.today?.partner, null);
+    assert.equal(st.today?.pairOutcome, null);
     assert.ok(st.today!.free.length > 0, 'periods when both are free today');
     checkin(a, today, '00:00:01', '一起背单词', { device: 'device-a', photoHash: '0123456789abcdef' });
+    assert.equal((await status(a)).today?.pairOutcome, null);
     checkin(b, today, '00:10:00', '一起背单词', { device: 'device-b', photoHash: '0123456789abcdef' });
     checkin(a, today, '00:20:00', '第二次只发社区');
     st = await status(a);
@@ -276,6 +278,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal(Date.parse(st.today!.mine!.at), Date.parse(`${today}T00:00:01+08:00`), 'the first check-in of the day is the scoring one');
     assert.ok(st.today?.partner);
     assert.equal(st.week?.count, 1);
+    assert.equal(st.today?.pairOutcome, 'matched');
     assert.equal(st.week?.points, 1);
     assert.deepEqual(st.week?.events, [{ date: today, mine: '00:00', theirs: '00:10', place: '图书馆', distance: 0 }]);
     assert.equal(st.today?.mine?.issue, null);
@@ -313,6 +316,46 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     checkin(a, today, '00:00:01', '一起复习线性代数', { geo: north(0, 500) });
     const st = await status(a);
     assert.deepEqual({ counts: st.today?.mine?.counts, issue: st.today?.mine?.issue }, { counts: false, issue: 'location' });
+    db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+  });
+
+  await t.test('today explains the same time and distance thresholds used for weekly scoring', async () => {
+    const [a, b] = [createUser(), createUser()];
+    await bind(a, b);
+    const pairId = pairIdOf(a);
+    checkin(a, today, '00:00:00');
+    // 两台设备各自定位都合格，但相距约 1.7 公里。
+    const other = checkin(b, today, '00:30:00', '一起复习线性代数', { geo: { ...LIBRARY, lat: 22.6175 } });
+    assert.equal((await status(a)).today?.pairOutcome, null, 'the pair has not started scoring yet');
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(seasonStart, pairId);
+
+    const expectOutcome = async (expected: 'matched' | 'too_far' | 'too_late' | null) => {
+      for (const member of [a, b]) {
+        const st = await status(member);
+        assert.equal(st.today?.pairOutcome, expected);
+        assert.equal(st.week?.events.some((event) => event.date === today), expected === 'matched');
+      }
+    };
+    await expectOutcome('too_far');
+    assert.equal((await status(a)).today?.mine?.counts, true);
+    assert.equal((await status(b)).today?.mine?.counts, true);
+
+    const movePartner = db.prepare('UPDATE checkins SET geo_lat = ? WHERE id = ?');
+    movePartner.run(22.6052, other); // 实际约 300.23 米，展示精度取整后是 300 米
+    await expectOutcome('too_far');
+    movePartner.run(22.6051, other); // 约 289 米，时间恰好相差 30 分钟
+    await expectOutcome('matched');
+    db.prepare("UPDATE checkins SET stamped_at = datetime(stamped_at, '+1 second') WHERE id = ?").run(other);
+    await expectOutcome('too_late');
+    movePartner.run(22.6175, other);
+    await expectOutcome('too_late');
+    db.prepare("UPDATE checkins SET stamped_at = datetime(stamped_at, '-1 second') WHERE id = ?").run(other);
+    await saveConfig({ distanceMeters: 0 });
+    await expectOutcome('matched');
+    await saveConfig();
+    db.prepare('UPDATE checkins SET geo_accuracy = 500 WHERE id = ?').run(other);
+    await expectOutcome(null);
     db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });

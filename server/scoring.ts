@@ -2,7 +2,7 @@
 // 积分不单独存表，每次都从打卡记录算出来：打卡被判无效、撤下或解绑后，结果自动更新。
 import { addDays, beijingDay, captionLength, mondayOf, type ActivityConfig } from '../shared/activity.ts';
 import { distanceM } from '../shared/campusPlaces.ts';
-import type { DayCheckinIssue } from '../shared/types.ts';
+import type { DayCheckinIssue, PairCheckinOutcome } from '../shared/types.ts';
 import { activityConfig } from './activityConfig.ts';
 import { type PairRow, shurenOf } from './buddyState.ts';
 import { q } from './db.ts';
@@ -117,9 +117,8 @@ export function scoringCheckins(userIds: number[], from: string, to: string, con
   return out;
 }
 
-export interface DayCheckin {
+export interface DayCheckin extends Pick<EventCheckin, 'at' | 'geo'> {
   id: number;
-  at: string;
   /** 能参与计分：未删除、未撤下、未判无效、说明字数达标、定位够准 */
   counts: boolean;
   issue: DayCheckinIssue | null;
@@ -134,12 +133,27 @@ export function dayCheckin(uid: number, date: string, config = activityConfig())
   );
   if (!row) return null;
   const issue = issueOf(row, config);
-  return { id: row.id, at: new Date(toMs(row.stamped_at)).toISOString(), counts: !issue, issue, place: row.place_label };
+  return { id: row.id, at: toMs(row.stamped_at), geo: geoOf(row), counts: !issue, issue, place: row.place_label };
 }
 
 /** 两次打卡相距多少米；有一方没有定位时为 null */
 export function checkinDistance(a: Pick<EventCheckin, 'geo'>, b: Pick<EventCheckin, 'geo'>): number | null {
   return a.geo && b.geo ? distanceM(a.geo, b.geo) : null;
+}
+
+/** 比较同一天两张合格首卡；周积分与用户当日看到的结果共用此判定。 */
+export function compareCheckins(
+  a: Pick<EventCheckin, 'at' | 'geo'>,
+  b: Pick<EventCheckin, 'at' | 'geo'>,
+  config: ActivityConfig,
+): { outcome: PairCheckinOutcome; gapMs: number; distanceM: number | null } {
+  const gapMs = Math.abs(a.at - b.at);
+  if (gapMs > config.windowMinutes * 60_000) return { outcome: 'too_late', gapMs, distanceM: null };
+  const distance = config.distanceMeters > 0 ? checkinDistance(a, b) : null;
+  if (config.distanceMeters > 0 && (distance === null || distance > config.distanceMeters)) {
+    return { outcome: 'too_far', gapMs, distanceM: distance };
+  }
+  return { outcome: 'matched', gapMs, distanceM: distance };
 }
 
 /** 每人每天只有一次计分打卡，所以每天最多一次相同事件 */
@@ -151,15 +165,11 @@ export function sameEvents(pair: Pick<PairRow, 'user_a' | 'user_b'>, from: strin
     if (c.userId === pair.user_a) day.a = c;
     else day.b = c;
   }
-  const windowMs = config.windowMinutes * 60_000;
   const out: SameEvent[] = [];
   for (const [date, { a, b }] of [...byDate].sort(([x], [y]) => x.localeCompare(y))) {
     if (!a || !b) continue;
-    const gapMs = Math.abs(a.at - b.at);
-    if (gapMs > windowMs) continue;
-    const distance = checkinDistance(a, b);
-    if (config.distanceMeters > 0 && (distance === null || distance > config.distanceMeters)) continue;
-    out.push({ date, a, b, gapMs, distanceM: config.distanceMeters > 0 ? distance : null });
+    const result = compareCheckins(a, b, config);
+    if (result.outcome === 'matched') out.push({ date, a, b, gapMs: result.gapMs, distanceM: result.distanceM });
   }
   return out;
 }
