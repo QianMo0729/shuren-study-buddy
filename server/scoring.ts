@@ -81,11 +81,11 @@ const geoOf = (row: DayRow) => (row.geo_lat === null || row.geo_lng === null || 
  * 这张打卡不满足个人计分条件的原因；满足时为 null。
  * 要检查距离时，还必须有定位且误差不超过上限（定位不准就没法核对两人是否在同一处）。
  */
-function issueOf(row: DayRow, config: ActivityConfig): DayCheckinIssue | null {
+function issueOf(row: DayRow, config: ActivityConfig, waiveCaption = false): DayCheckinIssue | null {
   if (row.deleted) return 'deleted';
   if (row.taken_down) return 'taken_down';
   if (row.invalid) return 'invalid';
-  if (captionLength(row.caption) < config.captionMin) return 'caption';
+  if (!waiveCaption && captionLength(row.caption) < config.captionMin) return 'caption';
   const geo = geoOf(row);
   if (config.distanceMeters > 0 && (!geo || geo.accuracy > config.accuracyMeters)) return 'location';
   return null;
@@ -124,34 +124,75 @@ interface PairDay {
   event: SameEvent | null;
 }
 
+interface CaptionWaiver {
+  checkinA: number;
+  checkinB: number;
+  reason: string;
+}
+
+/** 只读当前组合、查询日期范围内人工登记的说明豁免。格式不完整的记录不生效。 */
+function captionWaivers(pair: PairMembers, from: string, to: string): Map<string, CaptionWaiver> {
+  const prefix = `checkin_caption_waiver:${pair.user_a}:${pair.user_b}:`;
+  const settings = q.all<{ key: string; value: string }>(
+    'SELECT key, value FROM settings WHERE key BETWEEN ? AND ?', prefix + from, prefix + to,
+  );
+  const waivers = new Map<string, CaptionWaiver>();
+  for (const setting of settings) {
+    try {
+      const waiver = JSON.parse(setting.value);
+      if (Number.isSafeInteger(waiver?.checkinA) && waiver.checkinA > 0
+        && Number.isSafeInteger(waiver.checkinB) && waiver.checkinB > 0 && waiver.checkinA !== waiver.checkinB
+        && typeof waiver.reason === 'string' && waiver.reason.trim()) {
+        waivers.set(setting.key.slice(prefix.length), waiver);
+      }
+    } catch { /* 备注或手工配置格式有误时仍按常规规则计分。 */ }
+  }
+  return waivers;
+}
+
+interface MatchCandidate {
+  checkin: DayCheckin;
+  /** 说明被豁免时，唯一允许与此照片配对的搭子打卡编号。 */
+  onlyWith: number | null;
+}
+
 /** 按拍摄时间、编号依次处理。每次补拍都与搭子之前的合格记录核对，首次成功即确定当天的组合。 */
-function selectPairDay(rows: DayRow[], userA: number, config: ActivityConfig): PairDay {
+function selectPairDay(rows: DayRow[], userA: number, config: ActivityConfig, waiver?: CaptionWaiver): PairDay {
   const day: PairDay = { a: null, b: null, event: null };
-  const eligible: { a: DayCheckin[]; b: DayCheckin[] } = { a: [], b: [] };
+  const eligible: { a: MatchCandidate[]; b: MatchCandidate[] } = { a: [], b: [] };
   for (const row of rows) {
     const side = row.user_id === userA ? 'a' : 'b';
     const other = side === 'a' ? 'b' : 'a';
+    const hadEarlier = day[side] !== null;
     const issue = issueOf(row, config);
     const checkin: DayCheckin = {
       id: row.id, userId: row.user_id, at: toMs(row.stamped_at), date: row.local_date,
       device: row.device_hash, place: row.place_label, photoHash: row.photo_hash, geo: geoOf(row),
-      counts: issue === null, issue, isReplacement: issue === null && day[side] !== null,
+      counts: issue === null, issue, isReplacement: issue === null && hadEarlier,
     };
     // 尚未配成时，显示最近一次个人合格记录；全不合格才显示最近的失败原因。
-    if (!checkin.counts) {
+    let onlyWith: number | null = null;
+    if (checkin.counts) {
+      day[side] = checkin;
+    } else {
       if (!day[side]?.counts) day[side] = checkin;
-      continue;
+      const authorizedId = side === 'a' ? waiver?.checkinA : waiver?.checkinB;
+      if (!waiver || authorizedId !== row.id || issue !== 'caption' || issueOf(row, config, true)) continue;
+      onlyWith = side === 'a' ? waiver.checkinB : waiver.checkinA;
     }
-    day[side] = checkin;
+    // 原照片只有和指定搭子照片实际配成时才显示为合格，其他组合和未配成时的状态不变。
+    const photo = onlyWith === null ? checkin : { ...checkin, counts: true, issue: null, isReplacement: hadEarlier };
     for (const candidate of eligible[other]) {
-      const result = compareCheckins(checkin, candidate, config);
+      if (onlyWith !== null && onlyWith !== candidate.checkin.id) continue;
+      if (candidate.onlyWith !== null && candidate.onlyWith !== photo.id) continue;
+      const result = compareCheckins(photo, candidate.checkin, config);
       if (result.outcome === 'matched') {
-        const a = side === 'a' ? checkin : candidate;
-        const b = side === 'b' ? checkin : candidate;
+        const a = side === 'a' ? photo : candidate.checkin;
+        const b = side === 'b' ? photo : candidate.checkin;
         return { a, b, event: { date: row.local_date, a, b, gapMs: result.gapMs, distanceM: result.distanceM } };
       }
     }
-    eligible[side].push(checkin);
+    eligible[side].push({ checkin: photo, onlyWith });
   }
   return day;
 }
@@ -169,7 +210,9 @@ function selectPairDays(pair: PairMembers, from: string, to: string, config: Act
     if (day) day.push(row);
     else byDate.set(row.local_date, [row]);
   }
-  return [...byDate.values()].map((day) => selectPairDay(day, pair.user_a, config));
+  if (!byDate.size) return [];
+  const waivers = captionWaivers(pair, from, to);
+  return [...byDate].map(([date, day]) => selectPairDay(day, pair.user_a, config, waivers.get(date)));
 }
 
 export function pairDayCheckins(pair: PairMembers, date: string, config = activityConfig()): PairDay {

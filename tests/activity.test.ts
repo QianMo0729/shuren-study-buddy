@@ -382,6 +382,77 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });
 
+  await t.test('a caption waiver applies to exactly two photos, subject to the usual scoring rules', async () => {
+    const a = createUser();
+    const b = createUser();
+    await bind(a, b);
+    const pairId = pairIdOf(a);
+    const pair = db.prepare('SELECT user_a, user_b FROM buddy_pairs WHERE id = ?').get(pairId) as { user_a: number; user_b: number };
+    assert.equal(pair.user_a, a.id);
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(seasonStart, pairId);
+    const key = `checkin_caption_waiver:${pair.user_a}:${pair.user_b}:${today}`;
+    const setting = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    const targetA = checkin(a, today, '10:00:00', '');
+    checkin(b, today, '10:01:00'); // could match A if its waiver leaked to another pairing
+    const targetB = checkin(b, today, '11:00:00', '短');
+    checkin(a, today, '11:01:00'); // could match B if its waiver leaked to another pairing
+    const waiver = { checkinA: targetA, checkinB: targetB, reason: '人工确认这两张照片的说明豁免' };
+    const approved = JSON.stringify(waiver);
+    const count = async () => (await status(a)).week?.count;
+
+    setting.run(key, approved);
+    assert.equal(await count(), 0, 'time window still applies and neither photo can match an unrelated photo');
+    db.prepare("UPDATE checkins SET stamped_at = datetime(stamped_at, '-58 minutes') WHERE id = ?").run(targetB);
+    db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    setting.run(`checkin_caption_waiver:${pair.user_b}:${pair.user_a}:${today}`, approved);
+    setting.run(`checkin_caption_waiver:${pair.user_a}:${pair.user_b}:${addDays(today, -1)}`, approved);
+    assert.equal(await count(), 0, 'wrong date or owner order grants nothing');
+
+    for (const bad of ['not JSON', '{}', JSON.stringify({ ...waiver, reason: ' ' }),
+      JSON.stringify({ ...waiver, checkinA: targetB, checkinB: targetA }),
+      JSON.stringify({ ...waiver, checkinB: checkin(b, addDays(today, -1), '10:02:00', '') }),
+      JSON.stringify({ ...waiver, checkinB: checkin(createUser(), today, '10:02:00', '') })]) {
+      setting.run(key, bad);
+      assert.equal(await count(), 0);
+    }
+    setting.run(key, approved);
+    const expectSelected = async (idA: number, idB: number) => {
+      const mine = await status(a);
+      assert.equal(mine.today?.mine?.checkinId, idA);
+      assert.equal((await status(b)).today?.mine?.checkinId, idB);
+      assert.equal(mine.today?.mine?.issue, null);
+      assert.equal(mine.today?.pairOutcome, 'matched');
+      assert.equal(mine.week?.count, 1);
+      assert.ok(!JSON.stringify(mine).includes(waiver.reason));
+    };
+    await expectSelected(targetA, targetB);
+    for (const [column, rejected, restored] of [
+      ['deleted', 1, 0], ['taken_down', 1, 0], ['invalid', 1, 0],
+      ['geo_accuracy', 500, LIBRARY.accuracy], ['geo_lat', 22.6175, LIBRARY.lat], ['geo_lng', null, LIBRARY.lng],
+    ] as const) {
+      const update = db.prepare(`UPDATE checkins SET ${column} = ? WHERE id = ?`);
+      update.run(rejected, targetA);
+      assert.equal(await count(), 0, `caption waiver cannot override ${column}`);
+      update.run(restored, targetA);
+    }
+    checkin(b, today, '11:02:00'); // ordinary 11:01 / 11:02 completes later
+    await expectSelected(targetA, targetB);
+    const firstA = checkin(a, today, '07:00:00');
+    const firstB = checkin(b, today, '07:01:00');
+    await expectSelected(firstA, firstB); // ordinary match finished before the approved pair
+
+    const past = week(1, 0);
+    const pastA = checkin(a, past, '10:00:00', '');
+    const pastB = checkin(b, past, '10:02:00', '');
+    setting.run(`checkin_caption_waiver:${pair.user_a}:${pair.user_b}:${past}`, JSON.stringify({ ...waiver, checkinA: pastA, checkinB: pastB }));
+    await saveConfig();
+    assert.equal((await status(a)).score?.total, 1, 'the authorized day contributes through normal historical scoring');
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(today, pairId);
+    await saveConfig();
+    assert.equal((await status(a)).score?.total, 0, 'the waiver cannot move the start of the scoring period');
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+  });
+
   await t.test('the two check-ins must be close together: far apart, a poor location fix or no location does not count', async () => {
     const [a, b] = [createUser(), createUser()];
     await bind(a, b);
