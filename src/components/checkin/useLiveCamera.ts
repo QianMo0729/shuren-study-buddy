@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isCameraPreviewReady, waitForCameraFrame } from './cameraPreview';
+import { pickMainBackCamera, type CameraInfo } from './cameraLens';
 
 export type Facing = 'environment' | 'user';
 
@@ -139,24 +140,12 @@ export function useLiveCamera(enabled: boolean) {
     setCanSwitch(false);
     (async () => {
       try {
-        let stream: MediaStream;
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: facing }, width: { ideal: 1600 }, height: { ideal: 1200 } },
-            audio: false,
-          });
-        } catch (error) {
-          if (cancelled) return;
-          if ((error as { name?: string })?.name !== 'OverconstrainedError') throw error;
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false });
-        }
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
+        const opened = await openCamera(facing, () => cancelled);
+        if (!opened) return;
+        const { stream, cameras } = opened;
         const video = videoRef.current;
         if (!video) {
-          stream.getTracks().forEach((t) => t.stop());
+          stopStream(stream);
           return;
         }
         streamRef.current = stream;
@@ -260,8 +249,7 @@ export function useLiveCamera(enabled: boolean) {
         cancelPreviewRef.current = cancelPreview;
         runPreview();
         // 有多个摄像头时才显示切换按钮（权限获得后才能列出设备）
-        const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-        if (!cancelled) setCanSwitch(devices.filter((d) => d.kind === 'videoinput').length > 1);
+        setCanSwitch(cameras > 1);
       } catch (error) {
         if (!cancelled) setState({ status: 'error', problem: explain(error) });
       }
@@ -315,6 +303,106 @@ export interface ZoomRange {
   max: number;
   /** true：相机自己变焦；false：裁剪放大 */
   hardware: boolean;
+}
+
+const errorName = (error: unknown) => (error as { name?: string })?.name ?? '';
+
+function stopStream(stream: MediaStream) {
+  stream.getTracks().forEach((t) => t.stop());
+}
+
+async function request(video: MediaTrackConstraints): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video: { ...video, width: { ideal: 1600 }, height: { ideal: 1200 } }, audio: false });
+  } catch (error) {
+    if (errorName(error) !== 'OverconstrainedError') throw error;
+    return navigator.mediaDevices.getUserMedia({ video, audio: false });
+  }
+}
+
+/** 刚关掉的摄像头在部分 Android 手机上要稍等才能被再次打开 */
+async function requestAfterRelease(video: MediaTrackConstraints): Promise<MediaStream> {
+  try {
+    return await request(video);
+  } catch (error) {
+    if (errorName(error) !== 'NotReadableError' && errorName(error) !== 'AbortError') throw error;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return request(video);
+  }
+}
+
+/** 记住后置主摄，下次直接打开它，不必先打开浏览器默认的镜头再换 */
+const LENS_KEY = 'dz-camera-main-lens';
+let lensMemory: string | null = null;
+function readLens(): string | null {
+  try { return localStorage.getItem(LENS_KEY) ?? lensMemory; } catch { return lensMemory; }
+}
+function writeLens(deviceId: string | null) {
+  lensMemory = deviceId;
+  try {
+    if (deviceId) localStorage.setItem(LENS_KEY, deviceId);
+    else localStorage.removeItem(LENS_KEY);
+  } catch { /* 无痕模式等情况下只记在内存里 */ }
+}
+
+function describeCamera(device: MediaDeviceInfo): CameraInfo {
+  let facing: string[] = [];
+  try {
+    facing = (device as InputDeviceInfo).getCapabilities?.().facingMode ?? [];
+  } catch { /* 部分浏览器没有 InputDeviceInfo.getCapabilities */ }
+  return { deviceId: device.deviceId, label: device.label, facing };
+}
+
+/**
+ * 打开摄像头。后置时确保用的是主摄（1×）：多摄 Android 手机只按 facingMode 打开时，
+ * 浏览器会按分辨率挑镜头，可能拿到长焦（如 OPPO Find X8 Ultra 的 10× 潜望）。
+ * 返回 null 表示中途已取消（已关闭打开的轨道）。
+ */
+async function openCamera(facing: Facing, cancelled: () => boolean): Promise<{ stream: MediaStream; cameras: number } | null> {
+  const remembered = facing === 'environment' ? readLens() : null;
+  let stream: MediaStream | null = null;
+  if (remembered) {
+    try {
+      stream = await request({ deviceId: { exact: remembered } });
+    } catch (error) {
+      // 记住的镜头已不存在（清除过网站数据、换了设备）：改回按朝向打开
+      if (errorName(error) !== 'OverconstrainedError' && errorName(error) !== 'NotFoundError') throw error;
+      writeLens(null);
+    }
+  }
+  stream ??= await request({ facingMode: { ideal: facing } });
+  if (cancelled()) {
+    stopStream(stream);
+    return null;
+  }
+  const inputs = (await navigator.mediaDevices.enumerateDevices().catch(() => [])).filter((d) => d.kind === 'videoinput');
+  if (cancelled()) {
+    stopStream(stream);
+    return null;
+  }
+  if (facing !== 'environment') return { stream, cameras: inputs.length };
+
+  const track = stream.getVideoTracks()[0];
+  const currentId = track?.getSettings?.().deviceId || inputs.find((d) => d.label && d.label === track?.label)?.deviceId;
+  const main = pickMainBackCamera(inputs.map(describeCamera), currentId);
+  if (!main || main === currentId) {
+    if (main) writeLens(main);
+    return { stream, cameras: inputs.length };
+  }
+  stopStream(stream);
+  try {
+    stream = await requestAfterRelease({ deviceId: { exact: main } });
+    writeLens(main);
+  } catch (error) {
+    if (cancelled()) throw error;
+    // 主摄打不开时退回浏览器默认的选择，至少保证能拍照
+    stream = await requestAfterRelease({ facingMode: { ideal: facing } });
+  }
+  if (cancelled()) {
+    stopStream(stream);
+    return null;
+  }
+  return { stream, cameras: inputs.length };
 }
 
 /** 裁剪放大最多 3 倍：再大画面太糊，看不清学习内容 */
