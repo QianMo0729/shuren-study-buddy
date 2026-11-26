@@ -12,7 +12,7 @@ import { isExcluded } from '../connections.ts';
 import { iso, q } from '../db.ts';
 import { activeMatchBetween } from '../matches.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
-import { compareCheckins, currentWeek, dayCheckin, ineligibleReason, leaderboard, pairScore, scoringStart, type DayCheckin } from '../scoring.ts';
+import { compareCheckins, currentWeek, ineligibleReason, leaderboard, pairDayCheckins, pairScore, scoringStart, type DayCheckin } from '../scoring.ts';
 
 // 搭子打卡活动：规则参数（公开）、我的搭子、邀请与解绑、搭子榜、打卡申诉
 export const activityRouter = Router();
@@ -62,8 +62,8 @@ function statusOf(uid: number): BuddyStatus {
   const ineligible = ineligibleReason(pair);
   const week = currentWeek(pair, now, config);
   const date = beijingDay(now);
-  const myCheckin = dayCheckin(uid, date, config);
-  const partnerCheckin = dayCheckin(partnerId, date, config);
+  const day = pairDayCheckins(pair, date, config);
+  const [myCheckin, partnerCheckin] = uid === pair.user_a ? [day.a, day.b] : [day.b, day.a];
   const schedule = (id: number) => {
     const row = getProfileRow(id);
     return row ? parseData(row).schedule : [];
@@ -99,7 +99,7 @@ function statusOf(uid: number): BuddyStatus {
     rank: mine ? { rank: mine.rank, tied: mine.tied, total: board.items.length } : null,
     today: {
       date,
-      checkinPolicy: 'first_eligible',
+      checkinPolicy: 'first_matched_pair',
       mine: mineToday(myCheckin),
       partner: partnerToday(partnerCheckin),
       pairOutcome: week && myCheckin?.counts && partnerCheckin?.counts ? compareCheckins(myCheckin, partnerCheckin, config).outcome : null,

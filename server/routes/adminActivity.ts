@@ -12,7 +12,7 @@ import { type PairRow, shurenOf } from '../buddyState.ts';
 import { checkMessage, saveWordLists, wordLists } from '../chatSafety.ts';
 import { iso, q } from '../db.ts';
 import { getProfileRow, parseData } from '../profiles.ts';
-import { ineligibleReason, leaderboard, pairScore, scoredThrough, scoringStart, strikesOf, touchScores } from '../scoring.ts';
+import { ineligibleReason, leaderboard, pairDayCheckins, pairScore, scoredThrough, scoringStart, strikesOf, touchScores } from '../scoring.ts';
 
 // 管理后台中与搭子打卡活动有关的部分。审核员和管理员都能用；活动设置与人员授权只有管理员能用。
 export const adminActivityRouter = Router();
@@ -43,7 +43,7 @@ const checkinView = (c: CheckinRow) => ({
   invalidAt: iso(c.invalid_at), invalidBy: emailOf(c.invalid_by),
 });
 
-/** 打卡当时的搭子，以及搭子当天离这次打卡最近的一次打卡（方便对照两张照片） */
+/** 审核计分打卡时展示实际配对的另一张照片；其余打卡按时间就近对照。 */
 function partnerContext(c: CheckinRow) {
   const pair = q.get<PairRow>(
     `SELECT * FROM buddy_pairs WHERE (user_a = ? OR user_b = ?) AND created_at <= ? AND (ended_at IS NULL OR ended_at >= ?)
@@ -51,9 +51,11 @@ function partnerContext(c: CheckinRow) {
   );
   if (!pair) return { partner: null, partnerCheckin: null, distance: null };
   const partnerId = pair.user_a === c.user_id ? pair.user_b : pair.user_a;
-  const near = q.get<CheckinRow>(
+  const { event } = pairDayCheckins(pair, c.local_date);
+  const matchedPartnerId = event?.a.id === c.id ? event.b.id : event?.b.id === c.id ? event.a.id : null;
+  const near = matchedPartnerId !== null ? q.get<CheckinRow>('SELECT * FROM checkins WHERE id = ?', matchedPartnerId) : q.get<CheckinRow>(
     `SELECT * FROM checkins WHERE user_id = ? AND local_date = ? AND deleted = 0
-     ORDER BY abs(julianday(stamped_at) - julianday(?)) LIMIT 1`, partnerId, c.local_date, c.stamped_at,
+     ORDER BY abs(julianday(stamped_at) - julianday(?)), id LIMIT 1`, partnerId, c.local_date, c.stamped_at,
   );
   // 两次打卡相距多少米（取整到 10 米）；有一方没有定位时为 null
   const meters = near && c.geo_lat !== null && c.geo_lng !== null && near.geo_lat !== null && near.geo_lng !== null

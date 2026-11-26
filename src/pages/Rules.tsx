@@ -64,7 +64,7 @@ export function Rules() {
         <Section id="score" title="相同事件打卡与计分">
           <ul className="list-disc space-y-1 pl-5">
             <li>只按打卡次数计分，必须两人都打卡才给分。</li>
-            <li><b className="text-ink">每天取每人保留的第一张合格打卡</b>（北京时间）。当天可以补拍。照片删除或不合格时，系统自动选用当天按时间最早的其余合格照片，再核对两人的时间和距离。</li>
+            <li><b className="text-ink">每天按最先配对成功的两张打卡计分</b>（北京时间）。两人首次打卡超时或相距过远，当天都可以补拍。系统会把新照片和搭子当天的合格照片再次配对，无需先删除原照片。</li>
             <li>同一天两人的计分打卡都有效、时间相差不超过 <b className="text-ink">{c.windowMinutes} 分钟</b>{c.distanceMeters > 0 && <>、两人打卡的位置相距不超过 <b className="text-ink">{c.distanceMeters} 米</b></>}，算一次相同事件打卡。跨天不算，例如 23:50 和次日 00:10。先约好时间和地方再拍。</li>
             <li id="location">
               <b className="text-ink">打卡必须定位，地点不能手选。</b>照片上的地点按定位自动识别

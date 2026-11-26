@@ -154,3 +154,53 @@ test('a replacement receipt is distinguished from a duplicate even in the same s
   assert.match(buddyCheckinHint(day, rules, now, at, 3)!.text, /已完成 1 次同时打卡。本次只记录社区打卡/);
   assert.equal(buddyDayStatus(day, rules, now)!.text, '你们今天已完成 1 次同时打卡。');
 });
+
+test('a pair can retry a time or distance mismatch from the camera, receipt and day overview', () => {
+  for (const [outcome, limit] of [['too_far', /相距超过 300 米/], ['too_late', /相差超过 30 分钟/]] as const) {
+    const day = status({ checkinPolicy: 'first_matched_pair', mine: { ...mine, checkinId: 10 }, partner, pairOutcome: outcome });
+    assert.equal(canTakeScoringCheckin(day), true);
+    const camera = buddyCheckinHint(day, rules, now)!;
+    assert.equal(camera.canAddScoringCaption, true);
+    for (const hint of [camera, buddyCheckinHint(day, rules, now, at, 10)!, buddyDayStatus(day, rules, now)!]) {
+      assert.match(hint.text, limit);
+      assert.match(hint.text, /补拍/);
+      assert.equal(hint.canRetake, true);
+      assert.doesNotMatch(hint.text, /仅社区|只记录社区/);
+    }
+    const unselected = buddyCheckinHint(day, rules, now, at, 11)!;
+    assert.match(unselected.text, /当前用于核对的是你 10:00 的合格打卡/);
+    assert.equal(unselected.canRetake, true);
+  }
+});
+
+test('either person can shoot again while waiting for a match, including after the time window', () => {
+  const day = status({ checkinPolicy: 'first_matched_pair', mine, pairOutcome: null });
+  const afterCutoff = now + rules.windowMinutes * 60_000 + 1;
+  for (const readAt of [now, afterCutoff]) {
+    assert.equal(canTakeScoringCheckin(day), true);
+    assert.equal(buddyCheckinHint(day, rules, readAt, at)!.canRetake, true);
+    assert.equal(buddyCheckinHint(day, rules, readAt)!.canAddScoringCaption, true);
+  }
+  assert.match(buddyCheckinHint(day, rules, afterCutoff)!.text, /超时，可以补拍/);
+  day.today!.mine = null;
+  day.today!.partner = partner;
+  assert.equal(buddyCheckinHint(day, rules, afterCutoff)!.canAddScoringCaption, true);
+  assert.match(buddyDayStatus(day, rules, afterCutoff)!.text, /请搭子补拍/);
+  day.today!.mine = { ...mine, counts: false, issue: 'caption' };
+  const receipt = buddyCheckinHint(day, rules, afterCutoff, at)!;
+  assert.equal(receipt.canRetake, true);
+  assert.match(receipt.text, /说明字数不够/);
+});
+
+test('the first successful pair identifies the scoring receipt and ends scoring opportunities for the day', () => {
+  const day = status({
+    checkinPolicy: 'first_matched_pair', mine: { ...mine, checkinId: 7, isReplacement: true }, partner, pairOutcome: 'matched',
+  });
+  const receipt = buddyCheckinHint(day, rules, now, at, 7)!;
+  assert.equal(receipt.tone, 'good');
+  assert.match(receipt.text, /这张补拍已选为你今天的计分打卡/);
+  assert.ok(!receipt.canRetake);
+  assert.equal(canTakeScoringCheckin(day), false);
+  assert.ok(!buddyCheckinHint(day, rules, now)!.canAddScoringCaption);
+  assert.match(buddyCheckinHint(day, rules, now, at, 8)!.text, /本次只记录社区打卡/);
+});

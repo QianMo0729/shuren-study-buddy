@@ -9,7 +9,7 @@ import { q } from './db.ts';
 
 export interface EventCheckin {
   id: number;
-  /** 当天有过更早的个人不合格或已删除记录，这条合格打卡递补。 */
+  /** 同一天这名用户还有更早的记录，这张是后来补拍的合格打卡。 */
   isReplacement: boolean;
   userId: number;
   at: number;
@@ -96,47 +96,12 @@ export interface DayCheckin extends EventCheckin {
   issue: DayCheckinIssue | null;
 }
 
-/** 每人每个北京日选最早仍合格的打卡。若都不合格，保留最近一次的原因供本人查看。 */
-function selectDayCheckins(userIds: number[], from: string, to: string, config: ActivityConfig): DayCheckin[] {
-  if (!userIds.length || from > to) return [];
-  const marks = userIds.map(() => '?').join(',');
-  const rows = q.all<DayRow>(
-    `SELECT ${DAY_COLUMNS} FROM checkins
-     WHERE user_id IN (${marks}) AND local_date BETWEEN ? AND ?
-     ORDER BY stamped_at, id`,
-    ...userIds, from, to,
-  );
-  const selected = new Map<string, DayCheckin>();
-  for (const row of rows) {
-    const key = `${row.user_id}|${row.local_date}`;
-    const earlier = selected.get(key);
-    if (earlier?.counts) continue;
-    const issue = issueOf(row, config);
-    selected.set(key, {
-      id: row.id, userId: row.user_id, at: toMs(row.stamped_at), date: row.local_date,
-      device: row.device_hash, place: row.place_label, photoHash: row.photo_hash, geo: geoOf(row),
-      counts: issue === null, issue, isReplacement: issue === null && earlier !== undefined,
-    });
-  }
-  return [...selected.values()];
-}
-
-/** 本周记录、总积分、排名与抽检共用同一批合格打卡。 */
-export function scoringCheckins(userIds: number[], from: string, to: string, config = activityConfig()): EventCheckin[] {
-  return selectDayCheckins(userIds, from, to, config).filter((checkin) => checkin.counts);
-}
-
-/** 当天选中的合格打卡，或最近的未合格打卡；当天还没拍摄时为 null。 */
-export function dayCheckin(uid: number, date: string, config = activityConfig()): DayCheckin | null {
-  return selectDayCheckins([uid], date, date, config)[0] ?? null;
-}
-
 /** 两次打卡相距多少米；有一方没有定位时为 null */
 export function checkinDistance(a: Pick<EventCheckin, 'geo'>, b: Pick<EventCheckin, 'geo'>): number | null {
   return a.geo && b.geo ? distanceM(a.geo, b.geo) : null;
 }
 
-/** 比较两人当天各自最早的合格打卡；周积分与用户当日看到的结果共用此判定。 */
+/** 比较两张个人合格打卡的时间与距离，周积分与当日状态共用此判定。 */
 export function compareCheckins(
   a: Pick<EventCheckin, 'at' | 'geo'>,
   b: Pick<EventCheckin, 'at' | 'geo'>,
@@ -151,22 +116,69 @@ export function compareCheckins(
   return { outcome: 'matched', gapMs, distanceM: distance };
 }
 
-/** 每人每天只有一次计分打卡，所以每天最多一次相同事件 */
-export function sameEvents(pair: Pick<PairRow, 'user_a' | 'user_b'>, from: string, to: string, config = activityConfig()): SameEvent[] {
-  const byDate = new Map<string, { a?: EventCheckin; b?: EventCheckin }>();
-  for (const c of scoringCheckins([pair.user_a, pair.user_b], from, to, config)) {
-    let day = byDate.get(c.date);
-    if (!day) byDate.set(c.date, (day = {}));
-    if (c.userId === pair.user_a) day.a = c;
-    else day.b = c;
+type PairMembers = Pick<PairRow, 'user_a' | 'user_b'>;
+
+interface PairDay {
+  a: DayCheckin | null;
+  b: DayCheckin | null;
+  event: SameEvent | null;
+}
+
+/** 按拍摄时间、编号依次处理。每次补拍都与搭子之前的合格记录核对，首次成功即确定当天的组合。 */
+function selectPairDay(rows: DayRow[], userA: number, config: ActivityConfig): PairDay {
+  const day: PairDay = { a: null, b: null, event: null };
+  const eligible: { a: DayCheckin[]; b: DayCheckin[] } = { a: [], b: [] };
+  for (const row of rows) {
+    const side = row.user_id === userA ? 'a' : 'b';
+    const other = side === 'a' ? 'b' : 'a';
+    const issue = issueOf(row, config);
+    const checkin: DayCheckin = {
+      id: row.id, userId: row.user_id, at: toMs(row.stamped_at), date: row.local_date,
+      device: row.device_hash, place: row.place_label, photoHash: row.photo_hash, geo: geoOf(row),
+      counts: issue === null, issue, isReplacement: issue === null && day[side] !== null,
+    };
+    // 尚未配成时，显示最近一次个人合格记录；全不合格才显示最近的失败原因。
+    if (!checkin.counts) {
+      if (!day[side]?.counts) day[side] = checkin;
+      continue;
+    }
+    day[side] = checkin;
+    for (const candidate of eligible[other]) {
+      const result = compareCheckins(checkin, candidate, config);
+      if (result.outcome === 'matched') {
+        const a = side === 'a' ? checkin : candidate;
+        const b = side === 'b' ? checkin : candidate;
+        return { a, b, event: { date: row.local_date, a, b, gapMs: result.gapMs, distanceM: result.distanceM } };
+      }
+    }
+    eligible[side].push(checkin);
   }
-  const out: SameEvent[] = [];
-  for (const [date, { a, b }] of [...byDate].sort(([x], [y]) => x.localeCompare(y))) {
-    if (!a || !b) continue;
-    const result = compareCheckins(a, b, config);
-    if (result.outcome === 'matched') out.push({ date, a, b, gapMs: result.gapMs, distanceM: result.distanceM });
+  return day;
+}
+
+function selectPairDays(pair: PairMembers, from: string, to: string, config: ActivityConfig): PairDay[] {
+  const rows = q.all<DayRow>(
+    `SELECT ${DAY_COLUMNS} FROM checkins
+     WHERE user_id IN (?, ?) AND local_date BETWEEN ? AND ?
+     ORDER BY local_date, stamped_at, id`,
+    pair.user_a, pair.user_b, from, to,
+  );
+  const byDate = new Map<string, DayRow[]>();
+  for (const row of rows) {
+    const day = byDate.get(row.local_date);
+    if (day) day.push(row);
+    else byDate.set(row.local_date, [row]);
   }
-  return out;
+  return [...byDate.values()].map((day) => selectPairDay(day, pair.user_a, config));
+}
+
+export function pairDayCheckins(pair: PairMembers, date: string, config = activityConfig()): PairDay {
+  return selectPairDays(pair, date, date, config)[0] ?? { a: null, b: null, event: null };
+}
+
+/** 本周进度、总分、排名与抽检都采用每天首次配成的那一组照片。 */
+export function sameEvents(pair: PairMembers, from: string, to: string, config = activityConfig()): SameEvent[] {
+  return selectPairDays(pair, from, to, config).flatMap((day) => day.event ? [day.event] : []);
 }
 
 /** 最近一个已经结束的周日（排名只统计完整的周）；赛季还没有完整的一周时为 null */

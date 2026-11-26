@@ -95,7 +95,7 @@ checkinRouter.delete('/:id', (req, res) => {
   const row = getCheckinRow(parseId(req.params.id));
   if (!row || row.deleted) throw new HttpError(404, '打卡不存在或已删除');
   if (row.user_id !== req.user!.id) throw new HttpError(403, '只能删除自己的打卡');
-  // 清除定位并重新计算积分，剩余照片中当天最早的合格打卡可以递补。
+  // 清除定位并重新计算积分，改用当天剩余照片中最早满足搭子条件的一组。
   q.run('UPDATE checkins SET deleted = 1, geo_lat = NULL, geo_lng = NULL WHERE id = ?', row.id);
   touchScores();
   res.json({ ok: true });

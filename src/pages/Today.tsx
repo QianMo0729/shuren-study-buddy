@@ -49,8 +49,10 @@ export function Today() {
   const today = beijingNow();
   // 先显示上次的内容，后台再刷新：切回「今天」时不用再等
   const buddy = useBuddyStatus();
+  const { config } = useActivityConfig();
   const deckQuery = useCached<DeckResponse>('match:deck:5', () => api.match.deck(5));
   const status = buddy.data ?? null;
+  const hint = buddy.readAt && status?.today?.date === today.date ? buddyDayStatus(status, config, buddy.readAt) : null;
   const error = buddy.error ? errorText(buddy.error) : null;
   const deck = deckQuery.data ?? null;
   const reload = () => { buddy.reload(); deckQuery.reload(); };
@@ -71,14 +73,14 @@ export function Today() {
           ) : !status ? (
             <Skeleton className="h-40 rounded-2xl" />
           ) : status.pair ? (
-            <BuddyBlock status={status} today={today} readAt={buddy.readAt} refreshFailed={!!buddy.error} />
+            <BuddyBlock status={status} today={today} hint={hint} refreshFailed={!!buddy.error} />
           ) : (
             <NoBuddy invites={status.invites.filter((i) => i.direction === 'incoming').length} />
           )}
 
           <Link to="/community/checkin/new" className="flex h-[50px] items-center justify-center gap-2 rounded-[14px] bg-brand text-[17px] font-semibold text-white hover:bg-brand-2 active:opacity-90">
             <CameraIcon size={20} />
-            拍照打卡
+            {hint?.canRetake ? '补拍打卡' : '拍照打卡'}
           </Link>
         </section>
 
@@ -144,17 +146,15 @@ function NoBuddy({ invites }: { invites: number }) {
   );
 }
 
-function BuddyBlock({ status, today, readAt, refreshFailed }: {
-  status: BuddyStatus; today: ReturnType<typeof beijingNow>; readAt: number | null; refreshFailed: boolean;
+function BuddyBlock({ status, today, hint, refreshFailed }: {
+  status: BuddyStatus; today: ReturnType<typeof beijingNow>; hint: ReturnType<typeof buddyDayStatus>; refreshFailed: boolean;
 }) {
   const pair = status.pair!;
   const { week, rank, score } = status;
-  const { config } = useActivityConfig();
   const weekNo = pair.started ? Math.floor((Date.parse(today.date) - Date.parse(mondayOf(pair.startsOn))) / (7 * DAY)) + 1 : 0;
   // 本周哪几天算了一次相同事件（服务器按计分规则判定，和积分一致）
   const both = new Set((week?.events ?? []).map((e) => (new Date(`${e.date}T00:00:00Z`).getUTCDay() + 6) % 7));
   const freeToday = status.today?.free ?? [];
-  const hint = readAt && status.today?.date === today.date ? buddyDayStatus(status, config, readAt) : null;
 
   return (
     <>

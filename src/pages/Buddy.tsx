@@ -127,6 +127,7 @@ function Paired({ status, readAt, refreshFailed, onUnbind, onStatus }: {
           {hint && !todayEvent && (
             <p role="status" className={`px-4 py-3 text-[14px] leading-relaxed ${hint.tone === 'warn' ? 'text-accent-text' : 'text-ink-2'}`}>{hint.text}</p>
           )}
+          {hint?.canRetake && !todayEvent && <Row to="/community/checkin/new">补拍打卡</Row>}
           {week?.events.map((e) => (
             <div key={e.date} className="flex min-h-11 items-center gap-3 px-4 py-3">
               <span className="w-10 text-[15px] font-semibold text-ink">{e.date === today ? '今天' : DAYS[weekday(e.date)]}</span>

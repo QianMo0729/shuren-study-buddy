@@ -206,7 +206,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
   const p3 = [createUser(), createUser()] as const;
   const pairIdOf = (m: Member) => (db.prepare("SELECT id FROM buddy_pairs WHERE status = 'active' AND (user_a = ? OR user_b = ?)").get(m.id, m.id) as { id: number }).id;
 
-  await t.test('same-event check-ins: earliest eligible check-in each day, same day, within the window, capped weekly, ladder points', async () => {
+  await t.test('same-event check-ins: first matching pair per day, same day, within the window, capped weekly, ladder points', async () => {
     for (const [a, b] of [p1, p2, p3]) await bind(a, b);
     db.prepare('UPDATE buddy_pairs SET starts_on = ?, created_at = ? WHERE id IN (?, ?, ?)').run(seasonStart, `${addDays(seasonStart, -3)} 00:00:00`, pairIdOf(p1[0]), pairIdOf(p2[0]), pairIdOf(p3[0]));
     // p1：第 1 周 7 天都打卡（满勤 7 次 → 10 分）；当天之后的打卡不再计分
@@ -216,8 +216,8 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     }
     checkin(p1[0], week(0, 0), '21:00:00');
     checkin(p1[1], week(0, 0), '21:05:00');
-    // p2：第 1 周 4 次 → 6 分；另有几种不计分的情况
-    for (let d = 0; d < 4; d++) {
+    // p2：第 1 周三天直接配成、一天补拍配成 → 6 分；另有几种不计分的情况
+    for (let d = 0; d < 3; d++) {
       checkin(p2[0], week(0, d), '09:00:00');
       checkin(p2[1], week(0, d), '09:10:00');
     }
@@ -228,10 +228,10 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     checkin(p2[0], week(1, 0), '10:00:00', '复习');
     checkin(p2[1], week(1, 0), '10:01:00'); // 说明不到 5 个字
     checkin(p2[0], week(1, 1), '10:00:00');
-    // 两人各自最早的合格打卡相差 3 小时，后面一条虽然只差 5 分钟也不算
-    checkin(p2[0], week(1, 2), '08:00:00');
-    checkin(p2[1], week(1, 2), '11:00:00');
-    checkin(p2[0], week(1, 2), '11:05:00');
+    // 两人最初相差 3 小时；A 补拍后与 B 已有记录相差 5 分钟，计入过去那周。
+    checkin(p2[0], week(0, 3), '08:00:00');
+    checkin(p2[1], week(0, 3), '11:00:00');
+    checkin(p2[0], week(0, 3), '11:05:00');
     // p3：第 2 周 4 次 → 6 分，与 p2 同分；p2 更早达到 → p2 排在前面
     for (let d = 0; d < 4; d++) {
       checkin(p3[0], week(1, d), '15:00:00');
@@ -275,7 +275,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     checkin(a, today, '00:20:00', '第二次只发社区');
     st = await status(a);
     assert.equal(st.today?.mine?.counts, true);
-    assert.equal(Date.parse(st.today!.mine!.at), Date.parse(`${today}T00:00:01+08:00`), 'the earliest eligible check-in of the day is the scoring one');
+    assert.equal(Date.parse(st.today!.mine!.at), Date.parse(`${today}T00:00:01+08:00`), 'later photos preserve the first successful pair');
     assert.ok(st.today?.partner);
     assert.equal(st.week?.count, 1);
     assert.equal(st.today?.pairOutcome, 'matched');
@@ -296,7 +296,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });
 
-  await t.test('deleted and ineligible check-ins give way to the earliest retained eligible one, including for past weekly scores', async () => {
+  await t.test('deleted and ineligible check-ins give way to the first retained matching pair, including for past weekly scores', async () => {
     const [a, b] = [createUser(), createUser()];
     await bind(a, b);
     db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(seasonStart, pairIdOf(a));
@@ -309,7 +309,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
       const short = checkin(a, date, '13:45:00', '');
       if (date === today) {
         const failed = (await status(a)).today!;
-        assert.equal(failed.checkinPolicy, 'first_eligible');
+        assert.equal(failed.checkinPolicy, 'first_matched_pair');
         assert.deepEqual(failed.mine, { checkinId: short, at: new Date(`${date}T13:45:00+08:00`).toISOString(), counts: false, issue: 'caption' });
         assert.equal(failed.pairOutcome, null);
         assert.ok(!('issue' in (await status(b)).today!.partner!), 'the buddy only knows there is no eligible attempt yet');
@@ -330,20 +330,55 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     }
     assert.equal((await status(a)).score?.total, 1, 'past events are recomputed using the same selection');
 
-    // 同秒多次以编号破同分；最早的合格卡超距时，即使之后有更近的一条，也不能择优匹配。
+    // 原组合删除后先看到超距；同秒补拍能直接递补，之后的成功组合不会再替换它。
     const firstEligible = (await status(a)).today!.mine!.checkinId!;
     const farther = checkin(a, today, '13:47:00', '一起复习线性代数', { geo: { ...LIBRARY, lat: 22.615 } });
-    const closer = checkin(a, today, '13:47:00');
     assert.equal((await api(`/checkins/${firstEligible}`, a.cookie, 'DELETE')).status, 200);
     const tooFar = await status(a);
     assert.equal(tooFar.today?.mine?.checkinId, farther);
     assert.equal(tooFar.today?.pairOutcome, 'too_far');
     assert.equal(tooFar.week?.count, 0);
-    assert.equal((await api(`/checkins/${farther}`, a.cookie, 'DELETE')).status, 200);
+    const closer = checkin(a, today, '13:47:00');
+    checkin(a, today, '13:47:00');
     const matched = await status(a);
     assert.equal(matched.today?.mine?.checkinId, closer);
     assert.equal(matched.today?.pairOutcome, 'matched');
     assert.equal(matched.week?.count, 1);
+    assert.equal(matched.today?.mine?.isReplacement, true);
+    assert.equal((await api(`/checkins/${farther}`, a.cookie)).status, 200, 'the failed photo is retained');
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+  });
+
+  await t.test('a time or distance mismatch can be retried from either side until the first successful pair', async () => {
+    const [a, b] = [createUser(), createUser()];
+    await bind(a, b);
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(seasonStart, pairIdOf(a));
+    const far = { ...LIBRARY, lat: 22.6175 };
+    checkin(a, today, '08:00:00');
+    checkin(b, today, '09:00:00');
+    assert.equal((await status(a)).today?.pairOutcome, 'too_late');
+
+    const farther = checkin(a, today, '09:03:00', '一起复习线性代数', { geo: far });
+    checkin(a, today, '09:04:00', '少');
+    const pending = await status(a);
+    assert.equal(pending.today?.mine?.checkinId, farther, 'most recent individually eligible attempt is shown');
+    assert.equal(pending.today?.pairOutcome, 'too_far');
+    assert.equal(pending.week?.count, 0);
+
+    const secondB = checkin(b, today, '11:00:00', '一起复习线性代数', { geo: far });
+    checkin(b, today, '11:01:00'); // 时间更接近，地点不符合
+    assert.equal((await status(b)).today?.pairOutcome, 'too_late');
+    const secondA = checkin(a, today, '11:02:00', '一起复习线性代数', { geo: far });
+    checkin(a, today, '11:03:00');
+    checkin(b, today, '11:04:00');
+    const mine = await status(a);
+    const theirs = await status(b);
+    assert.equal(mine.today?.mine?.checkinId, secondA);
+    assert.equal(theirs.today?.mine?.checkinId, secondB, 'an earlier compatible partner photo can still be used');
+    assert.equal(mine.today?.pairOutcome, 'matched');
+    assert.equal(theirs.today?.pairOutcome, 'matched');
+    assert.deepEqual(mine.week?.events, [{ date: today, mine: '11:02', theirs: '11:00', place: '图书馆', distance: 0, mineReplacement: true, theirsReplacement: true }]);
+    assert.equal(mine.week?.count, 1);
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });
 
@@ -478,9 +513,12 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal(mine.invalid.reason, '画面中没有学习内容');
     assert.equal(mine.invalid.canAppeal, true);
     assert.equal((await api(`/checkins/${target.id}`, p2[0].cookie)).body.checkin.invalid, null, 'others never see the invalidation');
-    // 本人改用 21:00 的合格打卡，与搭子最早合格的 20:25 相差 35 分钟 → 第 1 周 6 次 → 8 分
+    // 原组合被判无效时，21:00 和 21:05 的补拍仍然配成。再删掉后者就没有合格组合。
     const totalOf = async () => (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(p1[0])).total;
-    assert.equal(await totalOf(), 8, 'the replacement is too late for the other member’s earliest eligible check-in');
+    assert.equal(await totalOf(), 10, 'another matching pair survives invalidation');
+    const later = db.prepare('SELECT id FROM checkins WHERE user_id = ? AND local_date = ? ORDER BY stamped_at DESC LIMIT 1').get(p1[1].id, week(0, 0)) as { id: number };
+    assert.equal((await api(`/checkins/${later.id}`, p1[1].cookie, 'DELETE')).status, 200);
+    assert.equal(await totalOf(), 8, 'the remaining photos cannot form a pair');
     const appeal = await api('/activity/appeals', p1[0].cookie, 'POST', { checkinId: target.id, body: '照片里有课本，只是光线暗' });
     assert.equal(appeal.status, 200, appeal.text);
     assert.equal((await api('/activity/appeals', p1[0].cookie, 'POST', { checkinId: target.id, body: '再来一次' })).status, 409, 'one appeal per check-in');
@@ -511,6 +549,8 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
   await t.test('weekly samples pick random and flagged check-ins once per week', async () => {
     const shared = 'device-hash-shared';
     const ids = [checkin(p1[0], week(2, 3), '12:00:00', '一起复习线性代数', { device: shared }), checkin(p1[1], week(2, 3), '12:00:01', '一起复习线性代数', { device: shared })];
+    // A 随后还有时间更近但相距过远的照片，审核对照必须显示真正配对的打卡。
+    const unrelated = checkin(p1[0], week(2, 3), '12:00:01', '后来的一张照片', { geo: { ...LIBRARY, lat: 22.615 } });
     // 两张照片的指纹只差 1 位：像是同一部手机在同一个位置拍的；差很多的不标记
     const similar = [checkin(p3[0], week(2, 4), '09:00:00', '一起复习线性代数', { photoHash: 'ffffffff00000000' }), checkin(p3[1], week(2, 4), '09:20:00', '一起复习线性代数', { photoHash: 'ffffffff00000001' })];
     const different = [checkin(p3[0], week(2, 5), '09:00:00', '一起复习线性代数', { photoHash: 'ffffffff00000000' }), checkin(p3[1], week(2, 5), '09:20:00', '一起复习线性代数', { photoHash: '00000000ffffffff' })];
@@ -519,6 +559,8 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     const list = (await api('/admin/audits', moderator.cookie)).body.items;
     const flagged = list.filter((item: any) => ids.includes(item.checkinId));
     assert.equal(flagged.length, 2);
+    assert.equal(flagged.find((item: any) => item.checkinId === ids[1]).partnerCheckin.id, ids[0]);
+    assert.ok(!list.some((item: any) => item.checkinId === unrelated));
     assert.ok(flagged[0].flags.some((f: string) => f.includes('同一台设备')));
     assert.ok(flagged[0].flags.some((f: string) => f.includes('几乎同时')));
     // 审核人员看到两人相距多远和定位误差，看不到经纬度

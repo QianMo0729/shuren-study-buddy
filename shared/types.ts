@@ -612,10 +612,10 @@ export interface BuddyStatus {
   score: { total: number; through: string | null } | null;
   /** 组合在搭子总榜上的名次（只给自己看）；total 为参与排名的组合数 */
   rank: { rank: number; tied: boolean; total: number } | null;
-  /** 两人当天最早且仍合格的打卡；没有合格打卡时显示最近一次尝试。 */
+  /** 当天首次配对成功的两张打卡。配对前各显示最近的个人合格打卡，尚无合格记录时显示最近一次尝试。 */
   today: {
     date: string;
-    checkinPolicy?: 'first_eligible';
+    checkinPolicy?: 'first_eligible' | 'first_matched_pair';
     /** checkinId 用于核对本人的提交回执；issue 为最近一次尝试未合格的原因。 */
     mine: { at: string; counts: boolean; issue: DayCheckinIssue | null; checkinId?: number; isReplacement?: boolean } | null;
     /** 只向搭子说明删除状态，删除后地点为空。其他个人原因仅本人可见。 */
