@@ -9,6 +9,8 @@ import { q } from './db.ts';
 
 export interface EventCheckin {
   id: number;
+  /** 当天有过更早的个人不合格或已删除记录，这条合格打卡递补。 */
+  isReplacement: boolean;
   userId: number;
   at: number;
   date: string;
@@ -76,7 +78,7 @@ const geoOf = (row: DayRow) => (row.geo_lat === null || row.geo_lng === null || 
   : { lat: row.geo_lat, lng: row.geo_lng, accuracy: row.geo_accuracy });
 
 /**
- * 当天第一次打卡为什么不能计分；能计分时为 null。
+ * 这张打卡不满足个人计分条件的原因；满足时为 null。
  * 要检查距离时，还必须有定位且误差不超过上限（定位不准就没法核对两人是否在同一处）。
  */
 function issueOf(row: DayRow, config: ActivityConfig): DayCheckinIssue | null {
@@ -89,11 +91,13 @@ function issueOf(row: DayRow, config: ActivityConfig): DayCheckinIssue | null {
   return null;
 }
 
-/**
- * 每人每天的计分打卡：当天第一次打卡（含之后删除的，删掉重拍不能换一次）。
- * 它有效（未删除、未撤下、未判无效、说明字数达标、定位够准）才参与计分；当天之后的打卡照常发到社区，但不计分。
- */
-export function scoringCheckins(userIds: number[], from: string, to: string, config = activityConfig()): EventCheckin[] {
+export interface DayCheckin extends EventCheckin {
+  counts: boolean;
+  issue: DayCheckinIssue | null;
+}
+
+/** 每人每个北京日选最早仍合格的打卡。若都不合格，保留最近一次的原因供本人查看。 */
+function selectDayCheckins(userIds: number[], from: string, to: string, config: ActivityConfig): DayCheckin[] {
   if (!userIds.length || from > to) return [];
   const marks = userIds.map(() => '?').join(',');
   const rows = q.all<DayRow>(
@@ -102,38 +106,29 @@ export function scoringCheckins(userIds: number[], from: string, to: string, con
      ORDER BY stamped_at, id`,
     ...userIds, from, to,
   );
-  const seen = new Set<string>();
-  const out: EventCheckin[] = [];
+  const selected = new Map<string, DayCheckin>();
   for (const row of rows) {
     const key = `${row.user_id}|${row.local_date}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (issueOf(row, config)) continue;
-    out.push({
+    const earlier = selected.get(key);
+    if (earlier?.counts) continue;
+    const issue = issueOf(row, config);
+    selected.set(key, {
       id: row.id, userId: row.user_id, at: toMs(row.stamped_at), date: row.local_date,
       device: row.device_hash, place: row.place_label, photoHash: row.photo_hash, geo: geoOf(row),
+      counts: issue === null, issue, isReplacement: issue === null && earlier !== undefined,
     });
   }
-  return out;
+  return [...selected.values()];
 }
 
-export interface DayCheckin extends Pick<EventCheckin, 'at' | 'geo'> {
-  id: number;
-  /** 能参与计分：未删除、未撤下、未判无效、说明字数达标、定位够准 */
-  counts: boolean;
-  issue: DayCheckinIssue | null;
-  place: string;
+/** 本周记录、总积分、排名与抽检共用同一批合格打卡。 */
+export function scoringCheckins(userIds: number[], from: string, to: string, config = activityConfig()): EventCheckin[] {
+  return selectDayCheckins(userIds, from, to, config).filter((checkin) => checkin.counts);
 }
 
-/** 某人某天的计分打卡（当天第一次打卡）；还没打卡时为 null */
+/** 当天选中的合格打卡，或最近的未合格打卡；当天还没拍摄时为 null。 */
 export function dayCheckin(uid: number, date: string, config = activityConfig()): DayCheckin | null {
-  const row = q.get<DayRow>(
-    `SELECT ${DAY_COLUMNS} FROM checkins WHERE user_id = ? AND local_date = ? ORDER BY stamped_at, id LIMIT 1`,
-    uid, date,
-  );
-  if (!row) return null;
-  const issue = issueOf(row, config);
-  return { id: row.id, at: toMs(row.stamped_at), geo: geoOf(row), counts: !issue, issue, place: row.place_label };
+  return selectDayCheckins([uid], date, date, config)[0] ?? null;
 }
 
 /** 两次打卡相距多少米；有一方没有定位时为 null */
@@ -141,7 +136,7 @@ export function checkinDistance(a: Pick<EventCheckin, 'geo'>, b: Pick<EventCheck
   return a.geo && b.geo ? distanceM(a.geo, b.geo) : null;
 }
 
-/** 比较同一天两张合格首卡；周积分与用户当日看到的结果共用此判定。 */
+/** 比较两人当天各自最早的合格打卡；周积分与用户当日看到的结果共用此判定。 */
 export function compareCheckins(
   a: Pick<EventCheckin, 'at' | 'geo'>,
   b: Pick<EventCheckin, 'at' | 'geo'>,

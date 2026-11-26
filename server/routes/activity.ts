@@ -87,13 +87,19 @@ function statusOf(uid: number): BuddyStatus {
       start: week.start, end: week.end, count: week.count, cap: week.cap, points: week.points, bonus: week.bonus,
       events: week.events.map((e) => {
         const [me, other] = e.a.userId === uid ? [e.a, e.b] : [e.b, e.a];
-        return { date: e.date, mine: hm(me.at), theirs: hm(other.at), place: me.place, distance: e.distanceM === null ? null : Math.round(e.distanceM / 10) * 10 };
+        return {
+          date: e.date, mine: hm(me.at), theirs: hm(other.at), place: me.place,
+          distance: e.distanceM === null ? null : Math.round(e.distanceM / 10) * 10,
+          mineReplacement: me.isReplacement || undefined,
+          theirsReplacement: other.isReplacement || undefined,
+        };
       }),
     },
     score: { total: mine?.total ?? pairScore(pair, board.through).total, through: board.through },
     rank: mine ? { rank: mine.rank, tied: mine.tied, total: board.items.length } : null,
     today: {
       date,
+      checkinPolicy: 'first_eligible',
       mine: mineToday(myCheckin),
       partner: partnerToday(partnerCheckin),
       pairOutcome: week && myCheckin?.counts && partnerCheckin?.counts ? compareCheckins(myCheckin, partnerCheckin, config).outcome : null,
@@ -102,9 +108,16 @@ function statusOf(uid: number): BuddyStatus {
   };
 }
 
-// 只挑出页面要用的字段：不带打卡编号、经纬度
-const mineToday = (c: DayCheckin | null) => (c ? { at: new Date(c.at).toISOString(), counts: c.counts, issue: c.issue } : null);
-const partnerToday = (c: DayCheckin | null) => (c ? { at: new Date(c.at).toISOString(), counts: c.counts, place: c.place } : null);
+// 只返回界面所需的字段，打卡编号仅本人可见，不发送经纬度。
+const mineToday = (c: DayCheckin | null) => (c ? {
+  checkinId: c.id, at: new Date(c.at).toISOString(), counts: c.counts, issue: c.issue, isReplacement: c.isReplacement || undefined,
+} : null);
+function partnerToday(c: DayCheckin | null): NonNullable<BuddyStatus['today']>['partner'] {
+  if (!c) return null;
+  const at = new Date(c.at).toISOString();
+  if (c.issue === 'deleted') return { at, counts: false, place: '', issue: 'deleted' };
+  return { at, counts: c.counts, place: c.place, isReplacement: c.isReplacement || undefined };
+}
 
 activityRouter.get('/me', (req, res) => {
   res.json(statusOf(req.user!.id));

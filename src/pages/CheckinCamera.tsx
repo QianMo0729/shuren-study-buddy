@@ -10,7 +10,7 @@ import { useToast } from '../lib/toast';
 import { Button, Field, Modal, Segmented, Spinner, Textarea } from '../components/ui';
 import { Stamp } from '../components/brand';
 import { checkinAlt } from '../components/checkin/CheckinCard';
-import { buddyCheckinHint } from '../components/checkin/buddyCheckinHint';
+import { buddyCheckinHint, canTakeScoringCheckin } from '../components/checkin/buddyCheckinHint';
 import { useCheckinSession } from '../components/checkin/useCheckinSession';
 import { useGeoLabel } from '../components/checkin/useGeoLabel';
 import { captureFrame, useLiveCamera } from '../components/checkin/useLiveCamera';
@@ -46,7 +46,7 @@ export function CheckinCamera() {
   const [done, setDone] = useState<{ checkin: Checkin; stats: CheckinStats } | null>(null);
   const camera = useLiveCamera(!done);
   const live = camera.state.status === 'live';
-  const session = useCheckinSession(live);
+  const session = useCheckinSession(live && !done);
   // 先让相机完成权限与预览初始化，避免 iPhone 同时弹出相机和定位权限请求。
   const geo = useGeoLabel(live && !done, activity.config.accuracyMeters);
   const watermarkPlace = geo.label;
@@ -95,8 +95,7 @@ export function CheckinCamera() {
     else if (camera.state.status === 'error') setStatus(camera.state.problem.title);
   }, [camera.state]);
 
-  // 今天的第一次打卡才计分：说明不够字数时先提醒一次，免得白白用掉今天的机会
-  const scoringShot = !!buddy?.pair?.started && buddy.season.status === 'running' && !!buddy.today && !buddy.today.mine;
+  const scoringShot = canTakeScoringCheckin(buddy);
   const captionShort = captionLength(caption) < activity.config.captionMin;
   const [captionWarned, setCaptionWarned] = useState(false);
   const [locationWarned, setLocationWarned] = useState(false);
@@ -112,7 +111,7 @@ export function CheckinCamera() {
     if (scoringShot && captionShort && !captionWarned) {
       setCaptionWarned(true);
       setNoteOpen(true);
-      toast.info('先写一句学了什么', `这是你今天的计分打卡，说明至少 ${activity.config.captionMin} 个字才计分。`);
+      toast.info('先写一句学了什么', `说明至少 ${activity.config.captionMin} 个字，这张照片才能参与搭子计分。`);
       return;
     }
     // 定位误差太大就没法核对两人是否在同一处，这次打卡不计分：先提醒一次
@@ -160,14 +159,23 @@ export function CheckinCamera() {
     return () => { alive = false; };
   }, []);
 
-  const hint = buddy && snapshot ? buddyCheckinHint(buddy, activity.config, snapshot.readAt + session.offset, done?.checkin.stampedAt) : null;
+  const hint = buddy && snapshot ? buddyCheckinHint(buddy, activity.config, snapshot.readAt + session.offset, done?.checkin.stampedAt, done?.checkin.id) : null;
 
   if (done) {
     const resultHint = hint?.text ?? (buddy === null ? '暂时无法读取搭子打卡结果，请稍后在「我的搭子」查看。' : '正在核对搭子打卡结果…');
+    const retake = () => {
+      setLastPhoto(done.checkin.image);
+      setCaptionWarned(false);
+      setLocationWarned(false);
+      setFlash(0);
+      setNoteOpen(buddy?.today?.mine?.issue === 'caption');
+      if (snapshot) setSnapshot({ ...snapshot, receiptId: null });
+      setDone(null);
+    };
     return (
       <div className="fixed inset-0 z-[60] overflow-y-auto bg-paper px-4 pt-[calc(env(safe-area-inset-top)+16px)] pb-[calc(env(safe-area-inset-bottom)+24px)]">
         <p className="sr-only" role="status" aria-live="polite">{status}</p>
-        <Result result={done} activityHint={resultHint} onDone={back} onOpen={() => nav(`/community/checkins/${done.checkin.id}`, { replace: true })} />
+        <Result result={done} activityHint={resultHint} onRetake={hint?.canRetake ? retake : undefined} onDone={back} onOpen={() => nav(`/community/checkins/${done.checkin.id}`, { replace: true })} />
       </div>
     );
   }
@@ -429,13 +437,20 @@ function CameraError({ title, desc, onRetry }: { title: string; desc: string; on
   );
 }
 
-function Result({ result, activityHint, onDone, onOpen }: { result: { checkin: Checkin; stats: CheckinStats }; activityHint: string; onDone: () => void; onOpen: () => void }) {
+function Result({ result, activityHint, onDone, onOpen, onRetake }: {
+  result: { checkin: Checkin; stats: CheckinStats };
+  activityHint: string;
+  onDone: () => void;
+  onOpen: () => void;
+  onRetake?: () => void;
+}) {
   const { checkin, stats } = result;
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease }} className="mx-auto max-w-[720px]">
       <div className="mb-3 rounded-md border border-line bg-surface p-4 sm:p-5">
         <h1 className="font-display text-[22px] text-ink">{checkin.reviewPending ? '已提交，等待审核' : '打卡照片已提交'}</h1>
         <p className="mt-1 text-[14px] leading-relaxed text-ink-2" role="status">{activityHint}</p>
+        {onRetake && <Button size="sm" variant="secondary" className="mt-2" onClick={onRetake}>重新拍照</Button>}
         {checkin.reviewPending && <p className="mt-2 text-[14px] text-ink-2">暂未公开：{checkin.reviewReasons.join('；')}。审核通过后显示。</p>}
       </div>
       <div className="relative">

@@ -64,7 +64,7 @@ export function Rules() {
         <Section id="score" title="相同事件打卡与计分">
           <ul className="list-disc space-y-1 pl-5">
             <li>只按打卡次数计分，必须两人都打卡才给分。</li>
-            <li><b className="text-ink">每人每天只有第一次打卡参与计分</b>（北京时间）。当天之后的打卡照常发到社区，但不计分；第一次打卡删掉后重拍也不能换一次。</li>
+            <li><b className="text-ink">每天取每人保留的第一张合格打卡</b>（北京时间）。当天可以补拍。照片删除或不合格时，系统自动选用当天按时间最早的其余合格照片，再核对两人的时间和距离。</li>
             <li>同一天两人的计分打卡都有效、时间相差不超过 <b className="text-ink">{c.windowMinutes} 分钟</b>{c.distanceMeters > 0 && <>、两人打卡的位置相距不超过 <b className="text-ink">{c.distanceMeters} 米</b></>}，算一次相同事件打卡。跨天不算，例如 23:50 和次日 00:10。先约好时间和地方再拍。</li>
             <li id="location">
               <b className="text-ink">打卡必须定位，地点不能手选。</b>照片上的地点按定位自动识别
@@ -73,7 +73,7 @@ export function Rules() {
             </li>
             <li>每天最多算 1 次，每周最多计 <b className="text-ink">{c.weeklyCap} 次</b>。</li>
             <li>有效打卡：网页相机现场拍摄（不能从相册上传），照片符合下面的要求，并在说明里写一句学了什么（至少 {c.captionMin} 个字）。</li>
-            <li>每周日 24:00 截止，周一按下表把上一周的次数换算成分数，直接累加到组合总积分。取消补卡，缺卡不能补。</li>
+            <li>每周日 24:00 截止，周一按下表把上一周的次数换算成分数，直接累加到组合总积分。补拍只能计入拍摄当天。</li>
             {mondayOf(c.seasonStart) !== c.seasonStart && (
               <li>第一周不满一周：从 {shortDate(c.seasonStart)}（{weekdayLabel(c.seasonStart)}）算到 {shortDate(addDays(mondayOf(c.seasonStart), 6))}（周日），按同一张表换算；{shortDate(c.seasonStart)} 之前的打卡不计分。</li>
             )}

@@ -582,9 +582,12 @@ export interface BuddyWeekEvent {
   place: string;
   /** 两人打卡位置相距多少米（取整到 10 米）；不检查距离时为 null */
   distance: number | null;
+  /** 较早的个人打卡未满足要求，实际计入的是后来的一条。 */
+  mineReplacement?: boolean;
+  theirsReplacement?: boolean;
 }
 
-/** 当天第一次打卡不能计分的原因 */
+/** 一条打卡不能参与计分的个人原因 */
 export type DayCheckinIssue = 'deleted' | 'taken_down' | 'invalid' | 'caption' | 'location';
 export type PairCheckinOutcome = 'matched' | 'too_late' | 'too_far';
 
@@ -609,14 +612,15 @@ export interface BuddyStatus {
   score: { total: number; through: string | null } | null;
   /** 组合在搭子总榜上的名次（只给自己看）；total 为参与排名的组合数 */
   rank: { rank: number; tied: boolean; total: number } | null;
-  /** 今天：两人当天的计分打卡（每人每天第一次打卡）与两人都有空的时段 */
+  /** 两人当天最早且仍合格的打卡；没有合格打卡时显示最近一次尝试。 */
   today: {
     date: string;
-    /** issue：不能计分的原因（能计分时为 null） */
-    mine: { at: string; counts: boolean; issue: DayCheckinIssue | null } | null;
-    /** place：搭子打卡照片上的地点 */
-    partner: { at: string; counts: boolean; place: string } | null;
-    /** 计分期内双方首卡都合格时，返回当天组合是否同时打卡成功。 */
+    checkinPolicy?: 'first_eligible';
+    /** checkinId 用于核对本人的提交回执；issue 为最近一次尝试未合格的原因。 */
+    mine: { at: string; counts: boolean; issue: DayCheckinIssue | null; checkinId?: number; isReplacement?: boolean } | null;
+    /** 只向搭子说明删除状态，删除后地点为空。其他个人原因仅本人可见。 */
+    partner: { at: string; counts: boolean; place: string; issue?: 'deleted'; isReplacement?: boolean } | null;
+    /** 计分期内双方都有合格打卡时，返回当天组合是否同时打卡成功。 */
     pairOutcome?: PairCheckinOutcome | null;
     /** 今天两人问卷里都有空的时段（PERIODS 下标） */
     free: number[];

@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { DAYS } from '../../shared/options';
 import { beijingDay, mondayOf, shortDate, weekdayLabel } from '../../shared/activity';
 import type { BuddyStatus } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { useToast } from '../lib/toast';
-import { cached, setCached } from '../lib/cache';
+import { useBuddyStatus } from '../lib/useBuddyStatus';
 import { useActivityConfig } from '../lib/activity';
 import { Plate } from '../components/brand';
 import { MeAvatar, NavBar } from '../components/Shell';
 import { splitNickname } from '../components/ProfileCard';
 import { Button, ConfirmDialog, GroupList, Skeleton, Toggle } from '../components/ui';
 import { Chevron } from '../components/icons';
+import { buddyDayStatus } from '../components/checkin/buddyCheckinHint';
 import { useBuddyActions } from '../components/buddy/BuddyActions';
 
 const DAY = 86_400_000;
@@ -22,13 +23,9 @@ const errorText = (e: unknown) => (e instanceof ApiError ? e.message : '网络�
 export function Buddy() {
   const toast = useToast();
   const nav = useNavigate();
-  const [status, setStatusState] = useState<BuddyStatus | null>(() => cached<BuddyStatus>('activity:me') ?? null);
-  const setStatus = useCallback((s: BuddyStatus) => { setCached('activity:me', s); setStatusState(s); }, []);
-  const [error, setError] = useState<string | null>(null);
+  const { data: status, readAt, error, reload: load, setData: setStatus } = useBuddyStatus();
   const [unbinding, setUnbinding] = useState(false);
   const [busy, setBusy] = useState(false);
-  const load = useCallback(() => api.activity.me().then((s) => { setStatus(s); setError(null); }).catch((e) => setError(errorText(e))), [setStatus]);
-  useEffect(() => { void load(); }, [load]);
   const actions = useBuddyActions((s) => { setStatus(s); if (s.matchId) nav(`/messages/${s.matchId}`); });
 
   const unbind = async () => {
@@ -49,12 +46,12 @@ export function Buddy() {
     <div className="mx-auto max-w-[560px] pt-[env(safe-area-inset-top)] md:pt-8">
       <NavBar label="今天" to="/today" right={pair?.matchId ? <Link to={`/messages/${pair.matchId}`} className="flex h-11 items-center px-1 text-[17px] text-brand-text">私聊</Link> : null} />
 
-      {error && !status ? (
-        <p className="mt-6 text-[15px] text-ink-2">加载失败：{error}<Button size="sm" className="ml-2" onClick={() => void load()}>重试</Button></p>
+      {!!error && !status ? (
+        <p className="mt-6 text-[15px] text-ink-2">加载失败：{errorText(error)}<Button size="sm" className="ml-2" onClick={() => void load()}>重试</Button></p>
       ) : !status ? (
         <Skeleton className="mt-6 h-80 rounded-[22px]" />
       ) : pair ? (
-        <Paired status={status} onUnbind={() => setUnbinding(true)} onStatus={setStatus} />
+        <Paired status={status} readAt={readAt} refreshFailed={!!error} onUnbind={() => setUnbinding(true)} onStatus={setStatus} />
       ) : (
         <Unpaired status={status} actions={actions} />
       )}
@@ -82,12 +79,16 @@ export function Buddy() {
   );
 }
 
-function Paired({ status, onUnbind, onStatus }: { status: BuddyStatus; onUnbind: () => void; onStatus: (s: BuddyStatus) => void }) {
+function Paired({ status, readAt, refreshFailed, onUnbind, onStatus }: {
+  status: BuddyStatus; readAt: number | null; refreshFailed: boolean; onUnbind: () => void; onStatus: (s: BuddyStatus) => void;
+}) {
   const pair = status.pair!;
   const { week, rank, score } = status;
   const { config } = useActivityConfig();
   const today = bjDate(Date.now());
   const weekNo = pair.started ? Math.floor((Date.parse(today) - Date.parse(mondayOf(pair.startsOn))) / (7 * DAY)) + 1 : 0;
+  const hint = readAt && status.today?.date === today ? buddyDayStatus(status, config, readAt) : null;
+  const todayEvent = week?.events.some((event) => event.date === today);
   const days = Math.max(1, Math.floor((Date.now() - Date.parse(pair.createdAt)) / DAY));
   const created = new Date(Date.parse(pair.createdAt) + 8 * 3_600_000);
   const weekday = (date: string) => (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
@@ -102,7 +103,7 @@ function Paired({ status, onUnbind, onStatus }: { status: BuddyStatus; onUnbind:
         <div className="flex flex-col items-center gap-0.5">
           <MyWord partner={pair.partner.nickname} />
           <p className="text-[14px] text-ink-3">
-            {created.getUTCMonth() + 1}月{created.getUTCDate()}日绑定 · 已 {days} 天 · {weekNo > 0 ? `第 ${weekNo} 个计分周` : `${shortDate(pair.startsOn)}（${weekdayLabel(pair.startsOn)}）开始计分`}
+            {created.getUTCMonth() + 1}月{created.getUTCDate()}日绑定 · 已 {days} 天{weekNo > 0 && ` · 第 ${weekNo} 个计分周`}
           </p>
         </div>
       </div>
@@ -122,19 +123,20 @@ function Paired({ status, onUnbind, onStatus }: { status: BuddyStatus; onUnbind:
       <section className="flex flex-col gap-2">
         <h2 className="px-4 text-[13px] font-medium text-ink-3">本周同时打卡</h2>
         <GroupList>
-          {week?.events.length ? (
-            week.events.map((e) => (
-              <div key={e.date} className="flex min-h-11 items-center gap-3 px-4 py-3">
-                <span className="w-10 text-[15px] font-semibold text-ink">{DAYS[weekday(e.date)]}</span>
-                <span className="flex min-w-0 flex-1 flex-col gap-px">
-                  <span className="truncate text-[15px] text-ink">{e.place}</span>
-                  <span className="text-[13px] text-ink-3 tabular">我 {e.mine} / 搭子 {e.theirs}{e.distance !== null && ` · 相距约 ${e.distance} 米`} · 算一次</span>
-                </span>
-              </div>
-            ))
-          ) : (
-            <p className="px-4 py-3 text-[15px] text-ink-3">{week ? `本周还没有同时打卡。每人每天第一次打卡计分，两人相差不超过 ${config.windowMinutes} 分钟${config.distanceMeters > 0 ? `、相距不超过 ${config.distanceMeters} 米` : ''}算一次。` : '计分开始后，这里会列出你们同时打卡的记录。'}</p>
+          {refreshFailed && <p role="status" className="px-4 py-3 text-[14px] text-ink-3">暂时无法更新今天的打卡结果。</p>}
+          {hint && !todayEvent && (
+            <p role="status" className={`px-4 py-3 text-[14px] leading-relaxed ${hint.tone === 'warn' ? 'text-accent-text' : 'text-ink-2'}`}>{hint.text}</p>
           )}
+          {week?.events.map((e) => (
+            <div key={e.date} className="flex min-h-11 items-center gap-3 px-4 py-3">
+              <span className="w-10 text-[15px] font-semibold text-ink">{e.date === today ? '今天' : DAYS[weekday(e.date)]}</span>
+              <span className="flex min-w-0 flex-1 flex-col gap-px">
+                <span className="truncate text-[15px] text-ink">{e.place}</span>
+                <span className="text-[13px] text-ink-3 tabular">我 {e.mine}{e.mineReplacement && '（补拍）'} / 搭子 {e.theirs}{e.theirsReplacement && '（补拍）'}{e.distance !== null && ` · 相距约 ${e.distance} 米`} · 算一次</span>
+              </span>
+            </div>
+          ))}
+          {!refreshFailed && readAt !== null && !hint && !week?.events.length && <p className="px-4 py-3 text-[15px] text-ink-3">本周还没有同时打卡记录。</p>}
         </GroupList>
       </section>
 

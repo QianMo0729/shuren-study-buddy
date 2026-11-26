@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BuddyStatus } from '../shared/types';
-import { buddyCheckinHint } from '../src/components/checkin/buddyCheckinHint';
+import { buddyCheckinHint, buddyDayStatus, canTakeScoringCheckin } from '../src/components/checkin/buddyCheckinHint';
 
 const date = '2026-11-26';
 const at = '2026-11-26T02:00:00Z';
@@ -70,4 +70,47 @@ test('a receipt from before Beijing midnight never displays the next day’s out
   const hint = buddyCheckinHint(next, rules, now + 86_400_000, at)!;
   assert.match(hint.text, /11月26日/);
   assert.notEqual(hint.tone, 'good');
+});
+
+test('unqualified attempts leave the camera warnings enabled and identify who can try again', () => {
+  const failed = { ...mine, counts: false, issue: 'deleted' as const };
+  const day = status({ checkinPolicy: 'first_eligible', mine: failed });
+  assert.equal(canTakeScoringCheckin(day), true);
+  assert.match(buddyDayStatus(day, rules, now)!.text, /你 10:00 的打卡已删除/);
+  const retry = buddyCheckinHint(day, rules, now, at)!;
+  assert.match(retry.text, /你可以补拍/);
+  assert.equal(retry.canRetake, true);
+  day.today!.partner = partner;
+  const expiredRetry = buddyCheckinHint(day, rules, now + 31 * 60_000, at)!;
+  assert.match(expiredRetry.text, /已超过 30 分钟/);
+  assert.ok(!expiredRetry.canRetake);
+  day.today!.partner = { ...partner, counts: false, issue: 'deleted' };
+  assert.match(buddyDayStatus(day, rules, now)!.text, /搭子 10:00 的打卡已删除.*你们都可以补拍/);
+  day.today!.mine = mine;
+  assert.equal(canTakeScoringCheckin(day), false);
+  assert.match(buddyDayStatus(day, rules, now)!.text, /搭子还可以补拍/);
+  const expired = buddyDayStatus(day, rules, now + 31 * 60_000)!.text;
+  assert.match(expired, /未在 30 分钟内打卡/);
+  assert.doesNotMatch(expired, /可以补拍/);
+  assert.equal(canTakeScoringCheckin(status({ mine: failed })), false);
+});
+
+test('an earlier qualifying card stays selected after a time or distance mismatch', () => {
+  for (const pairOutcome of ['too_late', 'too_far'] as const) {
+    const day = status({ checkinPolicy: 'first_eligible', mine: { ...mine, checkinId: 12 }, partner, pairOutcome });
+    assert.equal(canTakeScoringCheckin(day), false);
+    const overview = buddyDayStatus(day, rules, now)!.text;
+    assert.match(overview, /今天未计入同时打卡/);
+    assert.doesNotMatch(overview, /社区|可以补拍/);
+    assert.match(buddyCheckinHint(day, rules, now, at, 13)!.text, /本次只记录社区打卡/);
+  }
+});
+
+test('a replacement receipt is distinguished from a duplicate even in the same second', () => {
+  const day = status({
+    checkinPolicy: 'first_eligible', mine: { ...mine, checkinId: 2, isReplacement: true }, partner, pairOutcome: 'matched',
+  });
+  assert.equal(buddyCheckinHint(day, rules, now, at, 2)!.text, '这张补拍已选为你今天的计分打卡。你们今天已完成 1 次同时打卡。');
+  assert.match(buddyCheckinHint(day, rules, now, at, 3)!.text, /已完成 1 次同时打卡。本次只记录社区打卡/);
+  assert.equal(buddyDayStatus(day, rules, now)!.text, '你们今天已完成 1 次同时打卡。');
 });

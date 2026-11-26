@@ -206,7 +206,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
   const p3 = [createUser(), createUser()] as const;
   const pairIdOf = (m: Member) => (db.prepare("SELECT id FROM buddy_pairs WHERE status = 'active' AND (user_a = ? OR user_b = ?)").get(m.id, m.id) as { id: number }).id;
 
-  await t.test('same-event check-ins: first check-in of the day, same day, within the window, capped weekly, ladder points', async () => {
+  await t.test('same-event check-ins: earliest eligible check-in each day, same day, within the window, capped weekly, ladder points', async () => {
     for (const [a, b] of [p1, p2, p3]) await bind(a, b);
     db.prepare('UPDATE buddy_pairs SET starts_on = ?, created_at = ? WHERE id IN (?, ?, ?)').run(seasonStart, `${addDays(seasonStart, -3)} 00:00:00`, pairIdOf(p1[0]), pairIdOf(p2[0]), pairIdOf(p3[0]));
     // p1：第 1 周 7 天都打卡（满勤 7 次 → 10 分）；当天之后的打卡不再计分
@@ -228,7 +228,7 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     checkin(p2[0], week(1, 0), '10:00:00', '复习');
     checkin(p2[1], week(1, 0), '10:01:00'); // 说明不到 5 个字
     checkin(p2[0], week(1, 1), '10:00:00');
-    // 只看每人当天第一次打卡：第一次相差 3 小时，第二次虽然只差 5 分钟也不算
+    // 两人各自最早的合格打卡相差 3 小时，后面一条虽然只差 5 分钟也不算
     checkin(p2[0], week(1, 2), '08:00:00');
     checkin(p2[1], week(1, 2), '11:00:00');
     checkin(p2[0], week(1, 2), '11:05:00');
@@ -271,11 +271,11 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.ok(st.today!.free.length > 0, 'periods when both are free today');
     checkin(a, today, '00:00:01', '一起背单词', { device: 'device-a', photoHash: '0123456789abcdef' });
     assert.equal((await status(a)).today?.pairOutcome, null);
-    checkin(b, today, '00:10:00', '一起背单词', { device: 'device-b', photoHash: '0123456789abcdef' });
+    const partnerFirst = checkin(b, today, '00:10:00', '一起背单词', { device: 'device-b', photoHash: '0123456789abcdef' });
     checkin(a, today, '00:20:00', '第二次只发社区');
     st = await status(a);
     assert.equal(st.today?.mine?.counts, true);
-    assert.equal(Date.parse(st.today!.mine!.at), Date.parse(`${today}T00:00:01+08:00`), 'the first check-in of the day is the scoring one');
+    assert.equal(Date.parse(st.today!.mine!.at), Date.parse(`${today}T00:00:01+08:00`), 'the earliest eligible check-in of the day is the scoring one');
     assert.ok(st.today?.partner);
     assert.equal(st.week?.count, 1);
     assert.equal(st.today?.pairOutcome, 'matched');
@@ -286,7 +286,64 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     const text = JSON.stringify(st);
     assert.ok(!text.includes('device') && !text.includes('0123456789abcdef'), 'device ids and photo fingerprints stay on the server');
     assert.ok(!text.includes(String(LIBRARY.lng)) && !/lat|lng|geo/.test(text), 'coordinates stay on the server');
+    assert.equal((await api(`/checkins/${partnerFirst}`, b.cookie, 'DELETE')).status, 200);
+    const afterDelete = await status(a);
+    assert.deepEqual(afterDelete.today?.partner, { at: st.today!.partner!.at, counts: false, place: '', issue: 'deleted' });
+    assert.equal(afterDelete.today?.pairOutcome, null);
+    assert.equal(afterDelete.week?.count, 0);
+    assert.equal((await status(b)).today?.mine?.issue, 'deleted');
     db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
+    assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
+  });
+
+  await t.test('deleted and ineligible check-ins give way to the earliest retained eligible one, including for past weekly scores', async () => {
+    const [a, b] = [createUser(), createUser()];
+    await bind(a, b);
+    db.prepare('UPDATE buddy_pairs SET starts_on = ? WHERE id = ?').run(seasonStart, pairIdOf(a));
+
+    // 同一人当天 13:43 已删、13:45 无说明、13:46 合格；两人的状态、周记录和分数均认 13:46。
+    for (const date of [today, week(2, 1)]) {
+      const original = checkin(a, date, '13:43:00');
+      checkin(b, date, '13:44:00');
+      assert.equal((await api(`/checkins/${original}`, a.cookie, 'DELETE')).status, 200);
+      const short = checkin(a, date, '13:45:00', '');
+      if (date === today) {
+        const failed = (await status(a)).today!;
+        assert.equal(failed.checkinPolicy, 'first_eligible');
+        assert.deepEqual(failed.mine, { checkinId: short, at: new Date(`${date}T13:45:00+08:00`).toISOString(), counts: false, issue: 'caption' });
+        assert.equal(failed.pairOutcome, null);
+        assert.ok(!('issue' in (await status(b)).today!.partner!), 'the buddy only knows there is no eligible attempt yet');
+      }
+      const eligible = checkin(a, date, '13:46:00');
+      if (date === today) {
+        const mine = await status(a);
+        const theirs = await status(b);
+        assert.equal(mine.today?.mine?.checkinId, eligible);
+        assert.equal(mine.today?.mine?.isReplacement, true);
+        assert.equal(mine.today?.pairOutcome, 'matched');
+        assert.equal(theirs.today?.partner?.isReplacement, true);
+        assert.ok(!('checkinId' in theirs.today!.partner!));
+        assert.deepEqual(mine.week?.events, [{ date, mine: '13:46', theirs: '13:44', place: '图书馆', distance: 0, mineReplacement: true }]);
+        assert.equal(theirs.week?.events[0]?.theirsReplacement, true);
+        assert.equal(mine.week?.points, 1);
+      }
+    }
+    assert.equal((await status(a)).score?.total, 1, 'past events are recomputed using the same selection');
+
+    // 同秒多次以编号破同分；最早的合格卡超距时，即使之后有更近的一条，也不能择优匹配。
+    const firstEligible = (await status(a)).today!.mine!.checkinId!;
+    const farther = checkin(a, today, '13:47:00', '一起复习线性代数', { geo: { ...LIBRARY, lat: 22.615 } });
+    const closer = checkin(a, today, '13:47:00');
+    assert.equal((await api(`/checkins/${firstEligible}`, a.cookie, 'DELETE')).status, 200);
+    const tooFar = await status(a);
+    assert.equal(tooFar.today?.mine?.checkinId, farther);
+    assert.equal(tooFar.today?.pairOutcome, 'too_far');
+    assert.equal(tooFar.week?.count, 0);
+    assert.equal((await api(`/checkins/${farther}`, a.cookie, 'DELETE')).status, 200);
+    const matched = await status(a);
+    assert.equal(matched.today?.mine?.checkinId, closer);
+    assert.equal(matched.today?.pairOutcome, 'matched');
+    assert.equal(matched.week?.count, 1);
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });
 
@@ -316,6 +373,9 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     checkin(a, today, '00:00:01', '一起复习线性代数', { geo: north(0, 500) });
     const st = await status(a);
     assert.deepEqual({ counts: st.today?.mine?.counts, issue: st.today?.mine?.issue }, { counts: false, issue: 'location' });
+    const viewOfPartner = (await status(b)).today?.partner;
+    assert.equal(viewOfPartner?.counts, false);
+    assert.ok(viewOfPartner && !('issue' in viewOfPartner), 'location failure details stay with the author');
     db.prepare('DELETE FROM checkins WHERE user_id IN (?, ?)').run(a.id, b.id);
     assert.equal((await api('/activity/unbind', a.cookie, 'POST', {})).status, 200);
   });
@@ -418,9 +478,9 @@ test('buddy binding, same-event scoring, own-only ranking, audits, bonus and cha
     assert.equal(mine.invalid.reason, '画面中没有学习内容');
     assert.equal(mine.invalid.canAppeal, true);
     assert.equal((await api(`/checkins/${target.id}`, p2[0].cookie)).body.checkin.invalid, null, 'others never see the invalidation');
-    // 当天第一次打卡被判无效：当天 21:00 那次也不能顶替 → 第 1 周 6 次 → 8 分
+    // 本人改用 21:00 的合格打卡，与搭子最早合格的 20:25 相差 35 分钟 → 第 1 周 6 次 → 8 分
     const totalOf = async () => (await api('/admin/board', admin.cookie)).body.items.find((i: any) => i.pairId === pairIdOf(p1[0])).total;
-    assert.equal(await totalOf(), 8, 'a later check-in on the same day does not replace an invalid first one');
+    assert.equal(await totalOf(), 8, 'the replacement is too late for the other member’s earliest eligible check-in');
     const appeal = await api('/activity/appeals', p1[0].cookie, 'POST', { checkinId: target.id, body: '照片里有课本，只是光线暗' });
     assert.equal(appeal.status, 200, appeal.text);
     assert.equal((await api('/activity/appeals', p1[0].cookie, 'POST', { checkinId: target.id, body: '再来一次' })).status, 409, 'one appeal per check-in');

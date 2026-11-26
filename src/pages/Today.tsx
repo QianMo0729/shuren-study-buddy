@@ -1,9 +1,10 @@
+import { useBuddyStatus } from '../lib/useBuddyStatus';
 import { useActivityConfig } from '../lib/activity';
 import { useCached } from '../lib/cache';
-import { splitNickname } from '../components/ProfileCard';
+import { buddyDayStatus } from '../components/checkin/buddyCheckinHint';
 import { Link } from 'react-router';
 import { DAYS, GRADES, PERIODS } from '../../shared/options';
-import { mondayOf, shortDate, weekdayLabel } from '../../shared/activity';
+import { mondayOf } from '../../shared/activity';
 import type { BuddyStatus, DeckCard, DeckResponse } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
@@ -47,7 +48,7 @@ const PICKS_EMPTY: Record<DeckResponse['state'], string> = {
 export function Today() {
   const today = beijingNow();
   // 先显示上次的内容，后台再刷新：切回「今天」时不用再等
-  const buddy = useCached<BuddyStatus>('activity:me', () => api.activity.me());
+  const buddy = useBuddyStatus();
   const deckQuery = useCached<DeckResponse>('match:deck:5', () => api.match.deck(5));
   const status = buddy.data ?? null;
   const error = buddy.error ? errorText(buddy.error) : null;
@@ -70,7 +71,7 @@ export function Today() {
           ) : !status ? (
             <Skeleton className="h-40 rounded-2xl" />
           ) : status.pair ? (
-            <BuddyBlock status={status} today={today} />
+            <BuddyBlock status={status} today={today} readAt={buddy.readAt} refreshFailed={!!buddy.error} />
           ) : (
             <NoBuddy invites={status.invites.filter((i) => i.direction === 'incoming').length} />
           )}
@@ -143,7 +144,9 @@ function NoBuddy({ invites }: { invites: number }) {
   );
 }
 
-function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<typeof beijingNow> }) {
+function BuddyBlock({ status, today, readAt, refreshFailed }: {
+  status: BuddyStatus; today: ReturnType<typeof beijingNow>; readAt: number | null; refreshFailed: boolean;
+}) {
   const pair = status.pair!;
   const { week, rank, score } = status;
   const { config } = useActivityConfig();
@@ -151,11 +154,7 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
   // 本周哪几天算了一次相同事件（服务器按计分规则判定，和积分一致）
   const both = new Set((week?.events ?? []).map((e) => (new Date(`${e.date}T00:00:00Z`).getUTCDay() + 6) % 7));
   const freeToday = status.today?.free ?? [];
-  const partnerToday = status.today?.partner;
-  const minutesAgo = partnerToday ? Math.floor((Date.now() - Date.parse(partnerToday.at)) / 60_000) : null;
-  // 搭子刚打过卡（而且那次能计分）、我今天还没打卡：提醒现在去拍
-  const nudge = pair.started && status.season.status === 'running' && !status.today?.mine && !!partnerToday?.counts
-    && minutesAgo !== null && minutesAgo <= config.windowMinutes;
+  const hint = readAt && status.today?.date === today.date ? buddyDayStatus(status, config, readAt) : null;
 
   return (
     <>
@@ -171,7 +170,7 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
         <Chevron />
       </Link>
 
-      {week ? (
+      {week && (
         <div className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-[15px] font-semibold text-ink">本周同时打卡 <span className="text-brand-text tabular">{week.count}</span> 次</p>
@@ -188,21 +187,12 @@ function BuddyBlock({ status, today }: { status: BuddyStatus; today: ReturnType<
             ))}
           </div>
         </div>
-      ) : (
-        <p className="text-[15px] text-ink-2">{status.season.status === 'ended' ? '本赛季已经结束。' : `从 ${shortDate(pair.startsOn)}（${weekdayLabel(pair.startsOn)}）开始计分。`}</p>
       )}
+      {refreshFailed && <p role="status" className="text-[14px] text-ink-3">暂时无法更新今天的打卡结果。</p>}
+      {hint && <p role="status" className={cx('text-[14px] leading-relaxed', hint.tone === 'warn' ? 'text-accent-text' : hint.tone === 'good' ? 'text-brand-text' : 'text-ink-2')}>{hint.text}</p>}
       {pair.ineligible && <p className="-mt-2 text-[13px] text-danger">{pair.ineligible}</p>}
 
-      {nudge ? (
-        <Link to="/community/checkin/new" className="flex items-center gap-2.5 rounded-[14px] bg-brand-soft px-3.5 py-3 text-[14px] text-ink">
-          <CameraIcon size={18} className="shrink-0 text-brand-text" />
-          <span className="min-w-0 flex-1">
-            {splitNickname(pair.partner.nickname).word} {minutesAgo! < 1 ? '刚刚' : `${minutesAgo} 分钟前`}
-            {config.distanceMeters > 0 ? `在${partnerToday!.place}打卡了，${config.distanceMeters} 米以内拍就能算一次` : '打卡了，现在拍就能算一次'}
-          </span>
-          <Chevron />
-        </Link>
-      ) : freeToday.length > 0 && (
+      {freeToday.length > 0 && (
         <div className="flex items-center gap-2.5 rounded-[14px] bg-accent-soft px-3.5 py-3">
           <ClockIcon size={18} width={2} className="shrink-0 text-accent" />
           <p className="min-w-0 flex-1 text-[14px] text-ink">

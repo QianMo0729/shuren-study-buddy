@@ -163,7 +163,7 @@ export function CheckinDetail() {
         open={confirmDelete}
         tone="danger"
         title="删除这次打卡？"
-        desc="删除后其他同学将看不到这张照片，也不再计入连续打卡天数。如果这是当天的第一次打卡，删掉后当天就不能再计分了（删掉重拍不能换一次）。"
+        desc="删除后，这张照片会从个人打卡记录中移除。搭子活动会用当天剩余照片中最早合格的一张重新计算。如果当天还没有合格照片，可以在当天重新拍。"
         confirmText="删除"
         loading={deleting}
         onCancel={() => setConfirmDelete(false)}
